@@ -96,6 +96,7 @@ Log in with any email (MVP single-user dev mode). Open the seeded demo "Венс
 | ZIP export (15 files + JSON + README)            | ✅                                 |
 | JSON export `/api/projects/:id/export`           | ✅                                 |
 | Internal user guide `/guide`                     | ✅                                 |
+| AI Leads MVP `/ai-leads`                         | ✅ mock provider + briefing lock   |
 | 4 seeded demo projects                           | ✅                                 |
 | AI Interview answer persistence                  | 🟡 UI only, no save to brief      |
 | Templates CRUD                                   | 🟡 list + edit body, no create    |
@@ -104,7 +105,49 @@ Log in with any email (MVP single-user dev mode). Open the seeded demo "Венс
 
 ## AI layer
 
-`server/src/ai/client.ts` selects provider via `AI_PROVIDER` env (`anthropic` / `openai` / `mock`). If a real provider is selected but the key is missing or the call fails, it degrades to mock so the product stays usable. The mock returns structured JSON that matches the schema the brief service expects.
+`server/src/ai/client.ts` is the backend AI gateway. Services call `aiClient.generate()`, `aiClient.generateJson()` or the backward-compatible `aiComplete()` wrapper; routes and business services do not talk to the OpenAI SDK directly.
+
+Provider is selected with `AI_PROVIDER` (`openai` / `anthropic` / `mock`). OpenAI uses the Responses API by default and falls back to one isolated legacy chat-completions adapter only if the installed SDK runtime does not expose `responses.create`. If a real provider is selected but the key is missing, the model is unavailable, quota is exhausted, or another provider error happens, the gateway logs a safe error code and returns the deterministic mock fallback so the product stays usable.
+
+Model routing:
+
+- `OPENAI_MODEL_MAIN` — investment packaging, brief generation/regeneration, reviews/regenerate flows, strategy/narrative, sales assistant analysis.
+- `OPENAI_MODEL_FAST` — summaries, classifications, metadata extraction, small cleanup tasks.
+- `OPENAI_MODEL_REALTIME` — reserved for future realtime audio streaming abstraction; not used by the current UI.
+
+JSON flows use strict parsing in services; Sales Assistant additionally asks OpenAI for a structured `json_schema` response. When `AI_LOG_USAGE=true`, logs include provider, feature, model, latency, token counts if available, estimated cost as `null` when not available, success/failure and safe error code. Prompts, project data and API keys are not logged.
+
+Production checks:
+
+```bash
+# Mock rollback: no external AI calls, endpoints should keep working.
+AI_PROVIDER=mock npm start
+
+# OpenAI production: server-side secrets only.
+AI_PROVIDER=openai
+OPENAI_API_KEY=...
+OPENAI_MODEL_MAIN=gpt-5.5
+OPENAI_MODEL_FAST=gpt-4o-mini
+OPENAI_MODEL_REALTIME=gpt-4o-realtime-preview
+AI_LOG_USAGE=true
+```
+
+If Render logs show `http_401`, check the API key. If they show `http_403` or `http_429`, check model access, billing/quota and rate limits. If the selected model is unavailable, the gateway logs the model name and safe error code, then returns mock fallback rather than failing silently.
+
+### Sales Assistant API
+
+`POST /api/sales-assistant/analyze` is a manual live-coach refresh endpoint. The web app sends the accumulated meeting `transcript`, `recentContext`, optional `previousAdvice`, optional `previousSpinStage`, optional `adviceHistory`, and optional `projectId`. The response returns a structured card with `situation`, `risk`, `recommendation`, `suggestedPhrase`, `spinStage`, `tone`, `confidence`, `objection`, `nextStep`, plus `provider`, `model` and `fellBackToMock` so the UI can show OpenAI vs Mock honestly.
+
+## AI Leads MVP
+
+`/ai-leads` is the demo/MVP flow for investor lead generation. It has:
+
+- AI briefing analyzer: reads current project/brief/files, computes readiness, shows auto-filled fields and missing data.
+- Launch lock: AI lead generation is disabled until critical briefing fields are ready.
+- Mock lead feed: hot investor cards with status, check range, contact, AI summary, conversation context, mock audio player and communication timeline.
+- Lead guarantee card: frames the offer as a minimum number of target leads with replacement rules, without promising investment or yield.
+
+Backend endpoint: `GET /api/ai-leads?projectId=<id>`. The route uses `server/src/services/aiLeadsService.ts`, where the current mock `LeadProvider` plus `AICommunicationProvider`, `TranscriptProvider` and replacement-policy interfaces are isolated for future AIcallsCloud / Telegram / WhatsApp / Avito / CRM providers.
 
 ## Публичный демо-деплой
 
@@ -139,8 +182,9 @@ Log in with any email (MVP single-user dev mode). Open the seeded demo "Венс
 2. New → **Blueprint** → подключите репо. Render прочитает `render.yaml` и создаст web-сервис с persistent disk на `/data`.
 3. Убедитесь, что сервис использует Node `22.22.0` (`NODE_VERSION=22.22.0` уже задан в blueprint).
 4. В разделе **Environment** вашего нового сервиса задайте секреты:
-   - `ANTHROPIC_API_KEY` или `OPENAI_API_KEY` (опционально — без них работает mock-режим)
-   - `AI_PROVIDER` = `anthropic` / `openai` / `mock`
+   - `OPENAI_API_KEY` или `ANTHROPIC_API_KEY` (опционально — без них работает mock-режим)
+   - `AI_PROVIDER` = `openai` / `anthropic` / `mock`
+   - для OpenAI: `OPENAI_MODEL_MAIN`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_REALTIME`, `AI_LOG_USAGE`
 5. Дождитесь первого деплоя (~5 мин). Откройте URL вида `https://zapusk-demo.onrender.com`.
 
 **Точные команды для Render (если создаёте сервис вручную, без blueprint):**
@@ -200,8 +244,13 @@ npm start
 | `UPLOADS_DIR`     | Папка для загруженных файлов (тоже на persistent disk).                 | `/data/uploads`                |
 | `DEMO_MODE`       | `true` блокирует DELETE и редактирование шаблонов для публичного демо.  | `true`                         |
 | `CORS_ORIGIN`     | Не используется в single-service. Для split-deploy — URL фронта.        | `*`                            |
-| `AI_PROVIDER`     | `anthropic` / `openai` / `mock`. По умолчанию `mock`.                   | `mock`                         |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | AI-ключи. **Только на сервере**, никогда не в FE.      | секрет                         |
+| `AI_PROVIDER`     | `openai` / `anthropic` / `mock`. По умолчанию `mock`.                   | `openai`                       |
+| `OPENAI_API_KEY`  | OpenAI ключ. **Только на сервере**, никогда не в FE и логах.             | секрет                         |
+| `OPENAI_MODEL_MAIN` | Основная модель для брифов, packaging, regenerate/review, sales analysis. | `gpt-5.5`                    |
+| `OPENAI_MODEL_FAST` | Быстрая модель для summaries/classifications/metadata.                 | `gpt-4o-mini`                  |
+| `OPENAI_MODEL_REALTIME` | Модель для будущего realtime audio streaming. Сейчас только env/abstraction. | `gpt-4o-realtime-preview` |
+| `AI_LOG_USAGE`    | Безопасные usage-логи без prompt/API key: provider, feature, model, latency, tokens, error code. | `true` |
+| `ANTHROPIC_API_KEY` | Альтернативный Anthropic ключ, если `AI_PROVIDER=anthropic`.            | секрет                         |
 | `DEV_USER_EMAIL` / `DEV_USER_NAME`     | Имя пользователя по умолчанию для всех гостей демо.    | `demo@zapusk.tech`             |
 | `VITE_API_BASE_URL` (build-time)       | Пустая строка → same-origin. Для split-deploy — URL API.| `` (empty)                    |
 
@@ -227,7 +276,7 @@ npm start
 2. **S3/R2 вместо локального диска** — заменить `server/src/services/storage.ts` (одна реализация интерфейса).
 3. **Реальная auth** — заменить middleware `auth.ts` на SSO / JWT, добавить роли (client/team/admin), убрать `DEV_USER_EMAIL` fallback.
 4. **Server-side guard** на team-only маршруты (`/admin`, `/templates`, опционально `/sales-assistant`).
-5. **Постоянный AI-провайдер** — `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` в секретах. Мониторинг расходов.
+5. **Постоянный AI-провайдер** — `AI_PROVIDER=openai` + `OPENAI_API_KEY` и OpenAI model env в секретах. Мониторинг usage через Render Logs.
 6. **CDN перед SPA** — Cloudflare / Fastly. Express отдаёт только `/api`.
 
 ## AI-ready repo

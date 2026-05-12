@@ -40,15 +40,17 @@ export default function SalesAssistant() {
     const [interim, setInterim] = useState('');
     const [card, setCard] = useState(null);
     const [analyzing, setAnalyzing] = useState(false);
-    const [summary, setSummary] = useState(null);
+    const [adviceHistory, setAdviceHistory] = useState([]);
     const [speechStatus, setSpeechStatus] = useState('idle');
     const srRef = useRef(null);
     const restartTimerRef = useRef(null);
     const shouldListenRef = useRef(false);
+    const recognitionActiveRef = useRef(false);
     const analyzingRef = useRef(false);
-    const lastSentRef = useRef('');
     const transcriptLinesRef = useRef([]);
     const speechStatusRef = useRef('idle');
+    const cardRef = useRef(null);
+    const adviceHistoryRef = useRef([]);
     const transcriptRef = useRef(null);
     // Initial project list — agent ties advice to the active project's context.
     useEffect(() => {
@@ -64,8 +66,15 @@ export default function SalesAssistant() {
     useEffect(() => {
         speechStatusRef.current = speechStatus;
     }, [speechStatus]);
+    useEffect(() => {
+        cardRef.current = card;
+    }, [card]);
+    useEffect(() => {
+        adviceHistoryRef.current = adviceHistory;
+    }, [adviceHistory]);
     useEffect(() => () => {
         shouldListenRef.current = false;
+        recognitionActiveRef.current = false;
         if (restartTimerRef.current)
             window.clearTimeout(restartTimerRef.current);
         try {
@@ -79,55 +88,45 @@ export default function SalesAssistant() {
             transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
         }
     }, [transcript, interim]);
-    // Trigger after new transcript chunks and also keep a timer running while
-    // listening, so advice does not freeze if the browser batches final results.
-    useEffect(() => {
-        if (!listening)
-            return;
-        const t = setTimeout(() => {
-            analyzeIfChanged();
-        }, 1200);
-        return () => clearTimeout(t);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [transcript, listening]);
-    useEffect(() => {
-        if (!listening)
-            return;
-        const t = window.setInterval(() => analyzeIfChanged(), 8000);
-        return () => window.clearInterval(t);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [listening, projectId]);
+    function fullTranscript() {
+        return transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n');
+    }
     function recentContext() {
-        return transcriptLinesRef.current.filter((t) => t.final).slice(-12).map((t) => t.text).join(' ');
+        const text = fullTranscript();
+        return text.length > 6_000 ? text.slice(-6_000) : text;
     }
-    function analyzeIfChanged() {
-        const context = recentContext();
-        if (context.length < 20)
-            return;
-        if (context === lastSentRef.current)
-            return;
-        lastSentRef.current = context;
-        runAnalyze({ text: context.slice(-1600) });
+    function toAdviceHistoryItem(next) {
+        return {
+            situation: next.situation,
+            recommendation: next.recommendation,
+            suggestedPhrase: next.suggestedPhrase,
+            spinStage: next.spinStage,
+            tone: next.tone,
+            nextStep: next.nextStep,
+        };
     }
-    async function runAnalyze(opts = {}) {
-        if (analyzingRef.current && !opts.summary)
+    async function runAnalyze() {
+        if (analyzingRef.current)
             return;
-        const last = [...transcriptLinesRef.current].reverse().find((t) => t.final)?.text;
-        const chunk = opts.text ?? (last && last.length >= 12 ? last : recentContext().slice(-600));
-        if (!chunk)
+        const transcriptText = fullTranscript();
+        if (transcriptText.trim().length < 10) {
+            setPermError('Сначала начните прослушивание и скажите несколько фраз.');
             return;
+        }
         analyzingRef.current = true;
         setAnalyzing(true);
         try {
             const r = await api.post('/api/sales-assistant/analyze', {
-                transcript: chunk,
-                recent: recentContext(),
+                transcript: transcriptText.slice(-32_000),
+                recentContext: recentContext(),
+                previousAdvice: cardRef.current,
+                previousSpinStage: cardRef.current?.spinStage ?? null,
+                adviceHistory: adviceHistoryRef.current.slice(-6),
                 projectId: projectId || null,
             });
-            if (opts.summary)
-                setSummary(r.card);
-            else
-                setCard(r.card);
+            setCard(r.card);
+            setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
+            setPermError(null);
         }
         catch (err) {
             // soft-fail — transcript keeps growing
@@ -139,6 +138,8 @@ export default function SalesAssistant() {
         }
     }
     function startRecognition() {
+        if (recognitionActiveRef.current || srRef.current)
+            return;
         const SR = getSR();
         if (!SR) {
             shouldListenRef.current = false;
@@ -175,6 +176,9 @@ export default function SalesAssistant() {
                 if (code === 'not-allowed' || code === 'service-not-allowed') {
                     shouldListenRef.current = false;
                     setListening(false);
+                    recognitionActiveRef.current = false;
+                    if (srRef.current === sr)
+                        srRef.current = null;
                     speechStatusRef.current = 'mic_error';
                     setSpeechStatus('mic_error');
                     setPermError('Доступ к микрофону не разрешён. Разрешите доступ в настройках браузера.');
@@ -187,20 +191,23 @@ export default function SalesAssistant() {
                 if (code === 'audio-capture') {
                     shouldListenRef.current = false;
                     setListening(false);
+                    recognitionActiveRef.current = false;
+                    if (srRef.current === sr)
+                        srRef.current = null;
                     speechStatusRef.current = 'mic_error';
                     setSpeechStatus('mic_error');
                     setPermError('Браузер не видит микрофон. Проверьте устройство ввода и разрешения.');
                     return;
                 }
-                if (code === 'network') {
-                    shouldListenRef.current = false;
-                    setListening(false);
-                    speechStatusRef.current = 'session_ended';
-                    setSpeechStatus('session_ended');
-                    setPermError('Сессия распознавания завершилась. Нажмите «Продолжить», чтобы слушать дальше в этой же встрече.');
+                if (shouldListenRef.current) {
+                    speechStatusRef.current = 'restarting';
+                    setSpeechStatus('restarting');
+                    setPermError(code ? `Распознавание временно остановилось (${code}), перезапускаю автоматически.` : null);
+                    return;
                 }
             };
             sr.onend = () => {
+                recognitionActiveRef.current = false;
                 if (srRef.current === sr)
                     srRef.current = null;
                 if (shouldListenRef.current) {
@@ -213,7 +220,7 @@ export default function SalesAssistant() {
                             startRecognition();
                     }, 350);
                 }
-                else if (speechStatusRef.current !== 'mic_error' && speechStatusRef.current !== 'session_ended') {
+                else if (speechStatusRef.current !== 'mic_error') {
                     const next = transcriptLinesRef.current.length ? 'stopped' : 'idle';
                     speechStatusRef.current = next;
                     setSpeechStatus(next);
@@ -221,6 +228,7 @@ export default function SalesAssistant() {
             };
             srRef.current = sr;
             sr.start();
+            recognitionActiveRef.current = true;
             setListening(true);
             speechStatusRef.current = 'listening';
             setSpeechStatus('listening');
@@ -229,16 +237,14 @@ export default function SalesAssistant() {
         catch (err) {
             shouldListenRef.current = false;
             setListening(false);
+            srRef.current = null;
+            recognitionActiveRef.current = false;
             speechStatusRef.current = 'mic_error';
             setSpeechStatus('mic_error');
             setPermError(err instanceof Error ? err.message : 'Не удалось включить распознавание речи');
         }
     }
     function start() {
-        shouldListenRef.current = true;
-        startRecognition();
-    }
-    function continueListening() {
         shouldListenRef.current = true;
         setPermError(null);
         startRecognition();
@@ -255,30 +261,29 @@ export default function SalesAssistant() {
         }
         catch { /* ignore */ }
         srRef.current = null;
+        recognitionActiveRef.current = false;
         setInterim('');
-        // Final summary after a beat
-        setTimeout(() => runAnalyze({ summary: true }), 600);
     }
     function reset() {
         setTranscript([]);
         setInterim('');
         setCard(null);
-        setSummary(null);
+        setAdviceHistory([]);
         speechStatusRef.current = 'idle';
         setSpeechStatus('idle');
         setPermError(null);
-        lastSentRef.current = '';
     }
     const wordCount = useMemo(() => transcript.filter((t) => t.final).reduce((acc, t) => acc + t.text.split(/\s+/).length, 0), [transcript]);
+    const hasFinalTranscript = transcript.some((t) => t.final);
     const visibleProjects = useMemo(() => projects.filter((p) => mode === 'team' || !isLegacyDemoProject(p)), [mode, projects]);
     const statusText = {
         idle: {
             title: 'Готов к старту',
-            hint: 'Нажмите «Запустить» и разрешите доступ к микрофону.',
+            hint: 'Нажмите «Начать прослушивание» и разрешите доступ к микрофону.',
         },
         listening: {
-            title: 'Идёт прослушивание встречи',
-            hint: 'Говорите естественно. Подсказки обновляются по новым фразам и по таймеру.',
+            title: 'Слушает',
+            hint: 'Говорите естественно. Паузы не завершают встречу, распознавание перезапускается автоматически.',
         },
         restarting: {
             title: 'Перезапуск распознавания',
@@ -292,16 +297,15 @@ export default function SalesAssistant() {
             title: 'Ошибка микрофона',
             hint: 'Проверьте разрешение браузера и устройство ввода.',
         },
-        session_ended: {
-            title: 'Сессия распознавания завершилась',
-            hint: 'Нажмите «Продолжить», чтобы слушать дальше в этой же встрече.',
-        },
     };
+    const providerLabel = card?.fellBackToMock || card?.source === 'mock'
+        ? 'Mock'
+        : card?.provider === 'openai'
+            ? 'OpenAI'
+            : card?.provider;
     return (_jsxs(AppLayout, { title: "AI-\u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043D\u0442 \u043D\u0430 \u043F\u0440\u043E\u0434\u0430\u0436\u0430\u0445", action: _jsxs("div", { className: "flex items-center gap-2", children: [visibleProjects.length > 0 && (_jsx("div", { className: "w-64", children: _jsx(Select, { value: projectId, onChange: (e) => setProjectId(e.target.value), options: [{ value: '', label: 'Без привязки к проекту' }, ...visibleProjects.map((p) => ({ value: p.id, label: p.name }))] }) })), listening
                     ? _jsx(Button, { variant: "danger", iconLeft: _jsx(Square, { size: 14 }), onClick: stop, children: "\u041E\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C" })
-                    : speechStatus === 'session_ended'
-                        ? _jsx(Button, { variant: "primary", iconLeft: _jsx(RefreshCw, { size: 14 }), onClick: continueListening, children: "\u041F\u0440\u043E\u0434\u043E\u043B\u0436\u0438\u0442\u044C" })
-                        : _jsx(Button, { variant: "primary", iconLeft: _jsx(Mic, { size: 14 }), onClick: start, children: "\u0417\u0430\u043F\u0443\u0441\u0442\u0438\u0442\u044C" }), transcript.length > 0 && !listening && (_jsx(Button, { variant: "ghost", onClick: reset, children: "\u0421\u0431\u0440\u043E\u0441\u0438\u0442\u044C" }))] }), children: [_jsxs(Card, { padded: true, className: "mb-6", children: [_jsxs("div", { className: "flex items-center justify-between gap-4 flex-wrap", children: [_jsxs("div", { className: "flex items-center gap-3", children: [_jsx("div", { className: `w-9 h-9 rounded-md flex items-center justify-center ${listening ? 'bg-grad-zapusk shadow-glow text-canvas' : 'bg-elevated border border-line text-secondary'}`, children: _jsx(Headphones, { size: 16 }) }), _jsxs("div", { children: [_jsx("div", { className: "text-sm font-semibold text-primary", children: statusText[speechStatus].title }), _jsx("div", { className: "text-xs text-muted", children: statusText[speechStatus].hint })] })] }), _jsxs("div", { className: "flex items-center gap-4 text-[11px] text-muted", children: [_jsxs("span", { children: [_jsx("span", { className: "text-primary font-num text-sm", children: wordCount }), " \u0441\u043B\u043E\u0432"] }), _jsxs("span", { children: [_jsx("span", { className: "text-primary font-num text-sm", children: transcript.filter((t) => t.final).length }), " \u0440\u0435\u043F\u043B\u0438\u043A"] }), speechStatus === 'listening' && _jsx(StatusBadge, { tone: "success", dot: true, children: "\u0441\u043B\u0443\u0448\u0430\u0435\u0442" }), speechStatus === 'restarting' && _jsx(StatusBadge, { tone: "warning", dot: true, children: "\u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u043A" }), speechStatus === 'stopped' && _jsx(StatusBadge, { tone: "neutral", dot: true, children: "\u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043E" }), speechStatus === 'mic_error' && _jsx(StatusBadge, { tone: "danger", dot: true, children: "\u043E\u0448\u0438\u0431\u043A\u0430 \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0430" }), analyzing && _jsx(StatusBadge, { tone: "ai", dot: true, children: "\u0430\u043D\u0430\u043B\u0438\u0437\u2026" }), card && _jsx(StatusBadge, { tone: card.source === 'mock' ? 'neutral' : 'success', dot: true, children: card.source === 'mock' ? 'mock' : `AI · ${card.provider}` })] })] }), permError && (_jsxs("div", { className: "mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning", children: [_jsx(AlertTriangle, { size: 13, className: "mt-0.5 shrink-0" }), permError] }))] }), _jsxs("div", { className: "grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-6", children: [_jsxs(Card, { padded: true, children: [_jsx(CardHeader, { title: "\u0416\u0438\u0432\u0430\u044F \u0442\u0440\u0430\u043D\u0441\u043A\u0440\u0438\u043F\u0446\u0438\u044F", subtitle: "\u0421\u043B\u0435\u0432\u0430 \u0440\u0430\u0441\u0442\u0451\u0442 \u0434\u0438\u0430\u043B\u043E\u0433 \u0432\u0441\u0442\u0440\u0435\u0447\u0438 \u0432 \u0440\u0435\u0430\u043B\u044C\u043D\u043E\u043C \u0432\u0440\u0435\u043C\u0435\u043D\u0438" }), _jsxs("div", { ref: transcriptRef, className: "bg-canvas border border-hairline rounded-md p-4 h-[60vh] overflow-y-auto space-y-2", children: [transcript.length === 0 && !interim && (_jsx("p", { className: "text-sm text-muted text-center py-8", children: "\u0422\u0440\u0430\u043D\u0441\u043A\u0440\u0438\u043F\u0446\u0438\u044F \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u0437\u0434\u0435\u0441\u044C \u043F\u043E\u0441\u043B\u0435 \u0441\u0442\u0430\u0440\u0442\u0430." })), transcript.filter((t) => t.final).map((t, i) => (_jsx("p", { className: "text-[13.5px] text-primary leading-relaxed", children: t.text }, i))), interim && (_jsxs("p", { className: "text-[13.5px] text-muted italic leading-relaxed", children: [interim, "\u2026"] }))] })] }), _jsxs("div", { className: "space-y-4", children: [!card && !summary && (_jsxs(Card, { padded: true, className: "text-center py-12", children: [_jsx("div", { className: "w-12 h-12 mx-auto mb-3 rounded-full bg-ai/15 border border-ai/30 flex items-center justify-center text-ai-glow", children: _jsx(Sparkles, { size: 18 }) }), _jsx("h3", { className: "text-base font-semibold text-primary mb-1", children: "\u041F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0438 \u043F\u043E\u044F\u0432\u044F\u0442\u0441\u044F \u0437\u0434\u0435\u0441\u044C" }), _jsx("p", { className: "text-xs text-secondary max-w-sm mx-auto", children: "\u0421\u043A\u0430\u0436\u0438\u0442\u0435 \u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u0444\u0440\u0430\u0437 \u2014 \u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043D\u0442 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442 \u044D\u0442\u0430\u043F SPIN, \u0442\u043E\u043D \u0438 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0438\u0442 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u0443\u044E \u0440\u0435\u043F\u043B\u0438\u043A\u0443." })] })), card && _jsx(AdviceCard, { card: card }), summary && (_jsxs(Card, { padded: true, accent: "ai", children: [_jsx(CardHeader, { title: "\u0418\u0442\u043E\u0433 \u0432\u0441\u0442\u0440\u0435\u0447\u0438", subtitle: "\u0427\u0451\u0442\u043A\u0438\u0439 next step \u0438 \u0432\u0435\u0440\u043E\u044F\u0442\u043D\u043E\u0441\u0442\u044C \u0441\u0434\u0435\u043B\u043A\u0438" }), _jsx(AdviceFields, { card: summary, compact: true })] }))] })] })] }));
+                    : _jsx(Button, { variant: "primary", iconLeft: _jsx(Mic, { size: 14 }), onClick: start, children: "\u041D\u0430\u0447\u0430\u0442\u044C \u043F\u0440\u043E\u0441\u043B\u0443\u0448\u0438\u0432\u0430\u043D\u0438\u0435" }), _jsx(Button, { variant: "ai", iconLeft: _jsx(RefreshCw, { size: 14 }), onClick: runAnalyze, loading: analyzing, disabled: !hasFinalTranscript, children: "\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0443" }), transcript.length > 0 && !listening && (_jsx(Button, { variant: "ghost", onClick: reset, children: "\u0421\u0431\u0440\u043E\u0441\u0438\u0442\u044C" }))] }), children: [_jsxs(Card, { padded: true, className: "mb-6", children: [_jsxs("div", { className: "flex items-center justify-between gap-4 flex-wrap", children: [_jsxs("div", { className: "flex items-center gap-3", children: [_jsx("div", { className: `w-9 h-9 rounded-md flex items-center justify-center ${listening ? 'bg-grad-zapusk shadow-glow text-canvas' : 'bg-elevated border border-line text-secondary'}`, children: _jsx(Headphones, { size: 16 }) }), _jsxs("div", { children: [_jsx("div", { className: "text-sm font-semibold text-primary", children: statusText[speechStatus].title }), _jsx("div", { className: "text-xs text-muted", children: statusText[speechStatus].hint })] })] }), _jsxs("div", { className: "flex items-center gap-4 text-[11px] text-muted", children: [_jsxs("span", { children: [_jsx("span", { className: "text-primary font-num text-sm", children: wordCount }), " \u0441\u043B\u043E\u0432"] }), _jsxs("span", { children: [_jsx("span", { className: "text-primary font-num text-sm", children: transcript.filter((t) => t.final).length }), " \u0440\u0435\u043F\u043B\u0438\u043A"] }), speechStatus === 'listening' && _jsx(StatusBadge, { tone: "success", dot: true, children: "\u0441\u043B\u0443\u0448\u0430\u0435\u0442" }), speechStatus === 'restarting' && _jsx(StatusBadge, { tone: "warning", dot: true, children: "\u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u043A" }), speechStatus === 'stopped' && _jsx(StatusBadge, { tone: "neutral", dot: true, children: "\u043E\u0441\u0442\u0430\u043D\u043E\u0432\u043B\u0435\u043D\u043E" }), speechStatus === 'mic_error' && _jsx(StatusBadge, { tone: "danger", dot: true, children: "\u043E\u0448\u0438\u0431\u043A\u0430 \u043C\u0438\u043A\u0440\u043E\u0444\u043E\u043D\u0430" }), hasFinalTranscript && !analyzing && _jsx(StatusBadge, { tone: "info", dot: true, children: "\u0433\u043E\u0442\u043E\u0432 \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0443" }), analyzing && _jsx(StatusBadge, { tone: "ai", dot: true, children: "\u043E\u0431\u043D\u043E\u0432\u043B\u044F\u0435\u043C \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0443" }), card && _jsx(StatusBadge, { tone: card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success', dot: true, children: providerLabel })] })] }), permError && (_jsxs("div", { className: "mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning", children: [_jsx(AlertTriangle, { size: 13, className: "mt-0.5 shrink-0" }), permError] }))] }), _jsxs("div", { className: "grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-6", children: [_jsxs(Card, { padded: true, children: [_jsx(CardHeader, { title: "\u0416\u0438\u0432\u0430\u044F \u0442\u0440\u0430\u043D\u0441\u043A\u0440\u0438\u043F\u0446\u0438\u044F", subtitle: "\u0421\u043B\u0435\u0432\u0430 \u0440\u0430\u0441\u0442\u0451\u0442 \u0434\u0438\u0430\u043B\u043E\u0433 \u0432\u0441\u0442\u0440\u0435\u0447\u0438 \u0432 \u0440\u0435\u0430\u043B\u044C\u043D\u043E\u043C \u0432\u0440\u0435\u043C\u0435\u043D\u0438" }), _jsxs("div", { ref: transcriptRef, className: "bg-canvas border border-hairline rounded-md p-4 h-[60vh] overflow-y-auto space-y-2", children: [transcript.length === 0 && !interim && (_jsx("p", { className: "text-sm text-muted text-center py-8", children: "\u0422\u0440\u0430\u043D\u0441\u043A\u0440\u0438\u043F\u0446\u0438\u044F \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u0437\u0434\u0435\u0441\u044C \u043F\u043E\u0441\u043B\u0435 \u0441\u0442\u0430\u0440\u0442\u0430." })), transcript.filter((t) => t.final).map((t, i) => (_jsx("p", { className: "text-[13.5px] text-primary leading-relaxed", children: t.text }, i))), interim && (_jsxs("p", { className: "text-[13.5px] text-muted italic leading-relaxed", children: [interim, "\u2026"] }))] })] }), _jsxs("div", { className: "space-y-4", children: [!card && (_jsxs(Card, { padded: true, className: "text-center py-12", children: [_jsx("div", { className: "w-12 h-12 mx-auto mb-3 rounded-full bg-ai/15 border border-ai/30 flex items-center justify-center text-ai-glow", children: _jsx(Sparkles, { size: 18 }) }), _jsx("h3", { className: "text-base font-semibold text-primary mb-1", children: "\u041F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0438 \u043F\u043E\u044F\u0432\u044F\u0442\u0441\u044F \u0437\u0434\u0435\u0441\u044C" }), _jsx("p", { className: "text-xs text-secondary max-w-sm mx-auto", children: "\u0421\u043A\u0430\u0436\u0438\u0442\u0435 \u043D\u0435\u0441\u043A\u043E\u043B\u044C\u043A\u043E \u0444\u0440\u0430\u0437, \u0437\u0430\u0442\u0435\u043C \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u043F\u043E\u0434\u0441\u043A\u0430\u0437\u043A\u0443\u00BB \u2014 \u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043D\u0442 \u043E\u043F\u0440\u0435\u0434\u0435\u043B\u0438\u0442 \u044D\u0442\u0430\u043F SPIN, \u0442\u043E\u043D \u0438 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0438\u0442 \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0443\u044E \u0440\u0435\u043F\u043B\u0438\u043A\u0443." })] })), card && _jsx(AdviceCard, { card: card })] })] })] }));
 }
 function AdviceCard({ card }) {
     return (_jsxs(Card, { padded: true, accent: card.tone === 'CLOSE' ? 'zapusk' : 'ai', children: [_jsxs("div", { className: "flex items-center justify-between gap-2 mb-4 flex-wrap", children: [_jsxs("div", { className: "flex items-center gap-2", children: [_jsx(StatusBadge, { tone: "ai", dot: true, children: STAGE_LABEL[card.spinStage] }), _jsxs(StatusBadge, { tone: TONE_TONE[card.tone], dot: true, children: ["\u0422\u043E\u043D \u00B7 ", card.tone] })] }), _jsxs("div", { className: "flex items-center gap-2", children: [_jsx("div", { className: "text-[10px] uppercase tracking-[0.1em] text-muted", children: "\u0423\u0432\u0435\u0440\u0435\u043D\u043D\u043E\u0441\u0442\u044C" }), _jsxs("div", { className: `text-base font-bold font-num ${card.confidence >= 60 ? 'text-success' : card.confidence >= 35 ? 'text-zapusk-400' : 'text-warning'}`, children: [card.confidence, "%"] })] })] }), _jsx("div", { className: "text-[11px] text-muted mb-4", children: STAGE_HINT[card.spinStage] }), _jsx(AdviceFields, { card: card })] }));

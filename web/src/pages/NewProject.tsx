@@ -5,6 +5,7 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/Button';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Input, Select, Textarea } from '../components/ui/Input';
+import { VoiceInputButton } from '../components/ui/VoiceInputButton';
 import { api, type Project } from '../lib/api';
 
 const STAGE_OPTIONS = [
@@ -56,6 +57,13 @@ export default function NewProject() {
     setForm((f) => ({ ...f, [k]: v }));
   }
 
+  function appendDescription(text: string) {
+    setForm((f) => ({
+      ...f,
+      description: [f.description.trim(), text.trim()].filter(Boolean).join('\n'),
+    }));
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return setErr('Название обязательно');
@@ -74,6 +82,7 @@ export default function NewProject() {
         equityOffered: form.equityOffered ? Number(form.equityOffered) : null,
         raiseDeadline: form.raiseDeadline || null,
         investorType: form.investorType || null,
+        description: form.description.trim() || null,
       });
       navigate(`/projects/${res.project.id}`);
     } catch (e) {
@@ -187,6 +196,9 @@ export default function NewProject() {
 
           <Card>
             <CardHeader title="Контекст проекта" subtitle="Опционально — поможет первому разбору" />
+            <div className="mb-3 flex justify-end">
+              <VoiceInputButton label="Надиктовать контекст" onTranscript={appendDescription} />
+            </div>
             <Textarea
               value={form.description}
               onChange={(e) => set('description', e.target.value)}

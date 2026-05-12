@@ -15,6 +15,7 @@ import { exportRoutes } from './routes/exportRoute.js';
 import { adminRoutes } from './routes/admin.js';
 import { reviewsRoutes } from './routes/reviews.js';
 import { salesAssistantRoutes } from './routes/salesAssistant.js';
+import { aiLeadsRoutes } from './routes/aiLeads.js';
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use('/api/projects', exportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/sales-assistant', salesAssistantRoutes);
+app.use('/api/ai-leads', aiLeadsRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

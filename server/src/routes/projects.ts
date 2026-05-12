@@ -1,7 +1,10 @@
 import { Router } from 'express';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
+import { storage } from '../services/storage.js';
 
 export const projectsRoutes = Router();
 projectsRoutes.use(authMiddleware);
@@ -19,6 +22,7 @@ const projectSchema = z.object({
   equityOffered: z.number().optional().nullable(),
   raiseDeadline: z.string().optional().nullable(),
   investorType: z.string().optional().nullable(),
+  description: z.string().optional().nullable(),
 });
 
 projectsRoutes.get('/', async (req, res) => {
@@ -53,6 +57,24 @@ projectsRoutes.post('/', async (req, res) => {
       investorType: d.investorType ?? null,
     },
   });
+  if (d.description?.trim()) {
+    const body = d.description.trim();
+    const diskName = `${randomUUID()}.txt`;
+    const rel = path.join(project.id, diskName);
+    const buffer = Buffer.from(body, 'utf8');
+    await storage.saveBuffer(rel, buffer);
+    await prisma.uploadedFile.create({
+      data: {
+        projectId: project.id,
+        filename: diskName,
+        originalName: 'Контекст проекта.txt',
+        mimeType: 'text/plain',
+        size: buffer.byteLength,
+        category: 'description',
+        path: rel,
+      },
+    });
+  }
   res.status(201).json({ project });
 });
 

@@ -15,6 +15,7 @@ import Templates from './pages/Templates';
 import AdminProjects from './pages/AdminProjects';
 import Guide from './pages/Guide';
 import SalesAssistant from './pages/SalesAssistant';
+import AILeads from './pages/AILeads';
 
 export default function App() {
   const auth = getAuth();
@@ -35,6 +36,7 @@ export default function App() {
       <Route path="/projects/:id/review" element={<ProjectReview />} />
       <Route path="/templates" element={<Templates />} />
       <Route path="/guide" element={<Guide />} />
+      <Route path="/ai-leads" element={<AILeads />} />
       <Route path="/sales-assistant" element={<SalesAssistant />} />
       <Route path="/admin/projects" element={<AdminProjects />} />
       <Route path="*" element={<Navigate to={auth ? '/dashboard' : '/login'} replace />} />

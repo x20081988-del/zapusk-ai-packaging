@@ -41,7 +41,7 @@ export function VoiceInputButton({ onTranscript, label = 'Надиктовать
   function start() {
     const SpeechRecognition = getSpeechRecognition();
     if (!SpeechRecognition) {
-      setMessage('Голосовой ввод не поддерживается в этом браузере. Введите комментарий текстом');
+      setMessage('Голосовой ввод не поддерживается в этом браузере. Введите текст вручную');
       return;
     }
 
@@ -65,7 +65,7 @@ export function VoiceInputButton({ onTranscript, label = 'Надиктовать
       setMessage(null);
     };
     recognition.onerror = () => {
-      setMessage('Не удалось распознать речь. Введите комментарий текстом');
+      setMessage('Не удалось распознать речь. Введите текст вручную');
     };
     recognition.onend = () => setListening(false);
     recognitionRef.current = recognition;

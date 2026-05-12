@@ -44,9 +44,12 @@ interface AssistantCard {
   nextStep: string | null;
   source: 'ai' | 'mock';
   provider: string;
+  model: string;
+  fellBackToMock: boolean;
 }
 
-type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error' | 'session_ended';
+type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
+type AdviceHistoryItem = Pick<AssistantCard, 'situation' | 'recommendation' | 'suggestedPhrase' | 'spinStage' | 'tone' | 'nextStep'>;
 
 const STAGE_LABEL: Record<AssistantCard['spinStage'], string> = {
   S: 'S — Situation',
@@ -76,16 +79,18 @@ export default function SalesAssistant() {
   const [interim, setInterim] = useState('');
   const [card, setCard] = useState<AssistantCard | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [summary, setSummary] = useState<AssistantCard | null>(null);
+  const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
 
   const srRef = useRef<SRInstance | null>(null);
   const restartTimerRef = useRef<number | null>(null);
   const shouldListenRef = useRef(false);
+  const recognitionActiveRef = useRef(false);
   const analyzingRef = useRef(false);
-  const lastSentRef = useRef<string>('');
   const transcriptLinesRef = useRef<Array<{ ts: number; final: boolean; text: string }>>([]);
   const speechStatusRef = useRef<SpeechStatus>('idle');
+  const cardRef = useRef<AssistantCard | null>(null);
+  const adviceHistoryRef = useRef<AdviceHistoryItem[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
   // Initial project list — agent ties advice to the active project's context.
@@ -104,8 +109,17 @@ export default function SalesAssistant() {
     speechStatusRef.current = speechStatus;
   }, [speechStatus]);
 
+  useEffect(() => {
+    cardRef.current = card;
+  }, [card]);
+
+  useEffect(() => {
+    adviceHistoryRef.current = adviceHistory;
+  }, [adviceHistory]);
+
   useEffect(() => () => {
     shouldListenRef.current = false;
+    recognitionActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore unmount race */ }
   }, []);
@@ -117,51 +131,47 @@ export default function SalesAssistant() {
     }
   }, [transcript, interim]);
 
-  // Trigger after new transcript chunks and also keep a timer running while
-  // listening, so advice does not freeze if the browser batches final results.
-  useEffect(() => {
-    if (!listening) return;
-    const t = setTimeout(() => {
-      analyzeIfChanged();
-    }, 1200);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transcript, listening]);
-
-  useEffect(() => {
-    if (!listening) return;
-    const t = window.setInterval(() => analyzeIfChanged(), 8000);
-    return () => window.clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listening, projectId]);
+  function fullTranscript(): string {
+    return transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n');
+  }
 
   function recentContext(): string {
-    return transcriptLinesRef.current.filter((t) => t.final).slice(-12).map((t) => t.text).join(' ');
+    const text = fullTranscript();
+    return text.length > 6_000 ? text.slice(-6_000) : text;
   }
 
-  function analyzeIfChanged() {
-    const context = recentContext();
-    if (context.length < 20) return;
-    if (context === lastSentRef.current) return;
-    lastSentRef.current = context;
-    runAnalyze({ text: context.slice(-1600) });
+  function toAdviceHistoryItem(next: AssistantCard): AdviceHistoryItem {
+    return {
+      situation: next.situation,
+      recommendation: next.recommendation,
+      suggestedPhrase: next.suggestedPhrase,
+      spinStage: next.spinStage,
+      tone: next.tone,
+      nextStep: next.nextStep,
+    };
   }
 
-  async function runAnalyze(opts: { summary?: boolean; text?: string } = {}) {
-    if (analyzingRef.current && !opts.summary) return;
-    const last = [...transcriptLinesRef.current].reverse().find((t) => t.final)?.text;
-    const chunk = opts.text ?? (last && last.length >= 12 ? last : recentContext().slice(-600));
-    if (!chunk) return;
+  async function runAnalyze() {
+    if (analyzingRef.current) return;
+    const transcriptText = fullTranscript();
+    if (transcriptText.trim().length < 10) {
+      setPermError('Сначала начните прослушивание и скажите несколько фраз.');
+      return;
+    }
     analyzingRef.current = true;
     setAnalyzing(true);
     try {
       const r = await api.post<{ card: AssistantCard }>('/api/sales-assistant/analyze', {
-        transcript: chunk,
-        recent: recentContext(),
+        transcript: transcriptText.slice(-32_000),
+        recentContext: recentContext(),
+        previousAdvice: cardRef.current,
+        previousSpinStage: cardRef.current?.spinStage ?? null,
+        adviceHistory: adviceHistoryRef.current.slice(-6),
         projectId: projectId || null,
       });
-      if (opts.summary) setSummary(r.card);
-      else setCard(r.card);
+      setCard(r.card);
+      setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
+      setPermError(null);
     } catch (err) {
       // soft-fail — transcript keeps growing
       console.warn('[sales-assistant] analyze error', err);
@@ -172,6 +182,7 @@ export default function SalesAssistant() {
   }
 
   function startRecognition() {
+    if (recognitionActiveRef.current || srRef.current) return;
     const SR = getSR();
     if (!SR) {
       shouldListenRef.current = false;
@@ -204,6 +215,8 @@ export default function SalesAssistant() {
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           shouldListenRef.current = false;
           setListening(false);
+          recognitionActiveRef.current = false;
+          if (srRef.current === sr) srRef.current = null;
           speechStatusRef.current = 'mic_error';
           setSpeechStatus('mic_error');
           setPermError('Доступ к микрофону не разрешён. Разрешите доступ в настройках браузера.');
@@ -213,20 +226,22 @@ export default function SalesAssistant() {
         if (code === 'audio-capture') {
           shouldListenRef.current = false;
           setListening(false);
+          recognitionActiveRef.current = false;
+          if (srRef.current === sr) srRef.current = null;
           speechStatusRef.current = 'mic_error';
           setSpeechStatus('mic_error');
           setPermError('Браузер не видит микрофон. Проверьте устройство ввода и разрешения.');
           return;
         }
-        if (code === 'network') {
-          shouldListenRef.current = false;
-          setListening(false);
-          speechStatusRef.current = 'session_ended';
-          setSpeechStatus('session_ended');
-          setPermError('Сессия распознавания завершилась. Нажмите «Продолжить», чтобы слушать дальше в этой же встрече.');
+        if (shouldListenRef.current) {
+          speechStatusRef.current = 'restarting';
+          setSpeechStatus('restarting');
+          setPermError(code ? `Распознавание временно остановилось (${code}), перезапускаю автоматически.` : null);
+          return;
         }
       };
       sr.onend = () => {
+        recognitionActiveRef.current = false;
         if (srRef.current === sr) srRef.current = null;
         if (shouldListenRef.current) {
           speechStatusRef.current = 'restarting';
@@ -235,7 +250,7 @@ export default function SalesAssistant() {
           restartTimerRef.current = window.setTimeout(() => {
             if (shouldListenRef.current) startRecognition();
           }, 350);
-        } else if (speechStatusRef.current !== 'mic_error' && speechStatusRef.current !== 'session_ended') {
+        } else if (speechStatusRef.current !== 'mic_error') {
           const next = transcriptLinesRef.current.length ? 'stopped' : 'idle';
           speechStatusRef.current = next;
           setSpeechStatus(next);
@@ -243,6 +258,7 @@ export default function SalesAssistant() {
       };
       srRef.current = sr;
       sr.start();
+      recognitionActiveRef.current = true;
       setListening(true);
       speechStatusRef.current = 'listening';
       setSpeechStatus('listening');
@@ -250,6 +266,8 @@ export default function SalesAssistant() {
     } catch (err) {
       shouldListenRef.current = false;
       setListening(false);
+      srRef.current = null;
+      recognitionActiveRef.current = false;
       speechStatusRef.current = 'mic_error';
       setSpeechStatus('mic_error');
       setPermError(err instanceof Error ? err.message : 'Не удалось включить распознавание речи');
@@ -257,11 +275,6 @@ export default function SalesAssistant() {
   }
 
   function start() {
-    shouldListenRef.current = true;
-    startRecognition();
-  }
-
-  function continueListening() {
     shouldListenRef.current = true;
     setPermError(null);
     startRecognition();
@@ -275,26 +288,25 @@ export default function SalesAssistant() {
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore */ }
     srRef.current = null;
+    recognitionActiveRef.current = false;
     setInterim('');
-    // Final summary after a beat
-    setTimeout(() => runAnalyze({ summary: true }), 600);
   }
 
   function reset() {
     setTranscript([]);
     setInterim('');
     setCard(null);
-    setSummary(null);
+    setAdviceHistory([]);
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
     setPermError(null);
-    lastSentRef.current = '';
   }
 
   const wordCount = useMemo(
     () => transcript.filter((t) => t.final).reduce((acc, t) => acc + t.text.split(/\s+/).length, 0),
     [transcript],
   );
+  const hasFinalTranscript = transcript.some((t) => t.final);
   const visibleProjects = useMemo(
     () => projects.filter((p) => mode === 'team' || !isLegacyDemoProject(p)),
     [mode, projects],
@@ -303,11 +315,11 @@ export default function SalesAssistant() {
   const statusText: Record<SpeechStatus, { title: string; hint: string }> = {
     idle: {
       title: 'Готов к старту',
-      hint: 'Нажмите «Запустить» и разрешите доступ к микрофону.',
+      hint: 'Нажмите «Начать прослушивание» и разрешите доступ к микрофону.',
     },
     listening: {
-      title: 'Идёт прослушивание встречи',
-      hint: 'Говорите естественно. Подсказки обновляются по новым фразам и по таймеру.',
+      title: 'Слушает',
+      hint: 'Говорите естественно. Паузы не завершают встречу, распознавание перезапускается автоматически.',
     },
     restarting: {
       title: 'Перезапуск распознавания',
@@ -321,11 +333,12 @@ export default function SalesAssistant() {
       title: 'Ошибка микрофона',
       hint: 'Проверьте разрешение браузера и устройство ввода.',
     },
-    session_ended: {
-      title: 'Сессия распознавания завершилась',
-      hint: 'Нажмите «Продолжить», чтобы слушать дальше в этой же встрече.',
-    },
   };
+  const providerLabel = card?.fellBackToMock || card?.source === 'mock'
+    ? 'Mock'
+    : card?.provider === 'openai'
+      ? 'OpenAI'
+      : card?.provider;
 
   return (
     <AppLayout
@@ -343,9 +356,16 @@ export default function SalesAssistant() {
           )}
           {listening
             ? <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop}>Остановить</Button>
-            : speechStatus === 'session_ended'
-              ? <Button variant="primary" iconLeft={<RefreshCw size={14} />} onClick={continueListening}>Продолжить</Button>
-              : <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start}>Запустить</Button>}
+            : <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start}>Начать прослушивание</Button>}
+          <Button
+            variant="ai"
+            iconLeft={<RefreshCw size={14} />}
+            onClick={runAnalyze}
+            loading={analyzing}
+            disabled={!hasFinalTranscript}
+          >
+            Обновить подсказку
+          </Button>
           {transcript.length > 0 && !listening && (
             <Button variant="ghost" onClick={reset}>Сбросить</Button>
           )}
@@ -375,8 +395,9 @@ export default function SalesAssistant() {
             {speechStatus === 'restarting' && <StatusBadge tone="warning" dot>перезапуск</StatusBadge>}
             {speechStatus === 'stopped' && <StatusBadge tone="neutral" dot>остановлено</StatusBadge>}
             {speechStatus === 'mic_error' && <StatusBadge tone="danger" dot>ошибка микрофона</StatusBadge>}
-            {analyzing && <StatusBadge tone="ai" dot>анализ…</StatusBadge>}
-            {card && <StatusBadge tone={card.source === 'mock' ? 'neutral' : 'success'} dot>{card.source === 'mock' ? 'mock' : `AI · ${card.provider}`}</StatusBadge>}
+            {hasFinalTranscript && !analyzing && <StatusBadge tone="info" dot>готов обновить подсказку</StatusBadge>}
+            {analyzing && <StatusBadge tone="ai" dot>обновляем подсказку</StatusBadge>}
+            {card && <StatusBadge tone={card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success'} dot>{providerLabel}</StatusBadge>}
           </div>
         </div>
         {permError && (
@@ -414,26 +435,19 @@ export default function SalesAssistant() {
 
         {/* AI ADVICE */}
         <div className="space-y-4">
-          {!card && !summary && (
+          {!card && (
             <Card padded className="text-center py-12">
               <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-ai/15 border border-ai/30 flex items-center justify-center text-ai-glow">
                 <Sparkles size={18} />
               </div>
               <h3 className="text-base font-semibold text-primary mb-1">Подсказки появятся здесь</h3>
               <p className="text-xs text-secondary max-w-sm mx-auto">
-                Скажите несколько фраз — ассистент определит этап SPIN, тон и предложит конкретную реплику.
+                Скажите несколько фраз, затем нажмите «Обновить подсказку» — ассистент определит этап SPIN, тон и предложит следующую реплику.
               </p>
             </Card>
           )}
 
           {card && <AdviceCard card={card} />}
-
-          {summary && (
-            <Card padded accent="ai">
-              <CardHeader title="Итог встречи" subtitle="Чёткий next step и вероятность сделки" />
-              <AdviceFields card={summary} compact />
-            </Card>
-          )}
         </div>
       </div>
     </AppLayout>

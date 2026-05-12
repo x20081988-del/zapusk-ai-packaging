@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-12 (UX hotfix: centered modals + clearer missing-data guidance).
+Last updated: 2026-05-13 (production repo sync: AI Leads + OpenAI/Sales Assistant changes).
 
 ---
 
@@ -27,7 +27,106 @@ zapusk-ai-packaging/
 
 ---
 
-## Completed (this sprint — UX hotfix 2026-05-12)
+## Completed (this sprint — AI Leads MVP 2026-05-13)
+
+- [x] Added a new client entry point before Sales Assistant: sidebar item “Получать AI-лиды” and a large Dashboard card “AI привлекает инвесторов за вас”.
+- [x] Added `/ai-leads` page with product onboarding, launch lock, briefing readiness, investor strategy, KPI cards, live-looking lead feed, lead cards, mock audio records and communication timeline.
+- [x] Added backend endpoint `GET /api/ai-leads?projectId=<id>` that returns a single dashboard model for the selected project.
+- [x] Added AI Brief Analyzer MVP: auto-filled briefing fields, missing-data list, readiness progress, breakdown by legal/finance/marketing/investment offer, text/voice answer box and interview CTA.
+- [x] Added launch gating: if critical briefing fields are missing, “AI-лиды” are shown as demo preview and launch CTA sends the user to brief completion.
+- [x] Added mock dataset with 12 investor leads: ready to invest, requested materials, dividends, pre-IPO, AI, risk doubts, Zoom request, no answer/follow-up and export/growth interest.
+- [x] Added lead guarantee card based on current legal positioning: minimum 50 target leads, replacement of non-target contacts, 5 contact attempts, no guarantee of investment or yield.
+- [x] Prepared future provider abstractions: `LeadProvider`, `AICommunicationProvider`, `TranscriptProvider`, `LeadReplacementPolicyProvider`.
+- [x] Documented the AI Leads MVP in README.
+
+**Files changed**
+- `server/src/services/aiLeadsService.ts`
+- `server/src/routes/aiLeads.ts`
+- `server/src/index.ts`
+- `web/src/pages/AILeads.tsx`
+- `web/src/App.tsx`
+- `web/src/components/layout/Sidebar.tsx`
+- `web/src/pages/Dashboard.tsx`
+- generated web source mirrors: `web/src/pages/AILeads.js`, `web/src/App.js`, `web/src/components/layout/Sidebar.js`, `web/src/pages/Dashboard.js`, `web/tsconfig.tsbuildinfo`
+- `README.md`
+- `TASKS.md`
+
+**Checks**
+- `cd server && npx tsc --noEmit` → green.
+- `cd web && npx tsc --noEmit` → green.
+- `npm run build` → green.
+- Mock API smoke on `PORT=4108` → green:
+  - `/health` returns `ok: true`, `spaReady: true`.
+  - `/api/ai-leads` returns 12 leads, readiness and replacement policy.
+  - `/api/sales-assistant/analyze` returns structured card with provider/model/fallback fields.
+- Local browser smoke on `http://localhost:4107` → green:
+  - `/ai-leads` opens after login.
+  - Main AI leads offer, AI Brief Analyzer, lead feed, guarantee card and mock audio records are visible.
+  - Dashboard shows the new “Получать AI-лиды” entry point and the large AI leads card.
+
+**Known risks / ограничения**
+- Lead feed, audio records, communication history and AI extraction are mock/demo data. There is no real dialer, messenger integration, CRM sync, OCR, embeddings or speech-to-text backend yet.
+- “Прикрепить файл” in AI Brief Analyzer is a visual MVP action; real upload/parsing should connect to the existing project file pipeline next.
+- The legal copy follows the provided contract context, but the contract PDFs were not parsed automatically in this pass.
+- Browser/mobile visual QA for `/ai-leads` still needs a manual pass before the public demo.
+
+**Next recommended task**
+- Add persisted backend models/API for `ProjectLead`, communication events and briefing answers, then connect the provider interfaces to a real AI dialer / messenger pipeline.
+
+## Completed (synced from Codex workspace — Sales Assistant MVP 2026-05-13)
+
+- [x] Reworked `/sales-assistant` from auto-analysis-by-timer to stable MVP behaviour: continuous browser transcription plus manual “Обновить подсказку”.
+- [x] Removed the main “Продолжить” recovery scenario. Web Speech `onend` now restarts automatically when the user did not press “Остановить”.
+- [x] Hardened Web Speech loop: `continuous=true`, `interimResults=true`, `lang=ru-RU`, final phrases append to transcript, interim phrase is separate, restart is debounced, refs avoid stale closure and double recognition starts.
+- [x] Added UI actions/statuses: “Начать прослушивание”, “Остановить”, “Обновить подсказку”, “Слушает”, “Перезапуск распознавания”, “Остановлено пользователем”, “Ошибка микрофона”, “Готов обновить подсказку”, “Обновляем подсказку”.
+- [x] Expanded `POST /api/sales-assistant/analyze` contract: accepts `transcript`, `recentContext`, `previousAdvice`, `previousSpinStage`, `adviceHistory`, `projectId`; keeps backward-compatible `recent`.
+- [x] Sales Assistant prompt now receives full meeting context, recent context, previous advice/stage/history and explicitly avoids repeating the same next-best-action.
+- [x] Response card now includes `provider`, `model`, `fellBackToMock`; UI shows “OpenAI” or “Mock” badge.
+- [x] Mock/heuristic fallback now attempts to advance SPIN if it detects it would repeat the same suggested phrase.
+- [x] Added voice input to New Project “Контекст проекта” via `VoiceInputButton`.
+- [x] New project context is now sent to the backend and saved as `Контекст проекта.txt` uploaded material with category `description`, so it can feed the first brief extraction.
+
+**Files changed**
+- `server/src/routes/salesAssistant.ts`
+- `server/src/services/salesAssistantService.ts`
+- `server/src/ai/salesAssistantPrompt.ts`
+- `server/src/routes/projects.ts`
+- `web/src/pages/SalesAssistant.tsx`
+- `web/src/pages/NewProject.tsx`
+- `web/src/components/ui/VoiceInputButton.tsx`
+
+**Known risks / remaining**
+- Web Speech API remains browser-dependent: Chrome/Edge are the safest path; Safari support can vary by OS/browser settings.
+- Continuous speech recognition is still browser speech recognition, not OpenAI Realtime. Long meetings should be manually smoke-tested because browsers may throttle background tabs.
+
+## Completed (synced from Codex workspace — production OpenAI architecture 2026-05-13)
+
+- [x] Mapped current AI usage: `briefService` generates/regenerates ProjectBrief; `salesAssistantService` analyzes live sales transcript; prompt packaging/reviews are deterministic template/API flows today; mock fallback lives in `server/src/ai/mock.ts`.
+- [x] Reworked `server/src/ai/client.ts` into a provider-agnostic AI gateway with `aiClient.generate()`, `aiClient.generateJson()`, `aiClient.classify()` and a prepared `stream()` interface stub.
+- [x] OpenAI now uses `responses.create` by default. The old `chat.completions.create` path remains only as one isolated fallback adapter inside `server/src/ai/client.ts` if an SDK runtime does not expose Responses API.
+- [x] Added centralized model routing: `main`, `fast`, `realtime` via `OPENAI_MODEL_MAIN`, `OPENAI_MODEL_FAST`, `OPENAI_MODEL_REALTIME`; old `OPENAI_MODEL` remains only as backward-compatible env alias for `MAIN`.
+- [x] Routed Brief generation/regeneration and Sales Assistant analysis through the main model route with feature names for logs/guardrails.
+- [x] Added structured JSON schema output for Sales Assistant: situation, risk, recommendation, suggestedPhrase, spinStage, tone, confidence, objection, nextStep.
+- [x] Added safe AI usage logging behind `AI_LOG_USAGE=true`: provider, feature, model, latency, token counts when available, success/failure, safe error code; no prompts/API keys/project bodies in logs.
+- [x] Added basic cost guardrails per feature: max input length, max output tokens, timeout and one retry only for transient errors; no retry for 401/403/429.
+- [x] Preserved Anthropic provider and deterministic mock fallback. Missing OpenAI key/model/provider failures now log an explicit safe reason and fall back to mock instead of failing silently.
+- [x] Documented OpenAI env, model routes, Render validation, mock rollback and model-access troubleshooting in `README.md`.
+- [x] Updated `.env.example` with OpenAI production env names.
+
+**Files changed**
+- `.env.example`
+- `README.md`
+- `server/src/env.ts`
+- `server/src/ai/client.ts`
+- `server/src/services/briefService.ts`
+- `server/src/services/salesAssistantService.ts`
+
+**Known risks / remaining**
+- Legacy Chat Completions is intentionally still present in one isolated adapter inside `server/src/ai/client.ts` only as SDK-runtime fallback. Current installed SDK exposes Responses API.
+- `estimatedCostUsd` is logged as `null` until a pricing table or billing integration is added; token counts are logged when the provider returns them.
+- Realtime model env and `stream()` abstraction are prepared, but realtime audio streaming is not implemented by design for this sprint.
+
+## Completed (previous sprint — UX hotfix 2026-05-12)
 
 - [x] Fixed material action modals (“Посмотреть задание”, “Доработать”) by rendering `Modal` through a React portal into `document.body`.
 - [x] Modal overlay is now a true fixed fullscreen layer: `fixed`, `inset-0`, `z-[1000]`, centered, dimmed/blurred background, body scroll lock, Esc close and backdrop click preserved.

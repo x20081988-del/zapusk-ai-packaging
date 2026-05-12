@@ -1,10 +1,13 @@
 import { prisma } from '../db.js';
-import { aiComplete } from '../ai/client.js';
+import { aiClient } from '../ai/client.js';
 import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js';
 
 export interface AnalyzeInput {
-  transcript: string;       // последняя реплика / новый chunk
-  recent?: string;          // 1-2 минуты предыдущего контекста
+  transcript: string;       // полный transcript встречи на момент ручного обновления
+  recentContext?: string;   // последние N символов разговора
+  previousAdvice?: unknown;
+  previousSpinStage?: AssistantCard['spinStage'] | null;
+  adviceHistory?: unknown[];
   projectId?: string | null;
 }
 
@@ -20,28 +23,85 @@ export interface AssistantCard {
   nextStep: string | null;
   source: 'ai' | 'mock';
   provider: 'anthropic' | 'openai' | 'mock';
+  model: string;
+  fellBackToMock: boolean;
 }
+
+const SALES_ASSISTANT_RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    situation: { type: 'string' },
+    risk: { type: ['string', 'null'] },
+    recommendation: { type: 'string' },
+    suggestedPhrase: { type: 'string' },
+    spinStage: { type: 'string', enum: ['S', 'P', 'I', 'N'] },
+    tone: { type: 'string', enum: ['SOFT', 'CONTROL', 'CLOSE'] },
+    confidence: { type: 'number', minimum: 0, maximum: 100 },
+    objection: { type: ['string', 'null'] },
+    nextStep: { type: ['string', 'null'] },
+  },
+  required: [
+    'situation',
+    'risk',
+    'recommendation',
+    'suggestedPhrase',
+    'spinStage',
+    'tone',
+    'confidence',
+    'objection',
+    'nextStep',
+  ],
+} satisfies Record<string, unknown>;
 
 export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCard> {
   const projectContext = await loadProjectContext(input.projectId ?? undefined);
+  const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
+  const previousAdvice = formatAdvice(input.previousAdvice);
+  const adviceHistory = formatAdviceHistory(input.adviceHistory);
 
   const user = [
-    'Контекст встречи и проекта:',
+    'Режим работы: ручное обновление live sales coach. Это НЕ summary встречи.',
+    'Дай следующую лучшую реплику и следующий шаг на основе текущего контекста.',
+    'Не повторяй предыдущую рекомендацию и не повторяй предыдущую suggestedPhrase.',
+    '',
+    'Контекст проекта:',
     projectContext,
     '',
-    input.recent ? `Недавний разговор (последние ~60 сек):\n${input.recent}` : '— контекста разговора пока нет',
+    input.previousSpinStage ? `Предыдущий SPIN-этап: ${input.previousSpinStage}` : 'Предыдущий SPIN-этап: не задан',
     '',
-    `Последняя реплика / новый фрагмент transcript:\n${input.transcript}`,
+    previousAdvice ? `Предыдущая подсказка, которую нельзя просто повторить:\n${previousAdvice}` : 'Предыдущая подсказка: нет',
     '',
-    'Проанализируй и верни JSON.',
+    adviceHistory ? `История последних подсказок:\n${adviceHistory}` : 'История подсказок: нет',
+    '',
+    recentContext ? `Последний контекст разговора:\n${recentContext}` : 'Последний контекст разговора: нет',
+    '',
+    `Полный transcript встречи на текущий момент:\n${input.transcript}`,
+    '',
+    [
+      'Задача:',
+      '1. Определи, где сейчас находится разговор по SPIN.',
+      '2. Если продавец перескочил этап — верни его на нужный вопрос.',
+      '3. Если инвестор дал сигнал интереса — веди ближе к деньгам и next step.',
+      '4. Если есть возражение — сначала уточни, потом усили implication.',
+      '5. Верни новую подсказку, логически продолжающую предыдущую.',
+      'Верни строго JSON.',
+    ].join('\n'),
   ].join('\n');
 
-  const ai = await aiComplete({
+  const ai = await aiClient.generateJson({
     system: SALES_ASSISTANT_SYSTEM,
     user,
-    asJSON: true,
+    feature: 'sales_assistant.analyze',
+    modelRoute: 'main',
     maxTokens: 700,
     temperature: 0.35,
+    jsonSchema: {
+      name: 'sales_assistant_card',
+      description: 'Live sales assistant advice card for a founder-investor conversation.',
+      schema: SALES_ASSISTANT_RESPONSE_SCHEMA,
+      strict: true,
+    },
   });
 
   let parsed: Partial<AssistantCard> | null = null;
@@ -53,7 +113,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
 
   if (!parsed || !parsed.situation) {
     const card = heuristicCard(input);
-    return { ...card, source: 'mock', provider: ai.provider };
+    return { ...card, source: 'mock', provider: ai.provider, model: ai.model, fellBackToMock: true };
   }
 
   return {
@@ -68,6 +128,8 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     nextStep: parsed.nextStep ?? null,
     source: ai.provider === 'mock' ? 'mock' : 'ai',
     provider: ai.provider,
+    model: ai.model,
+    fellBackToMock: ai.fellBackToMock,
   };
 }
 
@@ -96,6 +158,37 @@ function safeParse(raw: string | null | undefined, fallback: unknown) {
   } catch {
     return fallback;
   }
+}
+
+function tail(text: string, max: number): string {
+  return text.length > max ? text.slice(-max) : text;
+}
+
+function formatAdvice(raw: unknown): string {
+  if (!raw) return '';
+  if (typeof raw === 'string') return raw.slice(0, 2_000);
+  if (typeof raw !== 'object') return String(raw).slice(0, 2_000);
+  const advice = raw as Partial<AssistantCard>;
+  return [
+    advice.situation ? `Ситуация: ${advice.situation}` : '',
+    advice.recommendation ? `Что делать: ${advice.recommendation}` : '',
+    advice.suggestedPhrase ? `Что сказать: ${advice.suggestedPhrase}` : '',
+    advice.spinStage ? `SPIN: ${advice.spinStage}` : '',
+    advice.nextStep ? `Next step: ${advice.nextStep}` : '',
+  ].filter(Boolean).join('\n').slice(0, 2_000);
+}
+
+function formatAdviceHistory(raw: unknown[] | undefined): string {
+  if (!raw?.length) return '';
+  return raw
+    .slice(-6)
+    .map((item, index) => {
+      const formatted = formatAdvice(item);
+      return formatted ? `${index + 1}. ${formatted}` : '';
+    })
+    .filter(Boolean)
+    .join('\n\n')
+    .slice(0, 6_000);
 }
 
 function extractJson(text: string): string {
@@ -128,8 +221,8 @@ function clampConfidence(raw: unknown): number {
 // Deterministic fallback so the cockpit still moves when no AI key is available.
 // We read very simple cues — keywords like "дорого", "подумаю", "не сейчас"
 // jump us into objection-handling; questions about money push us into N+CLOSE.
-function heuristicCard(input: AnalyzeInput): Omit<AssistantCard, 'source' | 'provider'> {
-  const text = `${input.recent ?? ''}\n${input.transcript}`.toLowerCase();
+function heuristicCard(input: AnalyzeInput): Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock'> {
+  const text = `${input.recentContext ?? ''}\n${input.transcript}`.toLowerCase();
   const hits = (re: RegExp) => re.test(text);
 
   let stage: AssistantCard['spinStage'] = 'S';
@@ -195,5 +288,56 @@ function heuristicCard(input: AnalyzeInput): Omit<AssistantCard, 'source' | 'pro
     suggested = 'Согласен, риск есть. Конкретно по этому риску в проекте есть [митигатор] — как вы оцениваете его достаточность?';
   }
 
-  return { situation, risk, recommendation, suggestedPhrase: suggested, spinStage: stage, tone, confidence, objection, nextStep };
+  const card = { situation, risk, recommendation, suggestedPhrase: suggested, spinStage: stage, tone, confidence, objection, nextStep };
+  return avoidRepeatedAdvice(card, input);
+}
+
+function avoidRepeatedAdvice(
+  card: Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock'>,
+  input: AnalyzeInput,
+): Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock'> {
+  const previous = `${formatAdvice(input.previousAdvice)}\n${formatAdviceHistory(input.adviceHistory)}`.toLowerCase();
+  if (!previous || !card.suggestedPhrase || !previous.includes(card.suggestedPhrase.toLowerCase())) return card;
+
+  if (card.spinStage === 'S') {
+    return {
+      ...card,
+      spinStage: 'P',
+      tone: 'CONTROL',
+      situation: 'Контекст уже раскрыт, пора искать конкретную неудовлетворённость.',
+      recommendation: 'Перейди от знакомства к проблеме: попроси инвестора назвать слабое место в текущем портфеле.',
+      suggestedPhrase: 'А где в текущем портфеле вы видите главный разрыв: доходность, срок возврата или управляемость риска?',
+      nextStep: 'Получить одну конкретную проблему инвестора',
+    };
+  }
+  if (card.spinStage === 'P') {
+    return {
+      ...card,
+      spinStage: 'I',
+      tone: 'CONTROL',
+      situation: 'Проблема уже обозначена, теперь важно показать её последствия.',
+      recommendation: 'Усиль implication через сценарий потерь или упущенной доходности, без давления.',
+      suggestedPhrase: 'Если этот разрыв сохранится ещё год, как это повлияет на ваш план по доходности?',
+      nextStep: 'Получить признание последствия от самого инвестора',
+    };
+  }
+  if (card.spinStage === 'I') {
+    return {
+      ...card,
+      spinStage: 'N',
+      tone: 'CLOSE',
+      situation: 'Инвестор уже понимает последствия, можно переводить разговор к выгоде и условиям.',
+      recommendation: 'Свяжи выгоду проекта с его задачей и уточни комфортный чек.',
+      suggestedPhrase: 'Если проект закрывает именно этот разрыв, какой чек вам было бы комфортно рассмотреть первым шагом?',
+      nextStep: 'Зафиксировать диапазон чека',
+    };
+  }
+  return {
+    ...card,
+    tone: 'CLOSE',
+    situation: 'Разговор уже в деньгах, не возвращайся к общему питчу.',
+    recommendation: 'Закрепи следующий шаг: дата, материалы и критерий решения.',
+    suggestedPhrase: 'Давайте зафиксируем следующий шаг: какие два показателя вам нужно проверить, чтобы принять решение?',
+    nextStep: 'Назначить дату следующего контакта и критерии решения',
+  };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Sparkles, TrendingUp, FolderOpen } from 'lucide-react';
+import { Plus, Sparkles, TrendingUp, FolderOpen, Radio, PhoneCall, MessageSquare, UserCheck, ShieldCheck } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProjectCard } from '../components/ui/ProjectCard';
 import { Button } from '../components/ui/Button';
@@ -41,6 +41,41 @@ export default function Dashboard() {
         <StatCard label="Готово к показу инвестору" value={ready} icon={<TrendingUp size={16} />} accent="zapusk" />
       </div>
 
+      <Link to="/ai-leads" className="block mb-6">
+        <Card hoverable accent="ai" className="overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(35,214,176,0.14),transparent_28%),radial-gradient(circle_at_88%_0%,rgba(196,148,58,0.12),transparent_24%)]" />
+          <div className="relative grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-5 items-center">
+            <div>
+              <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-2">
+                <Radio size={13} /> Новый раздел
+              </div>
+              <h2 className="text-2xl font-bold text-primary tracking-tight">
+                AI привлекает инвесторов за вас
+              </h2>
+              <p className="text-sm text-secondary mt-2 max-w-2xl leading-relaxed">
+                Получайте горячих инвесторов с чеком от 500 000 ₽ ежедневно: AI звонит, ведёт переписки, квалифицирует интерес и передаёт лиды с контекстом общения.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-4">
+                <MiniPill icon={<PhoneCall size={12} />} label="AI-прозвон" />
+                <MiniPill icon={<MessageSquare size={12} />} label="AI-переписки" />
+                <MiniPill icon={<UserCheck size={12} />} label="Горячие лиды" />
+                <MiniPill icon={<ShieldCheck size={12} />} label="Замена нецелевых" />
+              </div>
+            </div>
+            <div className="rounded-lg border border-ai/25 bg-canvas/55 p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">Live pipeline</div>
+                  <div className="text-3xl font-bold text-primary font-num mt-1">12</div>
+                  <div className="text-xs text-muted">квалифицированных лидов в demo-feed</div>
+                </div>
+                <Button variant="ai" iconLeft={<Sparkles size={14} />}>Запустить AI-лиды</Button>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </Link>
+
       <div className="mb-4 flex items-end justify-between">
         <div>
           <h2 className="text-lg font-semibold text-primary tracking-tight">Проекты</h2>
@@ -73,6 +108,15 @@ export default function Dashboard() {
         </div>
       )}
     </AppLayout>
+  );
+}
+
+function MiniPill({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-canvas/60 px-3 h-7 text-xs text-secondary">
+      <span className="text-ai-glow">{icon}</span>
+      {label}
+    </span>
   );
 }
 

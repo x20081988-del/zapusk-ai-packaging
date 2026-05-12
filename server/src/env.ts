@@ -23,10 +23,14 @@ export const env = {
   DEV_USER_NAME: process.env.DEV_USER_NAME ?? 'Zapusk Founder',
 
   AI_PROVIDER: (process.env.AI_PROVIDER ?? 'mock') as 'anthropic' | 'openai' | 'mock',
+  AI_LOG_USAGE: truthy(process.env.AI_LOG_USAGE),
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
   ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-7',
   OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? '',
-  OPENAI_MODEL: process.env.OPENAI_MODEL ?? 'gpt-4o',
+  // OPENAI_MODEL is kept as a backward-compatible alias for older deploys.
+  OPENAI_MODEL_MAIN: process.env.OPENAI_MODEL_MAIN ?? process.env.OPENAI_MODEL ?? 'gpt-5.5',
+  OPENAI_MODEL_FAST: process.env.OPENAI_MODEL_FAST ?? 'gpt-4o-mini',
+  OPENAI_MODEL_REALTIME: process.env.OPENAI_MODEL_REALTIME ?? 'gpt-4o-realtime-preview',
 };
 
 export const isProd = env.NODE_ENV === 'production';

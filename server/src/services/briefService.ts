@@ -92,6 +92,8 @@ ${interviewBlock}
     system: SYSTEM_BRIEF_EXTRACTOR,
     user: userPrompt,
     asJSON: true,
+    feature: 'brief.generate',
+    modelRoute: 'main',
     maxTokens: 4096,
     temperature: 0.4,
   });
@@ -195,6 +197,8 @@ ${feedback}
 Не заменяй хороший заполненный бриф generic-текстом. Меняй только то, что связано с feedback/focus, и сохраняй конкретику текущего brief.`,
     user: userPrompt,
     asJSON: true,
+    feature: 'brief.regenerate',
+    modelRoute: 'main',
     maxTokens: 4096,
     temperature: 0.35,
   });

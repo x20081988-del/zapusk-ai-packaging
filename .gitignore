@@ -3,6 +3,12 @@ dist
 build
 .env
 .env.local
+.env.*
+!.env.example
+server/.env.*
+!server/.env.example
+web/.env.*
+!web/.env.example
 *.log
 .DS_Store
 

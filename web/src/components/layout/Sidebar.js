@@ -1,7 +1,7 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { NavLink } from 'react-router-dom';
 import clsx from 'clsx';
-import { LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Rocket, BookText, Headphones } from 'lucide-react';
+import { LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Rocket, BookText, Headphones, Radio } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { ModeToggle } from '../ui/ModeToggle';
 import { useMode } from '../../lib/mode';
@@ -9,6 +9,7 @@ const NAV = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Рабочий стол' },
     { to: '/projects/new', icon: FolderPlus, label: 'Новый проект' },
     { to: '/guide', icon: BookText, label: 'Гайд команды' },
+    { to: '/ai-leads', icon: Radio, label: 'Получать AI-лиды' },
     { to: '/sales-assistant', icon: Headphones, label: 'AI-ассистент на продажах' },
     // team-only navigation lives below — hidden from clients
     { to: '/templates', icon: FileCode2, label: 'Шаблоны заданий', teamOnly: true },
