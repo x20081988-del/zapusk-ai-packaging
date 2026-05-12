@@ -1,0 +1,295 @@
+import type { Project } from './api';
+
+export type DemoMaterialPhase = 'before' | 'after';
+export type DemoMaterialStatus = 'source' | 'platform' | 'rework' | 'approved';
+export type DemoMaterialKind =
+  | 'pitch'
+  | 'landing'
+  | 'financial'
+  | 'teaser'
+  | 'one_pager'
+  | 'calculator'
+  | 'pdf';
+
+export interface DemoMaterial {
+  id: string;
+  phase: DemoMaterialPhase;
+  kind: DemoMaterialKind;
+  title: string;
+  description: string;
+  status: DemoMaterialStatus;
+  version: number;
+  date: string;
+  format: string;
+  url: string;
+  downloadUrl?: string;
+  promptKind?: string;
+}
+
+export interface DemoTransformationCase {
+  key: string;
+  projectNames: string[];
+  headline: string;
+  beforeLabel: string;
+  afterLabel: string;
+  summary: string;
+  before: DemoMaterial[];
+  after: DemoMaterial[];
+}
+
+const ASSET = '/demo-assets';
+
+export const LEGACY_DEMO_PROJECT_NAMES = new Set([
+  'Tappsk Pro',
+  'Apart-отель Чарыш',
+  'Кофе с собой · сеть',
+]);
+
+export const DEMO_TRANSFORMATIONS: DemoTransformationCase[] = [
+  {
+    key: 'luce-silva',
+    projectNames: ['Luce Silva', 'Forrest Wedding'],
+    headline: 'Forrest Wedding → Luce Silva',
+    beforeLabel: 'Было: исходная презентация проекта',
+    afterLabel: 'Стало: готовая инвестиционная упаковка',
+    summary:
+      'Сырой материал площадки превращён в инвесторский комплект: презентация, тизер, посадочная страница и финансовая модель говорят одним языком.',
+    before: [
+      {
+        id: 'luce-before-pitch',
+        phase: 'before',
+        kind: 'pitch',
+        title: 'Forrest Wedding · исходная презентация',
+        description: 'Материал, который проект прислал до упаковки.',
+        status: 'source',
+        version: 1,
+        date: '2026-05-12',
+        format: 'PDF',
+        url: `${ASSET}/forrest-wedding-before.pdf`,
+        downloadUrl: `${ASSET}/forrest-wedding-before.pdf`,
+      },
+    ],
+    after: [
+      {
+        id: 'luce-after-pitch',
+        phase: 'after',
+        kind: 'pitch',
+        title: 'Luce Silva · инвестиционная презентация',
+        description: 'Готовая презентация для разговора с инвестором.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'PDF-презентация',
+        url: `${ASSET}/luce-silva-pitch-after.pdf`,
+        downloadUrl: `${ASSET}/luce-silva-pitch-after.pdf`,
+        promptKind: 'cloud_design',
+      },
+      {
+        id: 'luce-after-teaser',
+        phase: 'after',
+        kind: 'teaser',
+        title: 'Luce Silva · тизер',
+        description: 'Короткий визуальный материал для первого касания.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'PNG-тизер',
+        url: `${ASSET}/luce-silva-teaser-after.png`,
+        downloadUrl: `${ASSET}/luce-silva-teaser-after.png`,
+        promptKind: 'investment_summary',
+      },
+      {
+        id: 'luce-after-landing',
+        phase: 'after',
+        kind: 'landing',
+        title: 'Luce Silva · посадочная страница',
+        description: 'Инвестиционная посадочная страница с оффером и цифрами.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'Сайт',
+        url: 'https://lucesilva-invest.ru/',
+        promptKind: 'lovable_landing',
+      },
+      {
+        id: 'luce-after-financial',
+        phase: 'after',
+        kind: 'financial',
+        title: 'Luce Silva · финансовая модель',
+        description: 'Расчёты сценариев, окупаемости и инвесторской доходности.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'XLSX',
+        url: `${ASSET}/luce-silva-finmodel-v4.xlsx`,
+        downloadUrl: `${ASSET}/luce-silva-finmodel-v4.xlsx`,
+        promptKind: 'financial',
+      },
+    ],
+  },
+  {
+    key: 'cafe-spb',
+    projectNames: ['Венский ветер', 'Cafe SPB', 'Cafe SPB · Венский ветер'],
+    headline: 'Венский ветер → Cafe SPB',
+    beforeLabel: 'Было: исходная презентация кафе',
+    afterLabel: 'Стало: комплект материалов платформы',
+    summary:
+      'Исходная презентация кафе дополнена готовой инвестиционной презентацией, посадочной страницей и финансовой моделью на 36 месяцев.',
+    before: [
+      {
+        id: 'cafe-before-pitch',
+        phase: 'before',
+        kind: 'pitch',
+        title: 'Венский ветер · исходная презентация',
+        description: 'Материал проекта до упаковки.',
+        status: 'source',
+        version: 1,
+        date: '2026-05-12',
+        format: 'PDF',
+        url: `${ASSET}/cafe-spb-before.pdf`,
+        downloadUrl: `${ASSET}/cafe-spb-before.pdf`,
+      },
+    ],
+    after: [
+      {
+        id: 'cafe-after-pitch',
+        phase: 'after',
+        kind: 'pitch',
+        title: 'Cafe SPB · инвестиционная презентация',
+        description: 'Готовая презентация для инвесторов.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'PDF-презентация',
+        url: `${ASSET}/cafe-spb-pitch-after.pdf`,
+        downloadUrl: `${ASSET}/cafe-spb-pitch-after.pdf`,
+        promptKind: 'cloud_design',
+      },
+      {
+        id: 'cafe-after-landing',
+        phase: 'after',
+        kind: 'landing',
+        title: 'Cafe SPB · посадочная страница',
+        description: 'Инвестиционная посадочная страница проекта.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'Сайт',
+        url: 'https://cafe-spb.ru/',
+        promptKind: 'lovable_landing',
+      },
+      {
+        id: 'cafe-after-financial',
+        phase: 'after',
+        kind: 'financial',
+        title: 'Венский ветер · финансовая модель',
+        description: 'Финансовая модель на 36 месяцев.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'XLSX',
+        url: `${ASSET}/cafe-spb-finmodel-36m.xlsx`,
+        downloadUrl: `${ASSET}/cafe-spb-finmodel-36m.xlsx`,
+        promptKind: 'financial',
+      },
+    ],
+  },
+  {
+    key: 'planeta',
+    projectNames: ['Планета 60', 'Планета', 'Planeta 60'],
+    headline: 'Планета → Планета 60',
+    beforeLabel: 'Было: исходная презентация проекта',
+    afterLabel: 'Стало: инвесторский комплект',
+    summary:
+      'Исходная презентация превращена в понятный набор материалов: PDF-презентация, one-pager, посадочная страница и финансовая модель.',
+    before: [
+      {
+        id: 'planeta-before-pitch',
+        phase: 'before',
+        kind: 'pitch',
+        title: 'Планета · исходная презентация',
+        description: 'Материал до переработки платформой.',
+        status: 'source',
+        version: 1,
+        date: '2026-05-12',
+        format: 'PDF',
+        url: `${ASSET}/planeta-before.pdf`,
+        downloadUrl: `${ASSET}/planeta-before.pdf`,
+      },
+    ],
+    after: [
+      {
+        id: 'planeta-after-pitch',
+        phase: 'after',
+        kind: 'pitch',
+        title: 'Планета 60 · инвестиционная презентация',
+        description: 'Готовая PDF-презентация для инвесторов.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'PDF-презентация',
+        url: `${ASSET}/planeta-pitch-after.pdf`,
+        downloadUrl: `${ASSET}/planeta-pitch-after.pdf`,
+        promptKind: 'cloud_design',
+      },
+      {
+        id: 'planeta-after-onepager',
+        phase: 'after',
+        kind: 'one_pager',
+        title: 'Планета 60 · краткая страница проекта',
+        description: 'Короткий материал для первого инвесторского просмотра.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'PDF',
+        url: `${ASSET}/planeta-onepager-after.pdf`,
+        downloadUrl: `${ASSET}/planeta-onepager-after.pdf`,
+        promptKind: 'one_pager',
+      },
+      {
+        id: 'planeta-after-landing',
+        phase: 'after',
+        kind: 'landing',
+        title: 'Планета 60 · посадочная страница',
+        description: 'Инвестиционная посадочная страница проекта.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'Сайт',
+        url: 'https://planeta-60-invest.lovable.app/',
+        promptKind: 'lovable_landing',
+      },
+      {
+        id: 'planeta-after-financial',
+        phase: 'after',
+        kind: 'financial',
+        title: 'Планета 60 · финансовая модель',
+        description: 'Оформленная финансовая модель проекта.',
+        status: 'platform',
+        version: 2,
+        date: '2026-05-12',
+        format: 'XLSX',
+        url: `${ASSET}/planeta-finmodel.xlsx`,
+        downloadUrl: `${ASSET}/planeta-finmodel.xlsx`,
+        promptKind: 'financial',
+      },
+    ],
+  },
+];
+
+export function getDemoTransformationCase(project?: Pick<Project, 'name'> | null): DemoTransformationCase | null {
+  if (!project) return null;
+  const name = project.name.trim().toLowerCase();
+  return DEMO_TRANSFORMATIONS.find((item) =>
+    item.projectNames.some((candidate) => candidate.trim().toLowerCase() === name),
+  ) ?? null;
+}
+
+export function getDemoMaterials(project?: Pick<Project, 'name'> | null): DemoMaterial[] {
+  const item = getDemoTransformationCase(project);
+  return item ? [...item.before, ...item.after] : [];
+}
+
+export function isLegacyDemoProject(project: Pick<Project, 'name'>): boolean {
+  return LEGACY_DEMO_PROJECT_NAMES.has(project.name);
+}

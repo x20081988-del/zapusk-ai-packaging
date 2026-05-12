@@ -1,0 +1,57 @@
+# Render.com Infrastructure-as-Code for Zapusk AI Packaging — public demo.
+#
+# One web service (Node) serves both the API and the compiled SPA from a single
+# public URL. A persistent disk holds the SQLite database and uploaded files so
+# state survives deploys.
+#
+# Usage:
+#   1. Push the repo to GitHub.
+#   2. On Render: New → Blueprint → connect this repo. Render reads this file.
+#   3. Fill in the secret env vars (ANTHROPIC_API_KEY or OPENAI_API_KEY) in the
+#      dashboard once. Everything else has sensible defaults.
+#   4. Deploy. The free tier sleeps after 15 min of inactivity — that's fine for demo.
+#
+# To switch to a different host (Railway / Fly), see README "Публичный демо-деплой".
+
+services:
+  - type: web
+    name: zapusk-ai
+    runtime: node
+    plan: free
+    region: frankfurt
+    # Render auto-sets NODE_ENV=production which would normally cause `npm install`
+    # to skip devDependencies (prisma, vite, typescript). install:all passes
+    # --include=dev to force every package, so the build has the tools it needs.
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    disk:
+      name: zapusk-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      # Keep Render on Node 22 LTS. Prisma 5.22 schema engine is unreliable on
+      # the local Node 24 runtime when applying migrations to a fresh SQLite DB.
+      - key: NODE_VERSION
+        value: 22.22.0
+      - key: NODE_ENV
+        value: production
+      - key: DEMO_MODE
+        value: "true"
+      - key: DATABASE_URL
+        value: "file:/data/prod.db"
+      - key: UPLOADS_DIR
+        value: /data/uploads
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: AI_PROVIDER
+        value: mock
+      # Fill these in the Render dashboard (Secret), not in source.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEV_USER_EMAIL
+        value: demo@zapusk.tech
+      - key: DEV_USER_NAME
+        value: Demo Visitor

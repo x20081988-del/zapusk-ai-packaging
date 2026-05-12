@@ -1,0 +1,192 @@
+// Zapusk AI Packaging — data model
+// Swap provider to "postgresql" for production; schema is compatible.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  projects  Project[]
+}
+
+model Project {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+
+  name             String
+  inn              String?
+  website          String?
+  industry         String?
+  legalStatus      String?   // ИП / ООО / ПАО / физлицо / иное
+  stage            String?   // idea / mvp / early_revenue / scaling / growth
+  raiseAmount      Float?    // сколько привлекает (в валюте проекта)
+  currency         String    @default("RUB")
+  minCheck         Float?    // минимальный чек инвестора
+  equityOffered    Float?    // %
+  raiseDeadline    DateTime?
+  investorType     String?   // private / fund / strategic / grant
+
+  status           String    @default("draft") // draft / packaging / ready
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  files            UploadedFile[]
+  brief            ProjectBrief?
+  investorTerms    InvestorTerms?
+  generatedPrompts GeneratedPrompt[]
+  generatedDocs    GeneratedDocument[]
+  referenceMats    ReferenceMaterial[]
+  artefactReviews  ArtefactReview[]
+}
+
+model UploadedFile {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  filename     String   // disk name (uuid + ext)
+  originalName String
+  mimeType     String
+  size         Int
+  category     String   // pitch / financial / description / image / logo / reference / other
+  path         String   // local relative path under UPLOADS_DIR
+  url          String?  // for external resources (google docs / notion / website)
+  createdAt    DateTime @default(now())
+}
+
+// AI-extracted brief + "бизнес на салфетке"
+model ProjectBrief {
+  id              String   @id @default(cuid())
+  projectId       String   @unique
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version         Int      @default(1)
+
+  businessSummary String?
+  monetization    String?
+  keyMetrics      String?  // JSON: { mrr, arr, gmv, users, churn, ... }
+  investmentAsk   String?
+  strengths       String?  // JSON array
+  weaknesses      String?  // JSON array
+  missingData     String?  // JSON array — flat list of questions for the AI Interview
+  missingByCategory String?  // JSON: { financial: [...], market: [...], team: [...], deal: [...], unit_econ: [...], risks: [...] }
+  interviewAnswers String?   // JSON array: [{ question, answer, category?, savedAt }] — captured via AI Interview
+  napkin          String?  // JSON: structured "business on a napkin"
+  rawAIResponse   String?  // full provider response for audit
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model InvestorTerms {
+  id             String   @id @default(cuid())
+  projectId      String   @unique
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  amount         Float?
+  equityPercent  Float?
+  valuation      Float?
+  instrument     String?  // equity / SAFE / convertible_note / loan / grant
+  useOfFunds     String?  // JSON breakdown
+  exitStrategy   String?  // text
+  expectedReturn String?  // ROI / IRR / multiplier
+  payback        String?  // months / years
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Master library — editable templates per kind
+model PromptTemplate {
+  id          String   @id @default(cuid())
+  key         String   @unique  // lovable_landing / lovable_pitch / cloud_design / financial / sales_gpt / faq / one_pager / pitch_structure / investment_summary / calculator_spec
+  name        String
+  category    String              // landing / pitch / financial / sales / faq / summary / spec
+  description String?
+  body        String              // template body with {{placeholders}}
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model GeneratedPrompt {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  kind       String   // same vocabulary as PromptTemplate.key
+  version    Int      @default(1)
+  body       String   // resolved prompt — ready to copy
+  feedback   String?  // optional feedback used to produce this version (regenerate-with-feedback)
+  createdAt  DateTime @default(now())
+
+  @@index([projectId, kind])
+}
+
+// Team review on a specific artefact (prompt / doc / brief). Multiple versions
+// can be reviewed; latest score per artefact key feeds the Packaging Quality Score.
+model ArtefactReview {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  artefactKind String  // 'prompt' / 'document' / 'brief'
+  artefactKey  String  // PromptTemplate.key for prompts, document.kind for docs, 'brief' for the brief itself
+  artefactId   String? // FK to specific version (GeneratedPrompt.id / GeneratedDocument.id)
+
+  score        Int     // 1..5
+  comment      String?
+  approved     Boolean @default(false)   // "годится в работу"
+  needsRework  Boolean @default(false)   // "нужно доработать"
+  reviewer     String  // user email — MVP doesn't have roles yet
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId, artefactKey])
+}
+
+model GeneratedDocument {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  kind      String   // investment_summary / one_pager / pitch_deck_structure / investor_faq / calculator_spec / napkin
+  version   Int      @default(1)
+  format    String   @default("markdown")   // markdown / json
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([projectId, kind])
+}
+
+model FinancialModelTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  sheets      String   // JSON structure of sheets / sections
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ReferenceMaterial {
+  id        String   @id @default(cuid())
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  category  String   // landing / pitch / financial
+  url       String?
+  filePath  String?
+  note      String?
+  createdAt DateTime @default(now())
+}

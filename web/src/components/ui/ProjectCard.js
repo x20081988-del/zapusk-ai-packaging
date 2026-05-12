@@ -1,0 +1,13 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { Link } from 'react-router-dom';
+import { ArrowUpRight, Briefcase } from 'lucide-react';
+import { Card } from './Card';
+import { StatusBadge } from './StatusBadge';
+import { ProgressBar } from './ProgressBar';
+import { formatMoney, formatPercent, STAGE_LABELS } from '../../lib/format';
+export function ProjectCard({ project, percent }) {
+    return (_jsx(Link, { to: `/projects/${project.id}`, className: "block group", children: _jsxs(Card, { hoverable: true, accent: percent > 0 ? 'zapusk' : null, children: [_jsxs("div", { className: "flex items-start justify-between gap-3 mb-4", children: [_jsxs("div", { className: "min-w-0", children: [_jsxs("div", { className: "flex items-center gap-2 mb-1", children: [_jsx(Briefcase, { size: 14, className: "text-muted" }), _jsx("span", { className: "text-[11px] uppercase tracking-[0.1em] text-muted", children: project.industry ?? 'Без отрасли' })] }), _jsx("h3", { className: "text-base font-semibold text-primary truncate group-hover:text-zapusk-400 transition-colors", children: project.name })] }), _jsx(ArrowUpRight, { size: 16, className: "text-muted group-hover:text-zapusk-400 transition-colors flex-shrink-0" })] }), _jsxs("div", { className: "grid grid-cols-2 gap-3 mb-4", children: [_jsx(Metric, { label: "\u041F\u0440\u0438\u0432\u043B\u0435\u043A\u0430\u0435\u0442", value: formatMoney(project.raiseAmount, project.currency) }), _jsx(Metric, { label: "\u0414\u043E\u043B\u044F", value: formatPercent(project.equityOffered) }), _jsx(Metric, { label: "\u0421\u0442\u0430\u0434\u0438\u044F", value: STAGE_LABELS[project.stage ?? ''] ?? '—' }), _jsx(Metric, { label: "Min \u0447\u0435\u043A", value: formatMoney(project.minCheck, project.currency) })] }), _jsx("div", { className: "space-y-2", children: _jsx(ProgressBar, { value: percent, showLabel: true }) }), _jsxs("div", { className: "mt-4 pt-4 border-t border-hairline flex items-center justify-between", children: [_jsx(StatusBadge, { tone: project.status === 'ready' ? 'success' : percent > 0 ? 'zapusk' : 'neutral', dot: true, children: project.status === 'ready' ? 'Готов' : percent > 0 ? 'Материалы' : 'Черновик' }), _jsxs("span", { className: "text-[11px] text-muted", children: [(project.files?.length ?? 0), " \u0444\u0430\u0439\u043B\u043E\u0432"] })] })] }) }));
+}
+function Metric({ label, value }) {
+    return (_jsxs("div", { children: [_jsx("div", { className: "text-[10px] uppercase tracking-[0.1em] text-muted mb-0.5", children: label }), _jsx("div", { className: "text-[13px] font-semibold text-primary font-num truncate", children: value })] }));
+}

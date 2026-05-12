@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ──────────────────────────────────────────────────────────────
+ * ZAPUSK theme tokens
+ * Default = dark (the cockpit). Light overrides via data-theme="light".
+ * Every Tailwind colour utility reads these via rgb(var(--…)/<alpha>).
+ * ─────────────────────────────────────────────────────────────*/
+
+/* DARK — default (no flicker on first paint) */
+:root,
+:root[data-theme="dark"] {
+  /* surfaces */
+  --color-canvas:   10 11 16;
+  --color-ink:      15 17 23;
+  --color-surface:  19 22 31;
+  --color-elevated: 25 29 40;
+  --color-line:     35 40 58;
+  --color-hairline: 27 32 48;
+
+  /* text */
+  --color-text-primary:   245 246 250;
+  --color-text-secondary: 166 172 190;
+  --color-text-muted:     110 116 136;
+  --color-text-faint:     74 79 98;
+
+  /* brand — ZAPUSK */
+  --color-zapusk:      255 90 31;
+  --color-zapusk-dim:  200 68 18;
+  --color-zapusk-glow: 255 122 69;
+  --color-zapusk-50:   255 241 235;
+  --color-zapusk-100:  255 217 197;
+  --color-zapusk-400:  255 122 69;
+  --color-zapusk-600:  224 62 4;
+  --color-zapusk-700:  179 50 10;
+
+  /* AI accent */
+  --color-ai:      124 92 255;
+  --color-ai-dim:   90 63 224;
+  --color-ai-glow: 154 130 255;
+
+  /* semantic */
+  --color-success:     16 185 129;
+  --color-success-dim: 11 140  102;
+  --color-warning:     245 181 68;
+  --color-warning-dim: 194 141 42;
+  --color-danger:      240 85 107;
+  --color-danger-dim:  193 51 68;
+  --color-info:        63 178 255;
+  --color-info-dim:    45 133 199;
+
+  /* shadows — strong in dark */
+  --shadow-soft:    0 1px 2px rgba(0,0,0,0.4);
+  --shadow-card:    0 4px 20px -8px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.02);
+  --shadow-lifted:  0 16px 48px -12px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.04);
+  --shadow-glow:    0 0 32px -4px rgba(255,90,31,0.35);
+  --shadow-ai-glow: 0 0 32px -4px rgba(124,92,255,0.35);
+
+  /* bg-grad-ink: sidebar / hero decoration */
+  --grad-ink: linear-gradient(180deg, rgba(19,22,31,1) 0%, rgba(10,11,16,1) 100%);
+  --grid-dot-color: rgba(255,255,255,0.04);
+
+  /* scrollbar + accents */
+  --scrollbar-thumb:       #2A3045;
+  --scrollbar-thumb-hover: #3A4262;
+  --focus-ring:            rgba(255, 90, 31, 0.6);
+  --selection-bg:          rgba(255, 90, 31, 0.30);
+}
+
+/* LIGHT — premium B2B SaaS (Linear / Stripe / Notion vibe) */
+:root[data-theme="light"] {
+  /* surfaces — off-white canvas, pure-white cards for crispness */
+  --color-canvas:   250 250 251;
+  --color-ink:      255 255 255;
+  --color-surface:  255 255 255;
+  --color-elevated: 255 255 255;
+  --color-line:     228 228 231;
+  --color-hairline: 244 244 245;
+
+  /* text — near-black, balanced greys */
+  --color-text-primary:   10 10 11;
+  --color-text-secondary: 82 82 91;
+  --color-text-muted:     113 113 122;
+  --color-text-faint:     161 161 170;
+
+  /* brand — same orange (reads great on white) */
+  --color-zapusk:      255 90 31;
+  --color-zapusk-dim:  200 68 18;
+  --color-zapusk-glow: 255 122 69;
+  --color-zapusk-50:   255 241 235;
+  --color-zapusk-100:  255 217 197;
+  --color-zapusk-400:  255 122 69;
+  --color-zapusk-600:  224 62 4;
+  --color-zapusk-700:  179 50 10;
+
+  /* AI accent — same violet */
+  --color-ai:      124 92 255;
+  --color-ai-dim:   90 63 224;
+  --color-ai-glow: 154 130 255;
+
+  /* semantic — slightly deeper in light so they read against white */
+  --color-success:     5 150 105;
+  --color-success-dim: 4 120 87;
+  --color-warning:     217 119 6;
+  --color-warning-dim: 180 83 9;
+  --color-danger:      220 38 38;
+  --color-danger-dim:  185 28 28;
+  --color-info:        37 99 235;
+  --color-info-dim:    29 78 216;
+
+  /* shadows — soft, Stripe-style */
+  --shadow-soft:    0 1px 2px rgba(0,0,0,0.04);
+  --shadow-card:    0 1px 3px rgba(0,0,0,0.04), 0 4px 12px -4px rgba(0,0,0,0.06);
+  --shadow-lifted:  0 12px 32px -8px rgba(0,0,0,0.12), 0 4px 12px -4px rgba(0,0,0,0.08);
+  --shadow-glow:    0 0 24px -4px rgba(255,90,31,0.20);
+  --shadow-ai-glow: 0 0 24px -4px rgba(124,92,255,0.18);
+
+  /* bg-grad-ink: subtle white-to-canvas */
+  --grad-ink: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(250,250,251,1) 100%);
+  --grid-dot-color: rgba(0,0,0,0.05);
+
+  --scrollbar-thumb:       #D4D4D8;
+  --scrollbar-thumb-hover: #A1A1AA;
+  --focus-ring:            rgba(255, 90, 31, 0.45);
+  --selection-bg:          rgba(255, 90, 31, 0.20);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Montserrat', system-ui, -apple-system, sans-serif;
+  background-color: rgb(var(--color-canvas));
+  color: rgb(var(--color-text-primary));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'ss01', 'cv01';
+  letter-spacing: -0.01em;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+* {
+  border-color: rgb(var(--color-line));
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+*:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: rgb(var(--color-text-primary));
+}
+
+.font-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.text-glow {
+  text-shadow: 0 0 24px rgba(255, 90, 31, 0.4);
+}
+
+.bg-dot-grid {
+  background-image: radial-gradient(circle at 1px 1px, var(--grid-dot-color) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* ZAPUSK wordmark via SVG mask. Inherits currentColor so the same element
+ * looks black on light and white on dark without swapping assets. */
+.logo-mark {
+  -webkit-mask-image: url('/zapusk-wordmark.svg');
+          mask-image: url('/zapusk-wordmark.svg');
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+          mask-position: center;
+  -webkit-mask-size: contain;
+          mask-size: contain;
+  background-color: currentColor;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-rise {
+  animation: rise 0.4s cubic-bezier(0.4, 0, 0.2, 1) both;
+}

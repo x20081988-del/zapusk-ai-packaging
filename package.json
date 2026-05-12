@@ -1,0 +1,23 @@
+{
+  "name": "zapusk-ai-packaging",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Zapusk AI Packaging — investment packaging cockpit (MVP)",
+  "engines": {
+    "node": ">=22.22.0 <23"
+  },
+  "scripts": {
+    "install:all": "npm install --include=dev && npm --prefix server install --include=dev && npm --prefix web install --include=dev",
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix server run build && npm --prefix web run build",
+    "start": "npm --prefix server run start:prod",
+    "db:migrate": "npm --prefix server run db:migrate",
+    "db:seed": "npm --prefix server run db:seed",
+    "db:reset": "npm --prefix server run db:reset"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
