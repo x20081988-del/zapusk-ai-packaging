@@ -25,10 +25,6 @@ services:
     buildCommand: npm run install:all && npm run build
     startCommand: npm start
     healthCheckPath: /health
-    disk:
-      name: zapusk-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       # Keep Render on Node 22 LTS. Prisma 5.22 schema engine is unreliable on
       # the local Node 24 runtime when applying migrations to a fresh SQLite DB.
@@ -39,9 +35,9 @@ services:
       - key: DEMO_MODE
         value: "true"
       - key: DATABASE_URL
-        value: "file:/data/prod.db"
+        value: "file:./prod.db"
       - key: UPLOADS_DIR
-        value: /data/uploads
+        value: ./uploads
       - key: CORS_ORIGIN
         value: "*"
       - key: AI_PROVIDER
