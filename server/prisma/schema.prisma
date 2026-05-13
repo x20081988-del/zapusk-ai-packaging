@@ -169,10 +169,21 @@ model PackagingJob {
   errorMessage  String?              // одно-строчное сообщение пользователю
   completedAt   DateTime?            // когда провайдер вернул результат
 
+  // Sprint 18: Managed Packaging Flow. Часть артефактов (landing, one_pager,
+  // pitch deck) делаются менеджером вручную через внутренние инструменты —
+  // фаундер не должен видеть Lovable / Claude Design / любые внешние tool names.
+  //
+  // status='awaiting_manager' → задача в очереди на ручную сборку.
+  // managerComment — то, что менеджер хочет показать клиенту (можно пусто).
+  // completedBy — email менеджера, который закрыл задачу (для аудита).
+  managerComment String?
+  completedBy    String?
+
   createdAt    DateTime @default(now())
 
   @@index([projectId, createdAt])
   @@index([projectId, outputType])
+  @@index([status])
 }
 
 model GeneratedPrompt {

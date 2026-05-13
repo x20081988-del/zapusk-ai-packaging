@@ -157,6 +157,7 @@ function classifyError(err: unknown): ClassifiedError {
   const e = err as { status?: number; error?: { type?: string; message?: string }; name?: string; message?: string };
   const status = typeof e.status === 'number' ? e.status : null;
   const sdkType = e.error?.type ?? null;
+  const sdkMessage = e.error?.message ?? '';
 
   // Transient: rate-limit, server errors, network/timeout.
   if (status === 429) return { code: 'rate_limited', message: 'Слишком много запросов. Повторите позже.', transient: true };
@@ -165,7 +166,18 @@ function classifyError(err: unknown): ClassifiedError {
   // Configuration / no retry.
   if (status === 401) return { code: 'unauthorized', message: 'Ключ Anthropic не принят сервером.', transient: false };
   if (status === 403) return { code: 'forbidden', message: 'Доступ к Anthropic запрещён для текущего ключа.', transient: false };
-  if (status === 400) return { code: `bad_request${sdkType ? `_${sdkType}` : ''}`, message: 'Некорректный запрос к Anthropic.', transient: false };
+  // Sprint 18: 404 — обычно «model_not_found». Различаем, чтобы ops быстро понимали
+  // что лечить (env var vs модель).
+  if (status === 404 || sdkType === 'not_found_error' || /model.*not.*found/i.test(sdkMessage)) {
+    return { code: 'model_not_found', message: 'Указанная модель Anthropic не существует. Проверьте ANTHROPIC_MODEL_MAIN.', transient: false };
+  }
+  if (status === 400) {
+    // Иногда invalid_request_error содержит «model X does not exist» внутри message.
+    if (/model/i.test(sdkMessage) && /not.*exist|invalid/i.test(sdkMessage)) {
+      return { code: 'model_not_found', message: 'Модель Anthropic не существует. Проверьте ANTHROPIC_MODEL_MAIN.', transient: false };
+    }
+    return { code: `bad_request${sdkType ? `_${sdkType}` : ''}`, message: 'Некорректный запрос к Anthropic.', transient: false };
+  }
 
   // Network / abort.
   if (e.name === 'AbortError') return { code: 'timeout', message: 'Превышено время ожидания ответа Anthropic.', transient: true };
@@ -174,6 +186,10 @@ function classifyError(err: unknown): ClassifiedError {
     return { code: 'network', message: 'Сеть до Anthropic недоступна.', transient: true };
   }
 
+  // Sprint 18: если SDK type или сырой message известны — кладём в errorCode, иначе общий 'unknown'.
+  if (sdkType) {
+    return { code: `sdk_${sdkType}`, message: sdkMessage || 'Неизвестная ошибка Anthropic.', transient: false };
+  }
   return { code: 'unknown', message: 'Неизвестная ошибка Anthropic.', transient: false };
 }
 

@@ -2,7 +2,9 @@ import type { Project, ProjectBrief, PromptTemplate } from '@prisma/client';
 import { prisma } from '../db.js';
 import { resolveOrchestration } from './aiProviders.js';
 import { claudeGenerateText, isClaudeConfigured } from '../ai/providers/claude.js';
-import { createLovableApp, isLovableConfigured } from './lovableClient.js';
+// Sprint 18: lovableClient остаётся в кодовой базе как менеджерский tool
+// (например, для будущего auto-pre-fill через admin-инструмент), но client-
+// pipeline его больше не дёргает. Manager сам решает, когда использовать.
 
 export type PromptKind =
   | 'investment_summary'
@@ -220,9 +222,18 @@ interface DispatchArgs {
   promptBody: string;
 }
 
-// Sprint 17: оркестратор реальных provider-вызовов поверх PackagingJob.
+// Sprint 17/18: оркестратор реальных provider-вызовов поверх PackagingJob.
 // Каждый provider обновляет одну строку: status / previewUrl / resultJson /
-// errorCode / completedAt. Никаких новых таблиц.
+// errorCode / completedAt.
+//
+// Sprint 18 — Managed Packaging Flow:
+// lovable / claude_design провайдеры теперь идут в 'awaiting_manager', а не
+// делают синхронный fetch на внешний API. Это сознательное архитектурное
+// решение: эти материалы (landing, one_pager, pitch deck PDF) делаются
+// менеджером вручную через внутренние инструменты, и клиент не должен видеть
+// упоминаний Lovable / Claude Design / GPT-5.5. Менеджер закрывает задачу
+// через /api/manager/packaging-tasks/:id/complete, и job переходит в
+// 'succeeded' с реальной previewUrl.
 async function dispatchToProvider({ jobId, projectId, template, orchestration, promptBody }: DispatchArgs): Promise<void> {
   try {
     if (orchestration.provider === 'claude') {
@@ -230,13 +241,20 @@ async function dispatchToProvider({ jobId, projectId, template, orchestration, p
       return;
     }
     if (orchestration.provider === 'lovable') {
+      // Sprint 18: даже при наличии LOVABLE_API_KEY клиент не должен видеть
+      // имя Lovable — landing проходит ручную сборку. Дёргать API будем,
+      // если он есть, но как «менеджерский tool», не как клиент-facing.
       await runLovableJob({ jobId, projectId, template, orchestration, promptBody });
       return;
     }
-    // openai / claude_design — пока без реального вызова из PackagingPipeline.
-    // openai используется sales-assistant / conversation-analysis напрямую;
-    // claude_design не имеет public API. Помечаем job 'succeeded' с
-    // resultPreview из prompt body — это совместимо с Sprint 15 поведением.
+    if (orchestration.provider === 'claude_design') {
+      // PDF pitch deck — нет public API, делаем awaiting_manager.
+      await markAwaitingManager(jobId, 'pitch_deck');
+      return;
+    }
+    // openai — без реального вызова из PackagingPipeline (используется
+    // напрямую sales-assistant'ом и conversation-analysis'ом). Sprint 15
+    // совместимое поведение: status=succeeded с resultPreview из промпта.
     await prisma.packagingJob.update({
       where: { id: jobId },
       data: {
@@ -261,18 +279,36 @@ async function dispatchToProvider({ jobId, projectId, template, orchestration, p
   }
 }
 
+// Sprint 18: ставим job в 'awaiting_manager' с понятным client-facing
+// resultPreview. Менеджер увидит этот job в /manager → «Задачи на упаковку».
+async function markAwaitingManager(jobId: string, outputType: string): Promise<void> {
+  const clientMessage = outputType === 'landing' || outputType === 'one_pager' || outputType === 'pitch_deck'
+    ? 'Материал готовится командой ZAPUSK AI. Обычно занимает от нескольких часов до 1 рабочего дня.'
+    : 'Материал готовится командой ZAPUSK AI.';
+  await prisma.packagingJob.update({
+    where: { id: jobId },
+    data: {
+      status: 'awaiting_manager',
+      resultPreview: clientMessage,
+      completedAt: null,
+    },
+  });
+}
+
 async function runClaudeJob({
   jobId, template, orchestration, promptBody,
 }: Omit<DispatchArgs, 'projectId'>): Promise<void> {
+  // Sprint 18: если Claude не настроен — ставим awaiting_manager.
+  // Клиент видит «Материал готовится командой ZAPUSK AI». Менеджер закроет
+  // задачу через /manager.
   if (!isClaudeConfigured()) {
+    await markAwaitingManager(jobId, template.outputType ?? 'financial_model');
+    // errorCode сохраняем для admin-диагностики, но client его не видит.
     await prisma.packagingJob.update({
       where: { id: jobId },
       data: {
-        status: 'mock',
-        resultPreview: previewFrom(promptBody),
         errorCode: 'anthropic_key_missing',
-        errorMessage: 'Claude не настроен на инстансе — показан детерминированный fallback из промпта.',
-        completedAt: new Date(),
+        errorMessage: 'Claude не настроен на инстансе — задача отправлена менеджеру.',
       },
     });
     return;
@@ -282,26 +318,27 @@ async function runClaudeJob({
     feature: `packaging.${template.key}`,
     system: 'Ты — Zapusk AI-аналитик. Готовишь инвестиционные материалы (финмодель, калькулятор, структуру слайдов). Отвечай Markdown, без вступительных фраз вроде «вот ваш ответ».',
     user: promptBody,
+    // Sprint 18: model переопределение убрано — используем env.ANTHROPIC_MODEL_MAIN
+    // (claude-opus-4-1). Раньше template.model='claude-opus-2025' приводил к 404.
     model: template.model ?? orchestration.model ?? undefined,
     maxTokens: 4_000,
   });
 
   if (result.fellBackToMock) {
+    // Sprint 18: транзиентная ошибка / model_not_found / network → переключаем
+    // на ручную сборку менеджером. Клиент не должен видеть errorCode.
+    await markAwaitingManager(jobId, template.outputType ?? 'financial_model');
     await prisma.packagingJob.update({
       where: { id: jobId },
       data: {
-        status: 'mock',
-        resultPreview: previewFrom(promptBody),
         errorCode: result.errorCode,
         errorMessage: result.errorMessage,
-        completedAt: new Date(),
       },
     });
     return;
   }
 
   // Реальный результат: сохраняем preview + полный текст в resultJson.
-  // resultJson — это просто wrapper { text, model, tokens } для аудита.
   const preview = result.text.split('\n').map((l) => l.trim()).find((l) => l.length > 0 && !l.startsWith('#')) ?? result.text;
   await prisma.packagingJob.update({
     where: { id: jobId },
@@ -323,45 +360,20 @@ async function runClaudeJob({
 async function runLovableJob({
   jobId, projectId, template, promptBody,
 }: DispatchArgs): Promise<void> {
-  // Достаём human-readable имя проекта для Lovable metadata.
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { name: true },
-  });
-
-  const result = await createLovableApp({
-    prompt: promptBody,
-    metadata: {
-      projectId,
-      templateKey: template.key,
-      outputType: template.outputType ?? 'landing',
-      projectName: project?.name,
-    },
-  });
-
-  const status = result.status === 'mock' ? 'mock'
-    : result.status === 'failed' ? 'failed'
-    : result.status === 'running' ? 'running'
-    : 'succeeded';
-
-  await prisma.packagingJob.update({
-    where: { id: jobId },
-    data: {
-      status,
-      providerJobId: result.providerJobId,
-      previewUrl: result.previewUrl,
-      resultUrl: result.projectUrl,
-      resultJson: result.raw ? JSON.stringify(result.raw) : null,
-      resultPreview: result.previewUrl
-        ? `Landing готов · ${result.previewUrl}`
-        : status === 'running'
-          ? 'Lovable собирает страницу — через 1-2 минуты появится preview.'
-          : previewFrom(promptBody),
-      errorCode: result.errorCode,
-      errorMessage: result.errorMessage,
-      completedAt: status === 'running' ? null : new Date(),
-    },
-  });
+  // Sprint 18 — Managed Packaging Flow:
+  // landing / one_pager / pitch deck (web) делаются менеджером вручную, потому
+  // что Lovable API (если он есть на инстансе) — это менеджерский tool, не
+  // клиент-facing. Без LOVABLE_API_KEY мы НЕ показываем клиенту mock URL
+  // (старое Sprint 17 поведение), а ставим job в 'awaiting_manager' с
+  // понятным client-facing сообщением. Менеджер закрывает задачу руками
+  // через /manager → «Задачи на упаковку».
+  //
+  // Если LOVABLE_API_KEY есть — мы всё равно НЕ дёргаем Lovable из клиентской
+  // pipeline (это admin/manager-окружение). Это ровно «managed flow».
+  const outputType = template.outputType ?? 'landing';
+  await markAwaitingManager(jobId, outputType);
+  // Передаём в console.log только template.key — никаких ключей и raw prompt.
+  console.log(`[packaging] queued ${template.key} → awaiting_manager (project=${projectId.slice(0, 8)})`);
 }
 
 function previewFrom(body: string): string {

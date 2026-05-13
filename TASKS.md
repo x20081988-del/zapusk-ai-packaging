@@ -355,7 +355,86 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 17 Real AI Provider Integrations shipped)_
+_(empty — Sprint 18 Managed AI Packaging Flow shipped)_
+
+---
+
+## Sprint 18 update — 2026-05-14 — Managed AI Packaging Flow
+
+Theme: **Клиент не видит внутренних инструментов.** Lovable / Claude Design / Claude Code / GPT-5.5 — это admin-уровень информации. Фаундер видит только «ZAPUSK AI готовит материалы». Все материалы, требующие ручной сборки (landing, one_pager, pitch_deck), идут в очередь менеджера через новый статус `awaiting_manager`. Менеджер закрывает задачу через `/manager → «Задачи на упаковку»`, и клиент сразу видит «Материал готов».
+
+Non-goals (фикс): без webhook'ов, без notifications (Telegram/Email/Slack/push), без task assignment engine, без сложной CRM, без browser automation. Это API + UI поверх существующего PackagingJob.
+
+### Diagnostic (часть «Дополнение»)
+
+Перед основной работой проверил prod: `/health.integrations` показал `openai=true, anthropic=true, deepgram=true, lovable=false`. **Anthropic ключ установлен, но Claude call падал** с `errorCode=unknown` / «Неизвестная ошибка Anthropic» — из-за placeholder model `claude-opus-2025` в Sprint 15 orchestration registry. Фикс:
+- `aiProviders.ts` — все `model` в `TEMPLATE_ORCHESTRATION` поставлены в `null`. `claudeGenerateText()` тогда берёт `env.ANTHROPIC_MODEL_MAIN` (default `claude-opus-4-1`).
+- `claude.ts classifyError()` — добавлены пути `404 / not_found_error / 'model X does not exist'` → `errorCode='model_not_found'` + читаемый message, чтобы ops быстро диагностировали проблему. Также SDK type теперь попадает в `errorCode` как `sdk_<type>` вместо общего `unknown`.
+
+### Schema (migration `packaging_managed_flow`)
+
+- `PackagingJob` +2 nullable поля: `managerComment` (client-facing текст от менеджера), `completedBy` (email менеджера для аудита).
+- Новый индекс `@@index([status])` — менеджерский endpoint `/api/manager/packaging-tasks` фильтрует по `status='awaiting_manager'` и индекс ускоряет lookup.
+- Новый status value `awaiting_manager` (status — free string, миграция enum'а не требуется).
+
+### Backend
+
+- **`server/src/services/promptBuilders.ts`** — `dispatchToProvider()` полностью переписан под managed flow:
+  - `provider='claude'` + есть ключ → real Claude call → `succeeded` с `resultJson`
+  - `provider='claude'` + нет ключа OR API failed → `awaiting_manager` + admin видит `errorCode`/`errorMessage`
+  - `provider='lovable'` → всегда `awaiting_manager` (НЕ дёргаем Lovable API из client pipeline — это менеджерский tool)
+  - `provider='claude_design'` → `awaiting_manager` (нет public API)
+  - `provider='openai'` → `succeeded` (Sprint 15 совместимое поведение, OpenAI используется напрямую sales-assistant'ом)
+  - Новая функция `markAwaitingManager(jobId, outputType)` ставит client-facing `resultPreview`: «Материал готовится командой ZAPUSK AI. Обычно занимает от нескольких часов до 1 рабочего дня» для landing/one_pager/pitch_deck.
+- **`server/src/routes/manager.ts`** — добавлено:
+  - `GET /api/manager/packaging-tasks?status=awaiting_manager` — список задач (с project + user данными)
+  - `GET /api/manager/packaging-tasks/:id` — детали задачи (с promptом)
+  - `POST /api/manager/packaging-tasks/:id/complete` — менеджер закрывает: `{previewUrl, resultUrl, managerComment}` → `status='succeeded'`, `completedBy=user.email`, `completedAt=now()`. errorCode и errorMessage очищаются.
+  - `POST /api/manager/packaging-tasks/:id/cancel` — `status='failed'` + `errorCode='manager_cancelled'`. Клиент видит «Свяжитесь с командой ZAPUSK AI».
+  - В `/api/manager/dashboard.kpis` добавлен счётчик `packagingTasks: count(awaiting_manager)`.
+
+### Frontend
+
+- **`web/src/components/manager/PackagingTasks.tsx`** — НОВЫЙ компонент в `/manager`:
+  - Список awaiting_manager job'ов с provider+tool badges (manager видит полную AI provenance — `Lovable · Lovable Web · Landing Page`)
+  - Раскрытие задачи → показывается internal prompt (max-h-72, scrollable, mono-шрифт) + кнопка «Скопировать»
+  - 2 input'а: `previewUrl` (что увидит клиент) + `resultUrl` (внутренний Lovable IDE URL)
+  - Textarea для `managerComment` — переопределяет client-facing preview text
+  - Кнопки «Отметить готово» / «Отменить задачу»
+- **`web/src/pages/ManagerDashboard.tsx`** — `<PackagingTasks />` поднят в top-of-content. KPI расширены: новый «Задачи упаковки» badge с tone=ai.
+- **`web/src/components/ui/AIPackagingHistory.tsx`** — переписан для role-aware рендера:
+  - **Title/subtitle** разные для client («Материалы проекта от ZAPUSK AI») и manager/admin («AI generated materials · Packaging Pipeline»)
+  - **Status labels** разные: client видит «Готовится / На проверке менеджера / Требуется внимание менеджера / Готово», manager/admin — «В очереди / На ручной обработке / Mock fallback / Ошибка / Готово»
+  - **Landing notice банер**: если у client'а в списке есть `awaiting_manager` для landing/one_pager/pitch_deck → плашка «Лендинг готовится чуть дольше: обычно от нескольких часов до 1 рабочего дня»
+  - **managerComment** — приоритетный текст для клиента (если менеджер указал — он перекрывает дефолтный resultPreview)
+  - **Spinner icon** для awaiting/running/queued — Loader2 с `animate-spin` вместо обычного Activity icon (визуально «в работе»)
+  - **«Перезапустить» скрыто для client** — фаундер не должен видеть, что внутри есть pipeline, который можно перезапустить
+  - **errorMessage не виден клиенту** на awaiting/mock — только manager/admin
+  - **`completedBy email`** показывается manager/admin рядом со временем (для аудита)
+- **`web/src/lib/api.ts`** — `PackagingJob` interface: `status` enum дополнен `'awaiting_manager'`, добавлены `managerComment`, `completedBy`.
+
+### Why this matters
+
+- **Главная цель спринта**: клиент видит «Материал готовится командой ZAPUSK AI», не «Lovable собирает страницу». Внутренние инструменты остаются операционным секретом — это позиционирование «Zapusk AI оркестрирует AI стек», а не «мы перепродаём чужие модели».
+- **Manager UX**: одна страница `/manager` теперь центр всей операционной работы — задачи на упаковку поверх обычных «что сделать сегодня». Менеджер копирует prompt → делает работу в Lovable / Claude Design / любом нужном tool → вставляет URL обратно. Это репликирует attention-flow «inbox для AI».
+- **Recovery после Claude API fail**: если Anthropic вернул 5xx или model_not_found — job не остаётся «mock» с ошибкой клиенту, а уходит в awaiting_manager. Менеджер видит errorCode (например `model_not_found`) и понимает, что фикс — Render env, а не повторный запуск.
+
+### Verification
+
+- [x] `prisma migrate dev --name packaging_managed_flow` — миграция применена
+- [x] `db:seed` — все 6 «managed» templates (lovable_landing/lovable_pitch/one_pager/cloud_design/pitch_structure/financial/calculator_spec) идут в `awaiting_manager`. OpenAI templates остаются `succeeded`.
+- [x] Manager API smoke-tested локально через ts-проверку маршрутов
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc + web vite OK (436.30 kB / 123.04 kB gzip, +7 kB к Sprint 17)
+- [ ] Production verify: после redeploy проверить `/api/manager/packaging-tasks` под manager — должны быть видны awaiting_manager job'ы. Клиент на `/projects/{id}` не видит слова Lovable/Claude и видит landing notice.
+
+### Что нужно сделать вручную на production
+
+- Никаких новых ENV vars в Sprint 18 не требуется
+- `npm start` → `start:prod` → `prisma migrate deploy` применит миграцию идемпотентно
+- После redeploy старые job'ы в БД остаются с прежними status — но новые запуски пойдут по новым правилам
+- (Опционально) запустить `db:seed:prod` ещё раз чтобы новые demo-job'ы создались с новыми orchestration defaults (`model=null`)
 
 ---
 

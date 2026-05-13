@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { AlertTriangle, BriefcaseBusiness, CalendarDays, Clock3, MessageCircle, Radio } from 'lucide-react';
+import { AlertTriangle, BriefcaseBusiness, CalendarDays, Clock3, MessageCircle, Package, Radio } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { PackagingTasks } from '../components/manager/PackagingTasks';
 import { api } from '../lib/api';
 import { formatDate } from '../lib/format';
 
@@ -36,6 +37,8 @@ interface ManagerDashboardResponse {
     newLeads: number;
     openQuestions: number;
     inactiveProjects: number;
+    /** Sprint 18: число awaiting_manager job'ов на ручную сборку. */
+    packagingTasks: number;
   };
   projects: ManagerProject[];
   tasks: ManagerTask[];
@@ -61,8 +64,9 @@ export default function ManagerDashboard() {
         <Card><div className="text-sm text-muted text-center py-8">Загрузка кабинета менеджера…</div></Card>
       ) : (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 xl:grid-cols-6 gap-3">
             <Kpi label="Мои проекты" value={data.kpis.myProjects} icon={<BriefcaseBusiness size={15} />} />
+            <Kpi label="Задачи упаковки" value={data.kpis.packagingTasks ?? 0} icon={<Package size={15} />} tone="ai" />
             <Kpi label="Где застряли" value={data.kpis.stuckProjects} icon={<AlertTriangle size={15} />} tone="warning" />
             <Kpi label="Новые лиды" value={data.kpis.newLeads} icon={<Radio size={15} />} tone="ai" />
             <Kpi label="Вопросы брифа" value={data.kpis.openQuestions} icon={<MessageCircle size={15} />} tone="zapusk" />
@@ -71,6 +75,10 @@ export default function ManagerDashboard() {
 
           <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-6">
             <div className="space-y-6">
+              {/* Sprint 18: «Задачи на упаковку» — главный новый блок менеджера.
+                  Сюда падают awaiting_manager job'ы от клиентов, ждут ручной
+                  сборки во внешнем инструменте. */}
+              <PackagingTasks />
               <TasksToday tasks={data.tasks} />
               <ProjectsTable projects={data.projects} />
             </div>

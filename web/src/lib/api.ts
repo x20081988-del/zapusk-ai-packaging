@@ -154,7 +154,7 @@ export interface PackagingJob {
   tool: string;
   model: string | null;
   outputType: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'mock';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'mock' | 'awaiting_manager';
   prompt: string;
   resultPreview: string | null;
   generatedPromptId: string | null;
@@ -167,5 +167,8 @@ export interface PackagingJob {
   errorCode: string | null;
   errorMessage: string | null;
   completedAt: string | null;
+  // Sprint 18: managed packaging flow
+  managerComment: string | null;
+  completedBy: string | null;
   createdAt: string;
 }

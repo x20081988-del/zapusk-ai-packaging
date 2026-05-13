@@ -190,7 +190,7 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
   investment_summary: {
     provider: 'openai',
     tool: 'gpt-4.1',
-    model: 'gpt-4.1',
+    model: null,
     outputType: 'investor_summary',
   },
   one_pager: {
@@ -229,26 +229,29 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
   financial: {
     provider: 'claude',
     tool: 'claude-opus',
-    model: 'claude-opus-2025',
+    // Sprint 18: model=null → claudeGenerateText() возьмёт env.ANTHROPIC_MODEL_MAIN
+    // (claude-opus-4-1). Placeholder «claude-opus-2025» из Sprint 15 не существовал
+    // в реальности и приводил к 404 model_not_found.
+    model: null,
     outputType: 'financial_model',
   },
   calculator_spec: {
     provider: 'claude',
     tool: 'claude-code',
-    model: 'claude-opus-2025',
+    model: null,
     outputType: 'calculator',
   },
   investor_faq: {
-    // Reasoning-модель для снятия возражений.
+    // Reasoning-модель для снятия возражений. model=null → env.OPENAI_MODEL_MAIN.
     provider: 'openai',
     tool: 'gpt-5.5',
-    model: 'gpt-5.5',
+    model: null,
     outputType: 'faq',
   },
   sales_gpt: {
     provider: 'openai',
     tool: 'gpt-4.1',
-    model: 'gpt-4.1',
+    model: null,
     outputType: 'sales_assistant',
   },
 };
