@@ -80,8 +80,10 @@ const FEATURE_GUARDS: Record<string, FeatureGuard> = {
   'sales_assistant.analyze': {
     modelRoute: 'main',
     maxInputChars: 24_000,
-    maxOutputTokens: 700,
-    timeoutMs: 12_000,
+    // Sprint 13 emotional layer: AssistantCard 26 полей в русском JSON.
+    // 700 tokens (Sprint 11) клипает ответ, и парсинг падал → fallback на mock.
+    maxOutputTokens: 3_000,
+    timeoutMs: 20_000,
   },
   classification: {
     modelRoute: 'fast',
