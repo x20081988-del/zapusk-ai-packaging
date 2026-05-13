@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { defaultRouteForRole, getAuth, type UserRole } from './lib/auth';
 import Login from './pages/Login';
+import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
 import NewProject from './pages/NewProject';
 import ProjectCockpit from './pages/ProjectCockpit';
@@ -29,25 +30,29 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to={home} replace />} />
+      {/* Sprint 19: публичные роуты — /login, /signup. Всё остальное под
+          RequireAuth (защита локально через getAuth + redirect на /login). */}
       <Route path="/login" element={<Login />} />
-      <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/projects/new" element={<NewProject />} />
-      <Route path="/projects/:id" element={<ProjectCockpit />} />
-      <Route path="/projects/:id/upload" element={<ProjectUpload />} />
-      <Route path="/projects/:id/brief" element={<ProjectBrief />} />
-      <Route path="/projects/:id/interview" element={<ProjectInterview />} />
-      <Route path="/projects/:id/packaging" element={<ProjectPackaging />} />
-      <Route path="/projects/:id/prompts" element={<ProjectPrompts />} />
-      <Route path="/projects/:id/documents" element={<ProjectDocuments />} />
-      <Route path="/projects/:id/review" element={<ProjectReview />} />
+      <Route path="/signup" element={<Signup />} />
+
+      <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
+      <Route path="/projects/new" element={<RequireAuth><NewProject /></RequireAuth>} />
+      <Route path="/projects/:id" element={<RequireAuth><ProjectCockpit /></RequireAuth>} />
+      <Route path="/projects/:id/upload" element={<RequireAuth><ProjectUpload /></RequireAuth>} />
+      <Route path="/projects/:id/brief" element={<RequireAuth><ProjectBrief /></RequireAuth>} />
+      <Route path="/projects/:id/interview" element={<RequireAuth><ProjectInterview /></RequireAuth>} />
+      <Route path="/projects/:id/packaging" element={<RequireAuth><ProjectPackaging /></RequireAuth>} />
+      <Route path="/projects/:id/prompts" element={<RequireAuth><ProjectPrompts /></RequireAuth>} />
+      <Route path="/projects/:id/documents" element={<RequireAuth><ProjectDocuments /></RequireAuth>} />
+      <Route path="/projects/:id/review" element={<RequireAuth><ProjectReview /></RequireAuth>} />
       <Route path="/templates" element={<RequireRole roles={['admin']}><Templates /></RequireRole>} />
-      <Route path="/guide" element={<Guide />} />
-      <Route path="/demo" element={<DemoCabinet />} />
-      <Route path="/personal-manager" element={<PersonalManager />} />
-      <Route path="/ai-leads" element={<AILeads />} />
-      <Route path="/sales-assistant" element={<SalesAssistant />} />
-      <Route path="/meetings" element={<Meetings />} />
-      <Route path="/conversation-analysis" element={<ConversationAnalysis />} />
+      <Route path="/guide" element={<RequireAuth><Guide /></RequireAuth>} />
+      <Route path="/demo" element={<RequireAuth><DemoCabinet /></RequireAuth>} />
+      <Route path="/personal-manager" element={<RequireAuth><PersonalManager /></RequireAuth>} />
+      <Route path="/ai-leads" element={<RequireAuth><AILeads /></RequireAuth>} />
+      <Route path="/sales-assistant" element={<RequireAuth><SalesAssistant /></RequireAuth>} />
+      <Route path="/meetings" element={<RequireAuth><Meetings /></RequireAuth>} />
+      <Route path="/conversation-analysis" element={<RequireAuth><ConversationAnalysis /></RequireAuth>} />
       <Route path="/manager" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
       <Route path="/manager/:view" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
       <Route path="/admin" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
@@ -59,6 +64,15 @@ export default function App() {
       <Route path="*" element={<Navigate to={home} replace />} />
     </Routes>
   );
+}
+
+// Sprint 19: общая защита маршрутов — простая проверка наличия auth state.
+// Реальная валидация токена на каждом API-вызове происходит на бэкенде
+// (authMiddleware → 401 → AppLayout всё равно redirect'нет на /login).
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const auth = getAuth();
+  if (!auth) return <Navigate to="/login" replace />;
+  return children;
 }
 
 function RequireRole({ roles, children }: { roles: UserRole[]; children: JSX.Element }) {

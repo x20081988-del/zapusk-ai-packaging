@@ -14,6 +14,13 @@ model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
+  // Sprint 19: real auth fields. passwordHash хранится как «scrypt:salt:hash»
+  // (hex), nullable для back-compat (demo / passwordless seed users).
+  passwordHash String?
+  // Sprint 19: role теперь persistent. До спринта role жила только в header'е
+  // x-user-role (любой клиент мог себя назначить admin'ом). Теперь — на User.
+  role      String   @default("client")  // client / manager / admin
+  lastLoginAt DateTime?
   createdAt DateTime @default(now())
   projects  Project[]
 }

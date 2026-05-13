@@ -355,7 +355,79 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 18 Managed AI Packaging Flow shipped)_
+_(empty — Sprint 19 User Registration & Login UX shipped)_
+
+---
+
+## Sprint 19 update — 2026-05-14 — Real auth: signup, login, JWT, demo roles
+
+Theme: **Production-looking auth flow.** До спринта auth был чистым MVP — любой email через `x-user-email` header автоматически создавал User, роль выбиралась клиентом через `x-user-role` (privilege escalation в один curl). Теперь — реальная регистрация по email/password с scrypt hash, Bearer JWT (HS256), persistent role в БД, и аккуратный demo-блок для команды.
+
+Non-goals (фикс): без Google/Telegram/Яндекс OAuth (mock кнопки с tooltip «Скоро»), без email confirmation, без forgot password, без 2FA, без billing, без team auth, без сложных permissions.
+
+### Schema (migration `auth_password_role`)
+
+- `User` +3 поля: `passwordHash` (nullable, формат `scrypt:salt:hash`), `role` (default `client`), `lastLoginAt`.
+
+### Backend
+
+- **`server/src/authCrypto.ts`** — НОВЫЙ. Реализация password hashing + JWT signing через `node:crypto` БЕЗ новых dep'ов (сознательно — CLAUDE.md «не добавлять deps без approval»):
+  - `hashPassword(password)` → `scrypt(N=16384, r=8, p=1, keylen=64, salt=16 bytes)` (OWASP-recommended)
+  - `verifyPassword(password, stored)` → `crypto.timingSafeEqual` против раскрытия через timing attack
+  - `signToken({sub, email, role})` / `verifyToken(jwt)` → HS256 через `crypto.createHmac`, TTL 7 дней
+  - `JWT_SECRET` через env, dev fallback с warn
+- **`server/src/auth.ts`** — middleware переписан с двумя путями:
+  1. `Authorization: Bearer <jwt>` — основной. Token → claims.sub → user lookup → 401 на invalid token (НЕ fall through на header — закрывает обход подменой header'а)
+  2. `x-user-email` header — back-compat для demo / интеграционных скриптов. `x-user-role` header **игнорируется** (роль теперь из БД), что закрывает privilege escalation. Отключается через `DISABLE_HEADER_AUTH=true` на production tenant.
+- **`server/src/routes/auth.ts`** — переписан полностью:
+  - `POST /api/auth/signup` — name + email + password (мин 8 символов). Email уникален. Hash через scrypt. Возвращает `{user, token}`. role всегда `client`.
+  - `POST /api/auth/login` — email + password. Constant-ish response на «не найден» vs «неверный пароль» (закрывает enumeration). `lastLoginAt` обновляется.
+  - `POST /api/auth/demo` — quick-login по роли без пароля для команды и презентаций. Создаёт/upsert'ит `demo-{role}@zapusk.tech`. Отключается через `DISABLE_DEMO_LOGIN=true`.
+  - `GET /api/auth/me` — текущий профиль (Bearer или header back-compat).
+- **`server/src/env.ts`** — добавлен `JWT_SECRET`. На production обязательно установить >=32 символа.
+
+### Frontend
+
+- **`web/src/lib/auth.ts`** — `AuthState` дополнен `token: string | null` и `userId`. `setAuth/getAuth/clearAuth` сохраняют новые поля в localStorage.
+- **`web/src/lib/api.ts`** — request теперь отправляет `Authorization: Bearer <token>` если есть, плюс back-compat `x-user-email/x-user-role` для legacy скриптов.
+- **`web/src/components/auth/SocialButtons.tsx`** — НОВЫЙ. Mock-кнопки Google / Telegram / Яндекс ID. Клик → tooltip «Скоро добавим вход через X», auto-dismiss через 2.4 сек. Не ломают UX.
+- **`web/src/pages/Login.tsx`** — переписан целиком:
+  - Заголовок «Войти в аккаунт» + подзаголовок
+  - `<SocialButtons />` сверху
+  - Divider «или продолжить с email»
+  - Email + password форма
+  - CTA «Войти»
+  - Ссылка «Нет аккаунта? Создать аккаунт» → `/signup`
+  - Отдельный карточный блок «Демо-доступ для команды» внизу с 3 кнопками (Клиент / Менеджер / Админ), визуально вторичный. Зовёт `POST /api/auth/demo`.
+- **`web/src/pages/Signup.tsx`** — НОВЫЙ. Структура зеркальная login'у: SocialButtons → divider → форма (Имя + Email + Пароль с hint'ом «Минимум 8 символов») → CTA «Создать аккаунт» → «Уже есть аккаунт? Войти». Local + server validation, понятные ошибки на русском.
+- **`web/src/App.tsx`** — `/signup` добавлен в публичные роуты. Все остальные обёрнуты в `<RequireAuth>` или `<RequireRole>`. Публичные: `/login`, `/signup`.
+
+### Verification
+
+- [x] `prisma migrate dev --name auth_password_role` — applied
+- [x] Local smoke test через curl (без UI):
+  - `POST /api/auth/signup` с password<8 → `HTTP 400` ✓
+  - `POST /api/auth/signup` валидный → 201 `{user{role:client}, token}` ✓
+  - `POST /api/auth/login` верный пароль → token ✓
+  - `POST /api/auth/login` неверный → `HTTP 401 invalid_credentials` ✓
+  - `GET /api/auth/me` c `Authorization: Bearer <token>` → user profile ✓
+  - `POST /api/auth/demo` с `role=admin` → token + demo=true + role=admin ✓
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — OK (443.95 kB / 124.64 kB gzip, +8 kB)
+
+### Что нужно сделать вручную на production (опционально)
+
+- В Render Environment добавить **`JWT_SECRET`** длиной >=32 символов (можно `openssl rand -hex 32`). Без него auth работает на dev-fallback, но это менее безопасно. После redeploy все ранее выданные токены инвалидируются — пользователям нужно перелогиниться.
+- (Опционально) `DISABLE_HEADER_AUTH=true` — выключает back-compat header auth когда мигрируем все клиенты на Bearer.
+- (Опционально) `DISABLE_DEMO_LOGIN=true` — отключает `/api/auth/demo` на реальном customer tenant.
+
+### Known limitations
+
+- localStorage хранение токена: уязвим к XSS. Acceptable для MVP. В будущем — `HttpOnly` cookie через `/api/auth/refresh`.
+- Token TTL 7 дней без refresh. После протухания требуется повторный login. Refresh-token flow — следующий sprint.
+- Social OAuth (Google/Telegram/Яндекс) — кнопки mock, реальные интеграции не подключены.
+- Forgot password / email confirmation / 2FA — отдельный sprint.
 
 ---
 

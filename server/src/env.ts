@@ -22,6 +22,11 @@ export const env = {
   DEV_USER_EMAIL: process.env.DEV_USER_EMAIL ?? 'founder@zapusk.tech',
   DEV_USER_NAME: process.env.DEV_USER_NAME ?? 'Zapusk Founder',
 
+  // Sprint 19: JWT signing key. На production обязательно установить
+  // JWT_SECRET >=32 chars в Render env. В dev есть детерминированный
+  // fallback (см. authCrypto.authSecret()).
+  JWT_SECRET: process.env.JWT_SECRET ?? '',
+
   AI_PROVIDER: (process.env.AI_PROVIDER ?? 'mock') as 'anthropic' | 'openai' | 'mock',
   AI_LOG_USAGE: truthy(process.env.AI_LOG_USAGE),
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',

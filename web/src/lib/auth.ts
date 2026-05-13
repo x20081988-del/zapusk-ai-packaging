@@ -6,6 +6,10 @@ export interface AuthState {
   email: string;
   name: string;
   role: UserRole;
+  /** Sprint 19: Bearer JWT, выданный POST /api/auth/{signup,login,demo}. */
+  token: string | null;
+  /** Optional userId — иногда полезно фронту. */
+  userId?: string | null;
 }
 
 const ROLES: UserRole[] = ['client', 'manager', 'admin'];
@@ -24,6 +28,8 @@ export function getAuth(): AuthState | null {
       email: parsed.email,
       name: parsed.name ?? parsed.email,
       role: normalizeRole(parsed.role),
+      token: parsed.token ?? null,
+      userId: parsed.userId ?? null,
     };
   } catch {
     return null;

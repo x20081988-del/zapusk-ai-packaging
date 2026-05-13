@@ -6,6 +6,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const auth = getAuth();
   const headers: Record<string, string> = {
     ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
+    // Sprint 19: Bearer JWT — основной способ авторизации. Если token'а нет
+    // (например, после legacy localStorage записи) — fall back на header'ы
+    // x-user-email / x-user-role. Это back-compat на время миграции.
+    ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
     ...(auth ? { 'x-user-email': auth.email } : {}),
     ...(auth ? { 'x-user-role': auth.role } : {}),
     ...((init.headers as Record<string, string>) ?? {}),
