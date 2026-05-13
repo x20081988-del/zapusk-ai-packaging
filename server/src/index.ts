@@ -55,6 +55,15 @@ app.get('/health', (_req, res) => res.json({
   env: env.NODE_ENV,
   spaReady: Boolean(webDistPath),
   spaPath: webDistPath,
+  // AI configuration diagnostic — never expose key values, only presence
+  // booleans. Lets ops verify Render env without dashboard access:
+  //   curl https://<host>/health | jq '.ai'
+  ai: {
+    provider: env.AI_PROVIDER,
+    openaiKeyConfigured: Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 10),
+    anthropicKeyConfigured: Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 10),
+    openaiModelMain: env.OPENAI_MODEL_MAIN,
+  },
 }));
 
 app.use('/uploads', express.static(path.resolve(env.UPLOADS_DIR)));
