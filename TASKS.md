@@ -355,7 +355,56 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 13 AI Sales Assistant emotional layer shipped)_
+_(empty — Sprint 14 UX polish + brief logic shipped)_
+
+---
+
+## Sprint 14 update — 2026-05-13 — UX polish + единая логика брифов
+
+Theme: **Понятность интерфейса.** Никаких новых AI-фич — расставили блоки в правильном порядке, упростили перегруженные карточки, добавили mobile burger menu, привели VoiceInputButton к виду полноценной кнопки, и главное — централизовали логику «статус брифа проекта» так, чтобы CTA «Заполнить бриф» вёл не в `/projects/new`, а к нужному брифу нужного проекта.
+
+Non-goals (фикс): без новых AI endpoints, Deepgram, OpenAI prompt changes, CRM, новых ролей, новой админки, больших refactors.
+
+### Компоненты + lib
+
+- **`web/src/components/ui/VoiceInputButton.tsx`** — переписан с ghost-look на чёткую ai-кнопку. Три состояния: idle (`Mic` + «Надиктовать текст»), listening (`Square` + pulsing dot + danger variant + «Слушаю…»), disabled. Размер настраивается (`sm` / `md`). Aria-pressed для accessibility. Применилось везде, где есть голосовой ввод (NewProject, ProjectBrief, AILeads, SalesAssistant).
+- **`web/src/lib/briefStatus.ts`** — НОВЫЙ. Единый source-of-truth для статуса брифа: 4 состояния (`not_started` / `in_progress` / `needs_review` / `ready`), human-friendly label + longLabel, state-aware CTA («Заполнить бриф» / «Продолжить бриф» / «Открыть бриф»), completion percent 0..100, openQuestions count. Учитывает `missingByCategory` + `interviewAnswers` для расчёта прогресса. Помощник `briefStatusTone()` мапит на тон StatusBadge. `resolveBriefCtaHref()` — централизованный resolver для CTA href (с проектом / без проектов / много проектов).
+- **`web/src/components/ui/PersonalManagerCard.tsx`** — добавлен `PersonalManagerMiniCard` (compact-version: имя + «на связи» + 1 строка + кнопка «Открыть»). Полная карточка осталась для `/personal-manager`.
+- **`web/src/components/ui/ProjectCard.tsx`** — добавлен brief-status badge + ProgressBar (для in-progress) + state-aware CTA-кнопка прямо на карточке проекта (ведёт в бриф конкретного проекта, останавливает propagation Link).
+
+### Layout
+
+- **`web/src/components/layout/Sidebar.tsx`** — добавлен mobile drawer mode. Тот же набор пунктов, что и в desktop sidebar, role-based. Закрывается по клику на пункт, по клику на backdrop, по ESC (handler в `AppLayout`).
+- **`web/src/components/layout/Topbar.tsx`** — добавлена burger-кнопка (`Menu` icon из lucide), видна только на `< lg`. На desktop ничего не изменилось.
+- **`web/src/components/layout/AppLayout.tsx`** — drawer state живёт здесь, чтобы каждая страница автоматически получала burger menu без прокидывания пропсов. Закрывает drawer на смене маршрута + на ESC.
+
+### Страницы
+
+- **`web/src/pages/NewProject.tsx`** — в блоке «Контекст проекта» добавлен upload материалов. Файлы держатся в локальном state до сабмита, потом одним multipart-вызовом летят в `/api/files/{projectId}/upload` (категория `pitch`) сразу после создания проекта. CTA лейбла кнопки подстраивается: «Создать проект и загрузить N файлов» если есть pending uploads. Voice-кнопка теперь явно ai-стилизована.
+- **`web/src/pages/ProjectCockpit.tsx`** — Материалы + Бизнес на салфетке подняты ВЫШЕ Project Journey. Hero показывает brief-status badge. Главная CTA-кнопка справа теперь ведёт в бриф (state-aware label), под ней — ghost-кнопка «Пересобрать бриф» (старая логика regenerate). Compact manager заменён на `PersonalManagerMiniCard`.
+- **`web/src/pages/Dashboard.tsx`** — «Проекты» перенесены сразу под KPI. AI-leads-плашка и compactMini manager + Demo Cabinet ушли ниже. Каждая `ProjectCard` показывает brief-status + state-aware CTA.
+- **`web/src/pages/DemoCabinet.tsx`** — раздутая карточка одного AI-лида (телефон, контекст, запись разговора) заменена на compact preview: 3 stat-плашки (Active leads / Calls / Messages) + однострочное описание + CTA «Открыть AI-лиды» → `/ai-leads`. Compact manager заменён на mini.
+- **`web/src/pages/AILeads.tsx`** — CTA «Заполнить бриф» теперь state-aware: использует `getBriefStatus(selectedProject)` и меняет лейбл на «Продолжить бриф» / «Открыть бриф». Если есть проект — ведёт в бриф этого проекта; если нет — в `/projects/new`. Под кнопкой показывается brief-status badge выбранного проекта + объяснение «AI-лидогенерация станет доступна после завершения брифа».
+
+### Duplicate brief safety
+
+- Проверено: `prisma.projectBrief.upsert({ where: { projectId } })` в `briefService.ts` гарантирует один бриф на проект на уровне БД. Generate/regenerate всегда обновляют, никогда не создают дубль. AILeads CTA больше не ведёт на `/projects/new`, если у пользователя есть выбранный проект.
+
+### Hygiene
+
+- Удалены 58 stale `.js` файлов из `web/src/` (artefacts от старого `tsc -b` без `--noEmit`). `.gitignore` уже фильтровал их, но они оставались tracked с прошлых релизов.
+
+### Verification
+
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc OK, web vite build OK (417.84 kB / 117.28 kB gzip, +8 kB к Sprint 13)
+- [ ] Production verify (см. финальный отчёт): открыть `/dashboard` под `demo@zapusk.tech` → проверить новый порядок блоков, brief status на ProjectCard, mobile burger в Chrome devtools mobile preview, голосовую кнопку в синем/фиолетовом виде.
+
+### Known risks
+
+- Если фаундер прикладывает материалы на NewProject и upload падает (сетевая ошибка после `POST /api/projects` но перед `/api/files/.../upload`) — проект всё равно создан, но без файлов. UI делает `console.warn` и продолжает переход в кокпит, где фаундер дозалит руками. Это сознательный trade-off: лучше создать проект, чем потерять весь введённый бриф из-за upload-ошибки.
+- ProjectJourney «Бриф проекта» этап имеет статичный CTA «Открыть бриф» — мы не делали его state-aware (большой refactor, не входил в спринт). Brief status уже видим через ProjectCard badge и Cockpit hero badge, так что путь по платформе остаётся корректным контекстом, но не подменяет основной CTA.
 
 ---
 

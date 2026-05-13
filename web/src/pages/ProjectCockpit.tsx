@@ -24,10 +24,11 @@ import { computeProgress } from '../lib/progress';
 import { buildReviewIndex, getReview } from '../lib/reviews';
 import { getDemoMaterials, getDemoTransformationCase } from '../lib/demoMaterials';
 import { MissingDataPanel } from '../components/ui/MissingDataPanel';
-import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { PersonalManagerMiniCard } from '../components/ui/PersonalManagerCard';
 import { RecentMeetings } from '../components/ui/RecentMeetings';
 import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
+import { getBriefStatus, briefStatusTone } from '../lib/briefStatus';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -142,6 +143,8 @@ export default function ProjectCockpit() {
   const reviewIndex = buildReviewIndex(reviews);
   const transformation = getDemoTransformationCase(project);
   const materials = getDemoMaterials(project);
+  // Sprint 14: brief status — единый source-of-truth для бейджей и CTA.
+  const briefStatus = getBriefStatus(project);
 
   function latestPromptFor(kind: string) {
     return project!.generatedPrompts?.find((p) => p.kind === kind);
@@ -179,9 +182,12 @@ export default function ProjectCockpit() {
         <div className="absolute -top-16 -right-16 w-64 h-64 bg-zapusk/10 rounded-full blur-3xl" />
         <div className="relative grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2">
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
               <StatusBadge tone={percent > 0 ? 'zapusk' : 'neutral'} dot>
                 {percent > 0 ? 'Материалы' : 'Черновик'}
+              </StatusBadge>
+              <StatusBadge tone={briefStatusTone(briefStatus.state)} dot>
+                {briefStatus.label}
               </StatusBadge>
               <span className="text-[11px] uppercase tracking-[0.1em] text-muted">{project.industry ?? 'Отрасль не указана'}</span>
             </div>
@@ -223,15 +229,25 @@ export default function ProjectCockpit() {
             >
               Сформировать полный комплект материалов
             </Button>
+            <Link to={`/projects/${id}/brief`} className="block">
+              <Button
+                variant="ai"
+                size="md"
+                className="w-full"
+                iconLeft={<Sparkles size={14} />}
+              >
+                {briefStatus.cta}
+              </Button>
+            </Link>
             <Button
-              variant="ai"
-              size="md"
+              variant="ghost"
+              size="sm"
               className="w-full"
-              iconLeft={<Sparkles size={14} />}
+              iconLeft={<Sparkles size={12} />}
               loading={generatingBrief}
               onClick={generateBrief}
             >
-              {project.brief ? `Только бриф (v${project.brief.version + 1})` : 'Только бриф'}
+              {project.brief ? `Пересобрать (v${project.brief.version + 1})` : 'Сгенерировать первый бриф'}
             </Button>
           </div>
         </div>
@@ -258,16 +274,9 @@ export default function ProjectCockpit() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
-        <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY} compact />
-        <PersonalManagerCard compact />
-      </div>
-
-      {/* Память встреч: последние 3 встречи с инвесторами по этому проекту */}
-      <div className="mb-6">
-        <RecentMeetings projectId={id} limit={3} />
-      </div>
-
+      {/* Sprint 14: «Материалы» и «Бизнес на салфетке» подняты выше Project
+          Journey — фаундер должен сначала видеть что загрузить и что собрала
+          система, и только потом «путь по платформе». */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         {/* MATERIALS */}
         <Card padded className="lg:col-span-1">
@@ -292,10 +301,10 @@ export default function ProjectCockpit() {
         <Card padded accent={project.brief ? 'ai' : null} className="lg:col-span-2">
           <CardHeader
             title="Бизнес на салфетке"
-            subtitle={project.brief ? `Разбор v${project.brief.version}` : 'Будет собран после генерации брифа'}
+            subtitle={project.brief ? `Разбор v${project.brief.version} · ${briefStatus.longLabel}` : 'Будет собран после генерации брифа'}
             action={project.brief && (
               <Link to={`/projects/${id}/brief`}>
-                <Button variant="ghost" size="sm" iconRight={<ChevronRight size={14} />}>Открыть</Button>
+                <Button variant="ghost" size="sm" iconRight={<ChevronRight size={14} />}>{briefStatus.cta}</Button>
               </Link>
             )}
           />
@@ -328,6 +337,18 @@ export default function ProjectCockpit() {
           />
         </div>
       )}
+
+      {/* Sprint 14: Project Journey + compact-mini менеджер опускаются ниже —
+          сначала контекст проекта, потом путь по платформе. */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
+        <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY} compact />
+        <PersonalManagerMiniCard />
+      </div>
+
+      {/* Память встреч: последние 3 встречи с инвесторами по этому проекту */}
+      <div className="mb-6">
+        <RecentMeetings projectId={id} limit={3} />
+      </div>
 
       {/* READY MATERIALS */}
       <Card padded className="mb-6">

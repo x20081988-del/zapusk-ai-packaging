@@ -6,7 +6,7 @@ import { ProjectCard } from '../components/ui/ProjectCard';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
-import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { PersonalManagerMiniCard } from '../components/ui/PersonalManagerCard';
 import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { api, type Project } from '../lib/api';
 import { computeProgress } from '../lib/progress';
@@ -44,6 +44,40 @@ export default function Dashboard() {
         <StatCard label="Готово к показу инвестору" value={ready} icon={<TrendingUp size={16} />} accent="zapusk" />
       </div>
 
+      {/* Sprint 14: «Проекты» сразу под KPI — пользователь должен видеть свои
+          проекты, а не искать их ниже AI-плашки. */}
+      <div className="mb-4 flex items-end justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-primary tracking-tight">Проекты</h2>
+          <p className="text-xs text-muted">Каждый проект проходит путь: материалы → бизнес на салфетке → интервью по проекту → материалы для инвестора</p>
+        </div>
+      </div>
+
+      {projects === null ? (
+        <Card className="mb-6">
+          <div className="text-sm text-muted text-center py-8">Загрузка…</div>
+        </Card>
+      ) : visibleProjects?.length === 0 ? (
+        <Card className="mb-6">
+          <EmptyState
+            icon={<Sparkles size={20} />}
+            title="Пока нет проектов"
+            description="Создайте первый проект, загрузите материалы — и система соберёт «бизнес на салфетке» за минуту."
+            action={
+              <Link to="/projects/new">
+                <Button iconLeft={<Plus size={14} strokeWidth={2.5} />}>Создать проект</Button>
+              </Link>
+            }
+          />
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">
+          {visibleProjects?.map((p) => (
+            <ProjectCard key={p.id} project={p} percent={computeProgress(p).percent} />
+          ))}
+        </div>
+      )}
+
       <Link to="/ai-leads" className="block mb-6">
         <Card hoverable accent="ai" className="overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(35,214,176,0.14),transparent_28%),radial-gradient(circle_at_88%_0%,rgba(196,148,58,0.12),transparent_24%)]" />
@@ -79,8 +113,10 @@ export default function Dashboard() {
         </Card>
       </Link>
 
+      {/* Sprint 14: compactMini менеджер не занимает пол-экрана. Под ним —
+          лёгкий Project Journey overview и ссылка в демо-кабинет. */}
       <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6 mb-6">
-        <PersonalManagerCard compact />
+        <PersonalManagerMiniCard />
         <div className="space-y-6">
           <Link to="/demo" className="block">
             <Card hoverable accent="zapusk">
@@ -97,38 +133,6 @@ export default function Dashboard() {
           <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY.slice(0, 5)} compact />
         </div>
       </div>
-
-      <div className="mb-4 flex items-end justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-primary tracking-tight">Проекты</h2>
-        <p className="text-xs text-muted">Каждый проект проходит путь: материалы → бизнес на салфетке → интервью по проекту → материалы для инвестора</p>
-        </div>
-      </div>
-
-      {projects === null ? (
-        <Card>
-          <div className="text-sm text-muted text-center py-8">Загрузка…</div>
-        </Card>
-      ) : visibleProjects?.length === 0 ? (
-        <Card>
-          <EmptyState
-            icon={<Sparkles size={20} />}
-            title="Пока нет проектов"
-            description="Создайте первый проект, загрузите материалы — и система соберёт «бизнес на салфетке» за минуту."
-            action={
-              <Link to="/projects/new">
-                <Button iconLeft={<Plus size={14} strokeWidth={2.5} />}>Создать проект</Button>
-              </Link>
-            }
-          />
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {visibleProjects?.map((p) => (
-            <ProjectCard key={p.id} project={p} percent={computeProgress(p).percent} />
-          ))}
-        </div>
-      )}
     </AppLayout>
   );
 }

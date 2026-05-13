@@ -1,8 +1,0 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { Sparkles } from 'lucide-react';
-import { Card } from './Card';
-import { Textarea } from './Input';
-import { VoiceInputButton } from './VoiceInputButton';
-export function AIQuestionCard({ index, question, category, value, onChange }) {
-    return (_jsxs(Card, { accent: "ai", className: "bg-gradient-to-br from-surface to-surface/40", children: [_jsxs("div", { className: "flex items-start gap-3 mb-3", children: [_jsx("div", { className: "w-8 h-8 rounded-md bg-ai/15 border border-ai/30 flex items-center justify-center flex-shrink-0", children: _jsx(Sparkles, { size: 14, className: "text-ai-glow" }) }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center gap-2 mb-1", children: [_jsxs("span", { className: "text-[10px] font-semibold uppercase tracking-[0.12em] text-ai-glow", children: ["\u0412\u043E\u043F\u0440\u043E\u0441 ", index] }), category && (_jsxs("span", { className: "text-[10px] uppercase tracking-[0.1em] text-muted", children: ["\u00B7 ", category] }))] }), _jsx("p", { className: "text-sm text-primary leading-snug", children: question })] })] }), _jsx(Textarea, { value: value, onChange: (e) => onChange(e.target.value), rows: 3, placeholder: "\u0412\u0430\u0448 \u043E\u0442\u0432\u0435\u0442 \u2014 \u043A\u0440\u0430\u0442\u043A\u043E \u0438 \u043A\u043E\u043D\u043A\u0440\u0435\u0442\u043D\u043E" }), _jsx(VoiceInputButton, { className: "mt-2", label: "\u041D\u0430\u0434\u0438\u043A\u0442\u043E\u0432\u0430\u0442\u044C \u043E\u0442\u0432\u0435\u0442", onTranscript: (text) => onChange(value.trim() ? `${value.trim()} ${text}` : text) })] }));
-}

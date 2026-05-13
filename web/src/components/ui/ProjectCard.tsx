@@ -1,12 +1,26 @@
-import { Link } from 'react-router-dom';
-import { ArrowUpRight, Briefcase } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowUpRight, Briefcase, Sparkles } from 'lucide-react';
 import { Card } from './Card';
 import { StatusBadge } from './StatusBadge';
 import { ProgressBar } from './ProgressBar';
+import { Button } from './Button';
 import { formatMoney, formatPercent, STAGE_LABELS } from '../../lib/format';
+import { getBriefStatus, briefStatusTone } from '../../lib/briefStatus';
 import type { Project } from '../../lib/api';
 
+// Sprint 14: ProjectCard теперь показывает статус брифа + CTA, который ведёт
+// прямо в нужное место (бриф этого проекта, не на «New Project»).
 export function ProjectCard({ project, percent }: { project: Project; percent: number }) {
+  const navigate = useNavigate();
+  const brief = getBriefStatus(project);
+
+  function goToBrief(e: React.MouseEvent) {
+    // Не даём родительскому Link провалиться в /projects/:id, ведём прямо в бриф.
+    e.preventDefault();
+    e.stopPropagation();
+    navigate(`/projects/${project.id}/brief`);
+  }
+
   return (
     <Link to={`/projects/${project.id}`} className="block group">
       <Card hoverable accent={percent > 0 ? 'zapusk' : null}>
@@ -34,13 +48,31 @@ export function ProjectCard({ project, percent }: { project: Project; percent: n
           <ProgressBar value={percent} showLabel />
         </div>
 
-        <div className="mt-4 pt-4 border-t border-hairline flex items-center justify-between">
-          <StatusBadge tone={project.status === 'ready' ? 'success' : percent > 0 ? 'zapusk' : 'neutral'} dot>
-            {project.status === 'ready' ? 'Готов' : percent > 0 ? 'Материалы' : 'Черновик'}
-          </StatusBadge>
-          <span className="text-[11px] text-muted">
-            {(project.files?.length ?? 0)} файлов
-          </span>
+        {/* Sprint 14: brief status + quick CTA. Каждый проект показывает свой
+            статус — фаундер сразу видит, где AI ждёт briefing. */}
+        <div className="mt-4 pt-4 border-t border-hairline space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <StatusBadge tone={briefStatusTone(brief.state)} dot>{brief.label}</StatusBadge>
+            {brief.state !== 'not_started' && (
+              <span className="text-[11px] text-muted">{brief.completion}%</span>
+            )}
+          </div>
+          {brief.state !== 'not_started' && brief.completion < 100 && (
+            <ProgressBar value={brief.completion} />
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted">
+              {(project.files?.length ?? 0)} файлов
+            </span>
+            <Button
+              size="sm"
+              variant={brief.state === 'ready' ? 'secondary' : 'ai'}
+              iconLeft={<Sparkles size={12} />}
+              onClick={goToBrief}
+            >
+              {brief.cta}
+            </Button>
+          </div>
         </div>
       </Card>
     </Link>

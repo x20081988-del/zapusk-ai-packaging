@@ -1,11 +1,15 @@
-import { ExternalLink, FileText, Headphones, Phone, Radio, ShieldCheck, TrendingUp, Wallet } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import {
+  ChevronRight, ExternalLink, FileText, Headphones, Phone, Radio, ShieldCheck, TrendingUp, Wallet,
+  MessageSquare, PhoneCall,
+} from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { ProjectMaterialCard } from '../components/ui/ProjectMaterialCard';
-import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { PersonalManagerMiniCard } from '../components/ui/PersonalManagerCard';
 import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 import { getDemoMaterials, getDemoTransformationCase } from '../lib/demoMaterials';
 
@@ -70,56 +74,44 @@ export default function DemoCabinet() {
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
           <div className="space-y-6">
-            <Card padded>
+            {/* Sprint 14: Demo Cabinet раньше дублировал всю AI-leads-карточку
+                одного лида (телефон, разговор, чек, что произошло). Это
+                перегружало демо. Теперь — компактный preview + CTA в /ai-leads,
+                где живёт полный интерфейс и больше примеров. */}
+            <Card padded accent="ai">
               <CardHeader
                 title="AI-лиды Главснаб"
-                subtitle="Реальный демо-лид с контекстом общения и записью"
+                subtitle="В демо-кабинете показываем превью. Полный feed, записи разговоров и контекст — на странице AI-лидов."
                 action={<StatusBadge tone="danger" dot>HOT</StatusBadge>}
               />
-              <div className="rounded-lg border border-ai/25 bg-ai/8 p-4">
-                <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-base font-semibold text-primary">Новый квалифицированный лид</h3>
-                    <p className="text-sm text-secondary mt-1">Инвестор запросила пакет документов, ссылки и ждёт звонка от специалиста.</p>
-                  </div>
-                  <StatusBadge tone="success">готов к взаимодействию</StatusBadge>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                <PreviewStat icon={<Radio size={14} />} label="Активные лиды" value="12" tone="ai" />
+                <PreviewStat icon={<PhoneCall size={14} />} label="Звонков за сутки" value="43" tone="zapusk" />
+                <PreviewStat icon={<MessageSquare size={14} />} label="Сообщений отправлено" value="128" tone="zapusk" />
+              </div>
+              <div className="rounded-md border border-ai/25 bg-ai/8 p-4 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-full bg-grad-ai text-canvas flex items-center justify-center shadow-ai-glow shrink-0">
+                  <Headphones size={15} />
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
-                  <LeadMeta label="Имя" value="Без имени" />
-                  <LeadMeta label="Телефон" value="+7 951 981-11-19" />
-                  <LeadMeta label="Сумма" value="от 1 млн ₽" />
-                  <LeadMeta label="Срок" value="1 месяц" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-primary">Новый квалифицированный лид · от 1 млн ₽ · 1 месяц</div>
+                  <p className="text-xs text-secondary mt-1 leading-relaxed">
+                    В разделе AI-лиды можно посмотреть больше примеров, прослушать записи звонков и
+                    увидеть контекст коммуникации с каждым инвестором.
+                  </p>
                 </div>
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4 mt-4">
-                  <div className="rounded-md border border-hairline bg-surface p-4">
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-2">Что произошло</div>
-                    <ul className="space-y-2 text-sm text-secondary">
-                      <li>Предложение заинтересовало.</li>
-                      <li>Комфортная сумма для инвестиций: от 1 млн рублей.</li>
-                      <li>Ориентир по сроку инвестиций: 1 месяц.</li>
-                      <li>Следующий шаг: звонок специалиста и отправка документов.</li>
-                    </ul>
-                  </div>
-                  <a
-                    href="https://aicallscloud.ru/api/process-record-url?recordUrl=0ed73e45-ab1e-4a1d-ae4c-435d49bd6f77.wav"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-md border border-ai/25 bg-ai/10 p-4 hover:border-ai/45 transition-colors"
-                  >
-                    <div className="w-10 h-10 rounded-full bg-grad-ai text-canvas flex items-center justify-center shadow-ai-glow mb-3">
-                      <Headphones size={16} />
-                    </div>
-                    <div className="text-sm font-semibold text-primary">Запись AI-разговора</div>
-                    <div className="text-xs text-muted mt-1">Открыть запись общения оператора</div>
-                  </a>
-                </div>
+              </div>
+              <div className="mt-4 flex justify-end">
+                <Link to="/ai-leads">
+                  <Button variant="ai" iconRight={<ChevronRight size={14} />}>Открыть AI-лиды</Button>
+                </Link>
               </div>
             </Card>
 
             <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY} />
           </div>
           <aside className="space-y-4">
-            <PersonalManagerCard compact />
+            <PersonalManagerMiniCard />
             <Card padded accent="zapusk">
               <CardHeader title="Сделочная механика" subtitle="MVP-статус юридического этапа" />
               <div className="space-y-2 text-sm text-secondary">
@@ -164,11 +156,16 @@ function Pipeline({ label, done }: { label: string; done?: boolean }) {
   );
 }
 
-function LeadMeta({ label, value }: { label: string; value: string }) {
+function PreviewStat({
+  icon, label, value, tone,
+}: { icon: React.ReactNode; label: string; value: string; tone: 'ai' | 'zapusk' }) {
   return (
-    <div className="rounded-md border border-hairline bg-surface px-3 py-2">
-      <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold">{label}</div>
-      <div className="text-sm text-primary mt-1">{value}</div>
+    <div className={`rounded-md border ${tone === 'ai' ? 'border-ai/25 bg-ai/8' : 'border-zapusk/25 bg-zapusk/8'} px-3 py-3`}>
+      <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] font-semibold ${tone === 'ai' ? 'text-ai-glow' : 'text-zapusk-400'}`}>
+        {icon}
+        {label}
+      </div>
+      <div className="text-xl font-bold text-primary font-num mt-1">{value}</div>
     </div>
   );
 }

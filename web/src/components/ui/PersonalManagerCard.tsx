@@ -1,4 +1,5 @@
-import { CheckCircle2, Clock, Mail, MessageCircle, Phone, Send, UserRound, ArrowRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { CheckCircle2, Clock, Mail, MessageCircle, Phone, Send, UserRound, ArrowRight, ChevronRight } from 'lucide-react';
 import { Card, CardHeader } from './Card';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
@@ -15,6 +16,36 @@ export const PERSONAL_MANAGER = {
   nextStep: 'Подготовить эфир по базе инвесторов',
   nextStepDue: 'до конца недели',
 };
+
+// Sprint 14 UX-polish: на Dashboard / Project Cockpit / Demo Cabinet полная
+// карточка занимала пол-экрана. compactMini = маленький блок «знай, что мы
+// рядом», который ведёт на отдельную страницу /personal-manager.
+export function PersonalManagerMiniCard() {
+  return (
+    <Card padded accent="zapusk" className="overflow-hidden">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-grad-zapusk text-white flex items-center justify-center shadow-glow shrink-0">
+          <UserRound size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold">Персональный менеджер</span>
+            <StatusBadge tone="success" dot>на связи</StatusBadge>
+          </div>
+          <div className="text-sm font-semibold text-primary mt-0.5 truncate">{PERSONAL_MANAGER.name}</div>
+          <p className="text-[11px] text-muted leading-snug mt-0.5">
+            Поможет пройти этапы и закрыть вопросы.
+          </p>
+        </div>
+        <Link to="/personal-manager" className="shrink-0">
+          <Button size="sm" variant="secondary" iconRight={<ChevronRight size={13} />}>
+            Открыть
+          </Button>
+        </Link>
+      </div>
+    </Card>
+  );
+}
 
 export function PersonalManagerCard({ compact }: { compact?: boolean }) {
   return (

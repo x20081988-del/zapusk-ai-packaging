@@ -37,6 +37,7 @@ import { RecentMeetings } from '../components/ui/RecentMeetings';
 import { api, type Project } from '../lib/api';
 import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
+import { getBriefStatus, briefStatusTone } from '../lib/briefStatus';
 
 type LeadStatus = 'HOT' | 'NEW' | 'WAITING' | 'CONTACTED';
 type BriefingState = 'draft' | 'in_progress' | 'ready';
@@ -167,8 +168,18 @@ export default function AILeads() {
   }, [selectedProjectId]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
-  const briefHref = dashboard?.projectId ? `/projects/${dashboard.projectId}/brief` : '/projects/new';
+  // Sprint 14: state-aware CTA для брифа. Если выбран проект — ведём в его
+  // бриф. Если проектов нет — в New Project. Если есть, но дашборд ещё без
+  // projectId — мягко в New Project (это редкий fallback на серверной стороне).
+  const briefHref = dashboard?.projectId
+    ? `/projects/${dashboard.projectId}/brief`
+    : projects[0]?.id
+      ? `/projects/${projects[0].id}/brief`
+      : '/projects/new';
   const interviewHref = dashboard?.projectId ? `/projects/${dashboard.projectId}/interview` : '/projects/new';
+  // Sprint 14: единый source-of-truth — статус брифа выбранного проекта.
+  const briefStatus = selectedProject ? getBriefStatus(selectedProject) : null;
+  const briefCtaLabel = briefStatus?.cta ?? 'Заполнить бриф';
 
   return (
     <AppLayout title="AI-лиды инвесторов">
@@ -178,6 +189,8 @@ export default function AILeads() {
           launched={launched}
           onLaunch={() => setLaunched(true)}
           briefHref={briefHref}
+          briefCtaLabel={briefCtaLabel}
+          briefStatus={briefStatus}
         />
 
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6">
@@ -213,7 +226,13 @@ export default function AILeads() {
               </Card>
             ) : (
               <>
-                <OnboardingCard dashboard={dashboard} selectedProject={selectedProject} briefHref={briefHref} launched={launched} />
+                <OnboardingCard
+                  dashboard={dashboard}
+                  selectedProject={selectedProject}
+                  briefHref={briefHref}
+                  briefCtaLabel={briefCtaLabel}
+                  launched={launched}
+                />
 
                 <BriefingAnalyzer
                   dashboard={dashboard}
@@ -256,11 +275,15 @@ function LeadProductHero({
   launched,
   onLaunch,
   briefHref,
+  briefCtaLabel,
+  briefStatus,
 }: {
   dashboard: AILeadsDashboard | null;
   launched: boolean;
   onLaunch: () => void;
   briefHref: string;
+  briefCtaLabel: string;
+  briefStatus: ReturnType<typeof getBriefStatus> | null;
 }) {
   const launchEnabled = Boolean(dashboard?.onboarding.launchEnabled);
   return (
@@ -303,12 +326,22 @@ function LeadProductHero({
                 </Button>
               ) : (
                 <Link to={briefHref}>
-                  <Button size="lg" iconLeft={<Sparkles size={16} />}>Заполнить бриф</Button>
+                  <Button size="lg" iconLeft={<Sparkles size={16} />}>{briefCtaLabel}</Button>
                 </Link>
               )}
-              {!launchEnabled && (
+              {/* Sprint 14: показываем статус брифа конкретного проекта, не
+                  абстрактную фразу. AI-лидогенерация не запускается без брифа. */}
+              {!launchEnabled && briefStatus && (
+                <div className="flex items-center gap-2 text-xs">
+                  <StatusBadge tone={briefStatusTone(briefStatus.state)} dot>{briefStatus.label}</StatusBadge>
+                  <span className="text-muted">
+                    AI-лидогенерация станет доступна после завершения брифа.
+                  </span>
+                </div>
+              )}
+              {!launchEnabled && !briefStatus && (
                 <span className="text-xs text-muted">
-                  Запуск AI-лидов станет доступен после завершения briefing
+                  Создайте проект, чтобы AI собрал briefing и запустил поиск инвесторов.
                 </span>
               )}
             </div>
@@ -343,11 +376,13 @@ function OnboardingCard({
   dashboard,
   selectedProject,
   briefHref,
+  briefCtaLabel,
   launched,
 }: {
   dashboard: AILeadsDashboard;
   selectedProject: Project | null;
   briefHref: string;
+  briefCtaLabel: string;
   launched: boolean;
 }) {
   return (
@@ -376,7 +411,7 @@ function OnboardingCard({
           </Button>
         ) : (
           <Link to={briefHref}>
-            <Button iconLeft={<Target size={14} />}>{dashboard.onboarding.cta}</Button>
+            <Button iconLeft={<Target size={14} />}>{briefCtaLabel || dashboard.onboarding.cta}</Button>
           </Link>
         )}
       </div>

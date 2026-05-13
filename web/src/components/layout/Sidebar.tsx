@@ -4,6 +4,7 @@ import {
   LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
+  X,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
@@ -44,22 +45,41 @@ const NAV: Record<UserRole, NavItem[]> = {
   ],
 };
 
-export function Sidebar() {
+interface SidebarProps {
+  /** Sprint 14: mobile-drawer mode. When set, sidebar renders as a slide-over
+   *  panel controlled by the parent (burger button in Topbar). Desktop usage
+   *  (default) doesn't pass these and remains unchanged. */
+  mobile?: boolean;
+  open?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   const role = getAuth()?.role ?? 'client';
   const visibleNav = NAV[role];
 
-  return (
-    <aside className="hidden lg:flex flex-col w-sidebar bg-ink border-r border-line shrink-0 h-screen sticky top-0">
-      <div className="px-5 py-5 border-b border-hairline">
+  const sidebarBody = (
+    <>
+      <div className="px-5 py-5 border-b border-hairline flex items-center justify-between">
         <Logo />
+        {mobile && (
+          <button
+            onClick={onClose}
+            aria-label="Закрыть меню"
+            className="w-9 h-9 rounded-md flex items-center justify-center text-secondary hover:text-primary hover:bg-surface transition-colors"
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
-      <nav className="flex-1 px-3 py-5 space-y-1">
+      <nav className="flex-1 px-3 py-5 space-y-1 overflow-y-auto">
         <SectionLabel>{roleLabel(role)}</SectionLabel>
         {visibleNav.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
+            onClick={mobile ? onClose : undefined}
             className={({ isActive }) =>
               clsx(
                 'flex items-center gap-3 px-3 h-10 rounded-md text-sm transition-all',
@@ -80,6 +100,7 @@ export function Sidebar() {
             href="https://zapusk.tech"
             target="_blank"
             rel="noreferrer"
+            onClick={mobile ? onClose : undefined}
             className="flex items-center gap-3 px-3 h-10 rounded-md text-sm text-secondary hover:text-primary hover:bg-surface transition-all"
           >
             <BookOpen size={16} className="shrink-0" />
@@ -98,6 +119,41 @@ export function Sidebar() {
           {role === 'client' ? 'Екатерина · упаковка и лиды' : role === 'manager' ? 'Фокус на проектах и следующих шагах.' : 'Роли, проекты, шаблоны и статусы.'}
         </div>
       </div>
+    </>
+  );
+
+  if (mobile) {
+    // Slide-over drawer for mobile. Backdrop click closes it; ESC handled in parent.
+    return (
+      <div
+        className={clsx(
+          'lg:hidden fixed inset-0 z-50 transition-opacity',
+          open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none',
+        )}
+        aria-hidden={!open}
+      >
+        <div
+          className="absolute inset-0 bg-canvas/80 backdrop-blur-sm"
+          onClick={onClose}
+        />
+        <aside
+          className={clsx(
+            'absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-ink border-r border-line flex flex-col shadow-xl transition-transform',
+            open ? 'translate-x-0' : '-translate-x-full',
+          )}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Главное меню"
+        >
+          {sidebarBody}
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="hidden lg:flex flex-col w-sidebar bg-ink border-r border-line shrink-0 h-screen sticky top-0">
+      {sidebarBody}
     </aside>
   );
 }
