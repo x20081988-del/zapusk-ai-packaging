@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Mic, Square, Headphones, AlertTriangle, Sparkles, MessageSquare, Target,
   Activity, ChevronRight, RefreshCw, Save, CheckCircle2, Upload,
+  Compass, ShieldAlert, HelpCircle, Megaphone, Ban, Gauge, Zap,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -36,16 +37,35 @@ function getSR(): SRCtor | null {
 }
 
 // ─── Card shape returned by /api/sales-assistant/analyze ─────────────────────
+// Sprint 12: расширили AssistantCard до structured mini-brief.
+// Legacy aliases (risk / recommendation / suggestedPhrase / nextStep) сохраняем
+// — старая история adviceHistory остаётся совместимой с новым API.
 interface AssistantCard {
   situation: string;
+  riskOrMissed: string | null;
+  whatToDo: string[];
+  whatNotToDo: string[];
+  mainQuestion: string;
+  backupQuestions: string[];
+  selfSaleQuestions: string[];
+  miniPitch: string | null;
+  conversationObjective: string;
+  conversationDirection: string;
+  dealNextStep: string | null;
+  spinStage: 'S' | 'P' | 'I' | 'N';
+  spinGaps: Array<'S' | 'P' | 'I' | 'N'>;
+  tone: 'SOFT' | 'CONTROL' | 'CLOSE';
+  dealControlLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+  engagementSignal: 'active' | 'passive' | 'disengaged';
+  confidence: number;
+  objection: string | null;
+
+  // legacy aliases (back-compat with older clients / analytics)
   risk: string | null;
   recommendation: string;
   suggestedPhrase: string;
-  spinStage: 'S' | 'P' | 'I' | 'N';
-  tone: 'SOFT' | 'CONTROL' | 'CLOSE';
-  confidence: number;
-  objection: string | null;
   nextStep: string | null;
+
   source: 'ai' | 'mock';
   provider: string;
   model: string;
@@ -53,7 +73,20 @@ interface AssistantCard {
 }
 
 type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
-type AdviceHistoryItem = Pick<AssistantCard, 'situation' | 'recommendation' | 'suggestedPhrase' | 'spinStage' | 'tone' | 'nextStep'>;
+type AdviceHistoryItem = Pick<
+  AssistantCard,
+  | 'situation'
+  | 'mainQuestion'
+  | 'whatToDo'
+  | 'spinStage'
+  | 'tone'
+  | 'dealNextStep'
+  | 'conversationObjective'
+  // legacy fields still emitted for older consumers
+  | 'recommendation'
+  | 'suggestedPhrase'
+  | 'nextStep'
+>;
 
 const STAGE_LABEL: Record<AssistantCard['spinStage'], string> = {
   S: 'S — Situation',
@@ -71,6 +104,26 @@ const TONE_TONE: Record<AssistantCard['tone'], 'info' | 'zapusk' | 'success'> = 
   SOFT: 'info',
   CONTROL: 'zapusk',
   CLOSE: 'success',
+};
+const CONTROL_TONE: Record<AssistantCard['dealControlLevel'], 'danger' | 'warning' | 'success'> = {
+  LOW: 'danger',
+  MEDIUM: 'warning',
+  HIGH: 'success',
+};
+const CONTROL_LABEL: Record<AssistantCard['dealControlLevel'], string> = {
+  LOW: 'Контроль · LOW',
+  MEDIUM: 'Контроль · MED',
+  HIGH: 'Контроль · HIGH',
+};
+const ENGAGEMENT_TONE: Record<AssistantCard['engagementSignal'], 'success' | 'warning' | 'danger'> = {
+  active: 'success',
+  passive: 'warning',
+  disengaged: 'danger',
+};
+const ENGAGEMENT_LABEL: Record<AssistantCard['engagementSignal'], string> = {
+  active: 'Инвестор · активен',
+  passive: 'Инвестор · пассивен',
+  disengaged: 'Инвестор · уходит',
 };
 
 export default function SalesAssistant() {
@@ -153,10 +206,14 @@ export default function SalesAssistant() {
   function toAdviceHistoryItem(next: AssistantCard): AdviceHistoryItem {
     return {
       situation: next.situation,
-      recommendation: next.recommendation,
-      suggestedPhrase: next.suggestedPhrase,
+      mainQuestion: next.mainQuestion,
+      whatToDo: next.whatToDo,
       spinStage: next.spinStage,
       tone: next.tone,
+      dealNextStep: next.dealNextStep,
+      conversationObjective: next.conversationObjective,
+      recommendation: next.recommendation,
+      suggestedPhrase: next.suggestedPhrase,
       nextStep: next.nextStep,
     };
   }
@@ -561,61 +618,174 @@ export default function SalesAssistant() {
   );
 }
 
+// Sprint 12: structured mini-brief. Каждая секция сканируется за 5 секунд,
+// никаких полотен текста — фаундер смотрит на это ВО ВРЕМЯ живой встречи.
 function AdviceCard({ card }: { card: AssistantCard }) {
   return (
     <Card padded accent={card.tone === 'CLOSE' ? 'zapusk' : 'ai'}>
-      <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-        <div className="flex items-center gap-2">
+      {/* HEADER: SPIN stage · Tone · Engagement · Control · Confidence */}
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           <StatusBadge tone="ai" dot>{STAGE_LABEL[card.spinStage]}</StatusBadge>
           <StatusBadge tone={TONE_TONE[card.tone]} dot>Тон · {card.tone}</StatusBadge>
+          <StatusBadge tone={CONTROL_TONE[card.dealControlLevel]} dot>{CONTROL_LABEL[card.dealControlLevel]}</StatusBadge>
+          <StatusBadge tone={ENGAGEMENT_TONE[card.engagementSignal]} dot>{ENGAGEMENT_LABEL[card.engagementSignal]}</StatusBadge>
         </div>
         <div className="flex items-center gap-2">
-          <div className="text-[10px] uppercase tracking-[0.1em] text-muted">Уверенность</div>
+          <Gauge size={13} className="text-muted" />
           <div className={`text-base font-bold font-num ${card.confidence >= 60 ? 'text-success' : card.confidence >= 35 ? 'text-zapusk-400' : 'text-warning'}`}>
             {card.confidence}%
           </div>
         </div>
       </div>
       <div className="text-[11px] text-muted mb-4">{STAGE_HINT[card.spinStage]}</div>
-      <AdviceFields card={card} />
-    </Card>
-  );
-}
 
-function AdviceFields({ card, compact }: { card: AssistantCard; compact?: boolean }) {
-  return (
-    <div className={`space-y-${compact ? '3' : '4'}`}>
+      {/* SITUATION — one sentence */}
       <Field icon={<Activity size={14} />} label="Что происходит">{card.situation}</Field>
-      {card.risk && (
-        <Field icon={<AlertTriangle size={14} className="text-warning" />} label="Где риск" tone="warning">
-          {card.risk}
-        </Field>
-      )}
-      <Field icon={<Target size={14} className="text-zapusk-400" />} label="Что делать">{card.recommendation}</Field>
-      <div>
-        <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1.5 flex items-center gap-1.5">
-          <MessageSquare size={12} className="text-ai-glow" />
-          Что сказать сейчас
-        </div>
-        <blockquote className="bg-canvas border border-ai/30 rounded-md px-4 py-3 text-[14.5px] leading-relaxed text-primary">
-          «{card.suggestedPhrase}»
-        </blockquote>
-      </div>
-      {card.objection && (
-        <Field icon={<AlertTriangle size={14} className="text-warning" />} label="Возражение" tone="warning">
-          {card.objection}
-        </Field>
-      )}
-      {card.nextStep && (
-        <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-zapusk/8 border border-zapusk/25">
-          <ChevronRight size={14} className="text-zapusk-400 mt-0.5 shrink-0" />
+
+      {/* RISK / MISSED — warning banner if anything is off */}
+      {card.riskOrMissed && (
+        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
+          <ShieldAlert size={14} className="text-warning mt-0.5 shrink-0" />
           <div>
-            <div className="text-[10px] uppercase tracking-[0.1em] text-zapusk-400 font-semibold mb-0.5">Следующий шаг</div>
-            <div className="text-sm text-primary">{card.nextStep}</div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-warning font-semibold mb-0.5">Что упускаем</div>
+            <div className="text-sm text-primary leading-relaxed">{card.riskOrMissed}</div>
           </div>
         </div>
       )}
-    </div>
+
+      {/* OBJECTIVE + DIRECTION — куда ведём */}
+      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <MiniBlock icon={<Target size={13} className="text-zapusk-400" />} label="Цель этапа">
+          {card.conversationObjective}
+        </MiniBlock>
+        <MiniBlock icon={<Compass size={13} className="text-ai-glow" />} label="Куда ведём">
+          {card.conversationDirection}
+        </MiniBlock>
+      </div>
+
+      {/* WHAT TO DO */}
+      {card.whatToDo.length > 0 && (
+        <div className="mt-4">
+          <SectionLabel icon={<Zap size={12} className="text-zapusk-400" />}>Что делать</SectionLabel>
+          <ul className="space-y-1">
+            {card.whatToDo.map((line, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-primary leading-relaxed">
+                <ChevronRight size={14} className="text-zapusk-400 mt-0.5 shrink-0" />
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* MAIN QUESTION — flagship live phrase */}
+      <div className="mt-4">
+        <SectionLabel icon={<MessageSquare size={12} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
+        <blockquote className="bg-canvas border border-ai/30 rounded-md px-4 py-3 text-[14.5px] leading-relaxed text-primary">
+          «{card.mainQuestion}»
+        </blockquote>
+      </div>
+
+      {/* BACKUP QUESTIONS */}
+      {card.backupQuestions.length > 0 && (
+        <div className="mt-3">
+          <SectionLabel icon={<HelpCircle size={12} className="text-muted" />}>
+            Запасные вопросы ({card.backupQuestions.length})
+          </SectionLabel>
+          <ul className="space-y-1.5">
+            {card.backupQuestions.map((q, i) => (
+              <li key={i} className="text-[13px] text-secondary leading-relaxed border-l-2 border-line pl-3">
+                {q}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* SELF-SALE QUESTIONS — separate purple-ish block */}
+      {card.selfSaleQuestions.length > 0 && (
+        <div className="mt-4 rounded-md border border-ai/30 bg-ai/8 px-3 py-2.5">
+          <SectionLabel icon={<Sparkles size={12} className="text-ai-glow" />}>
+            Self-sale: пусть он сам себе продаст
+          </SectionLabel>
+          <ul className="space-y-1">
+            {card.selfSaleQuestions.map((q, i) => (
+              <li key={i} className="text-[13px] text-primary leading-relaxed">• {q}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* WHAT NOT TO DO */}
+      {card.whatNotToDo.length > 0 && (
+        <div className="mt-4 rounded-md border border-danger/25 bg-danger/8 px-3 py-2.5">
+          <SectionLabel icon={<Ban size={12} className="text-danger" />}>Что НЕ делать сейчас</SectionLabel>
+          <ul className="space-y-1">
+            {card.whatNotToDo.map((line, i) => (
+              <li key={i} className="text-[13px] text-primary leading-relaxed">— {line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* MINI-PITCH — only if interest signal already detected */}
+      {card.miniPitch && (
+        <div className="mt-4 rounded-md border border-zapusk/30 bg-zapusk/8 px-3 py-2.5">
+          <SectionLabel icon={<Megaphone size={12} className="text-zapusk-400" />}>Мини-питч</SectionLabel>
+          <p className="text-sm text-primary leading-relaxed">{card.miniPitch}</p>
+        </div>
+      )}
+
+      {/* OBJECTION */}
+      {card.objection && (
+        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
+          <AlertTriangle size={14} className="text-warning mt-0.5 shrink-0" />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-warning font-semibold mb-0.5">Возражение</div>
+            <div className="text-sm text-primary">{card.objection}</div>
+          </div>
+        </div>
+      )}
+
+      {/* DEAL NEXT STEP */}
+      {card.dealNextStep && (
+        <div className="mt-4 flex items-start gap-2 px-3 py-2.5 rounded-md bg-zapusk/8 border border-zapusk/25">
+          <ChevronRight size={14} className="text-zapusk-400 mt-0.5 shrink-0" />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-zapusk-400 font-semibold mb-0.5">Следующий шаг сделки</div>
+            <div className="text-sm text-primary">{card.dealNextStep}</div>
+          </div>
+        </div>
+      )}
+
+      {/* SPIN GAPS — visualize which stages are still open */}
+      <div className="mt-4 pt-3 border-t border-hairline">
+        <SectionLabel icon={<Target size={12} className="text-muted" />}>
+          Карта SPIN — какие этапы ещё открыты
+        </SectionLabel>
+        <div className="flex items-center gap-1.5">
+          {(['S', 'P', 'I', 'N'] as const).map((stage) => {
+            const isOpen = card.spinGaps.includes(stage);
+            const isCurrent = card.spinStage === stage;
+            return (
+              <div
+                key={stage}
+                className={`flex-1 text-center text-[11px] font-semibold rounded-md py-1.5 border
+                  ${isCurrent
+                    ? 'bg-ai/15 border-ai/40 text-ai-glow'
+                    : isOpen
+                      ? 'bg-warning/10 border-warning/30 text-warning'
+                      : 'bg-surface border-line text-muted line-through'}`}
+                title={isCurrent ? 'Текущий этап' : isOpen ? 'Этап ещё открыт' : 'Этап закрыт'}
+              >
+                {stage}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -627,6 +797,27 @@ function Field({ icon, label, tone, children }: { icon: React.ReactNode; label: 
         {label}
       </div>
       <div className="text-sm text-primary leading-relaxed">{children}</div>
+    </div>
+  );
+}
+
+function MiniBlock({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-md border border-hairline bg-surface/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-0.5 flex items-center gap-1.5">
+        {icon}
+        {label}
+      </div>
+      <div className="text-[13px] text-primary leading-snug">{children}</div>
+    </div>
+  );
+}
+
+function SectionLabel({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1.5 flex items-center gap-1.5">
+      {icon}
+      {children}
     </div>
   );
 }

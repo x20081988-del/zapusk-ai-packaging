@@ -355,7 +355,38 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 11 implementation done, production deploy pending)_
+_(empty — Sprint 12 AI Sales Assistant mini-brief shipped)_
+
+---
+
+## Sprint 12 update — 2026-05-13 — AI Sales Assistant mini-brief
+
+Theme: **Превратили AI Sales Assistant из «одна реплика на ходу» в structured mini-brief** для текущего момента переговоров. Фаундер во время живой встречи смотрит на карточку, которая сканируется за 5 секунд: что происходит, что упускаем, что делать, что НЕ делать, главный вопрос, 2-4 запасных, self-sale вопросы, мини-питч (если уместно), цель этапа, куда ведём, контроль сделки, engagement инвестора, карта SPIN-этапов.
+
+Non-goals (зафиксированы): без realtime audio streaming, без Zoom RTMS, без WebRTC, без новых страниц, без CRM, без notifications. Только расширение существующего `/api/sales-assistant/analyze` и `web/src/pages/SalesAssistant.tsx`.
+
+### Backend
+
+- **`server/src/ai/salesAssistantPrompt.ts`** — переписан system prompt: AI co-pilot переговоров. Явные разделы по SPIN-методологии (S/P/I/N, нельзя перепрыгивать), tone (SOFT/CONTROL/CLOSE), engagement signal (active/passive/disengaged), deal control level (LOW/MEDIUM/HIGH), conversation objective (примеры по этапам), self-sale правила (S/P или passive → 1-2 self-sale вопроса; I/N → []), miniPitch правила (только при сигнале интереса в transcript, max 2-4 предложения, обязательно вопрос в конце), objection triggers (подумаю / просит материалы / негативный опыт / дорого), запреты (повторять previousAdvice, перепрыгивать этапы, простыни). Возвращает строго JSON с 18 полями.
+- **`server/src/services/salesAssistantService.ts`** — `AssistantCard` расширен с 8 полей до 18 + 4 legacy alias (`risk` / `recommendation` / `suggestedPhrase` / `nextStep`) для back-compat. Новые поля: `riskOrMissed`, `whatToDo[]`, `whatNotToDo[]`, `mainQuestion`, `backupQuestions[]`, `selfSaleQuestions[]`, `miniPitch|null`, `conversationObjective`, `conversationDirection`, `dealNextStep|null`, `spinGaps[]`, `dealControlLevel`, `engagementSignal`. `SALES_ASSISTANT_RESPONSE_SCHEMA` обновлён в strict mode, `maxTokens=1400`. Heuristic mock расширен per SPIN-этап со всеми блоками (включая default `spinGaps` = всё STRICTLY после current). `avoidRepeatedAdvice()` теперь сдвигает этап и заполняет все новые поля.
+- **`server/src/routes/salesAssistant.ts`** — без изменений (route уже принимал `unknown` для `previousAdvice` / `adviceHistory`, шаблон передаётся как есть).
+
+### Frontend
+
+- **`web/src/pages/SalesAssistant.tsx`** — `AssistantCard` interface расширен 1-в-1 с backend. `AdviceCard` полностью переписан в structured mini-brief: header с 4 badge'ами (SPIN / Tone / Control / Engagement) + Confidence gauge; STAGE_HINT; Situation; warning-banner «Что упускаем» (если riskOrMissed); двух-колоночный блок Objective + Direction; маркированный список «Что делать»; flagship blockquote «Главный вопрос сейчас»; «Запасные вопросы» (numbered list с левой границей); purple/ai-блок «Self-sale: пусть он сам себе продаст»; красный блок «Что НЕ делать сейчас»; zapusk-блок «Мини-питч» (conditional); warning-блок «Возражение»; zapusk-блок «Следующий шаг сделки»; и в конце карта SPIN-этапов S/P/I/N с подсветкой текущего + открытых + закрытых. `toAdviceHistoryItem()` теперь сохраняет и новые, и legacy поля — чтобы prompt получил richer history.
+
+### Why this matters
+
+- AI больше не выдаёт «одну реплику в вакууме». Фаундер видит сразу: где сейчас разговор, что упустил, что нужно делать, что нельзя делать, какая цель, и куда ведём дальше. Это разница между ассистентом и co-pilot.
+- Сохранили back-compat: legacy fields (`recommendation` / `suggestedPhrase` / `nextStep` / `risk`) остались в `AssistantCard` и в `adviceHistory`. Старые consumers (`salesSessionService`, `salesSessions.ts`, прошлые сохранённые сессии в БД) продолжают работать без миграций.
+- Mock-фоллбек тоже расширен: при отсутствии AI ключа карточка остаётся «боевой» — каждый SPIN-этап имеет дефолтный набор блоков, спин-gaps детерминированы.
+
+### Verification
+
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc OK, web vite build OK (404.77 kB / 114.07 kB gzip)
+- [ ] Production verify: после Render redeploy → `POST /api/sales-assistant/analyze` с сэмпл-transcript должен вернуть новые поля (`mainQuestion`, `backupQuestions[]`, `spinGaps[]`, и т.д.) с `fellBackToMock=false`.
 
 ---
 
