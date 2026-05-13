@@ -17,6 +17,7 @@ import {
   type ConversationAnalysisCard, type ConversationAnalysisRow,
 } from '../lib/conversationAnalysis';
 import { api, type Project } from '../lib/api';
+import { getAuth } from '../lib/auth';
 import { formatDate } from '../lib/format';
 
 type Mode = 'upload' | 'paste' | 'url';
@@ -396,17 +397,29 @@ function ResultBlocks({ card }: { card: ConversationAnalysisCard }) {
         </div>
       </Card>
 
-      {card.fellBackToMock && (
-        <Card padded className="border-warning/40 bg-warning/8">
-          <div className="flex items-start gap-2 text-warning text-xs">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            <div>
-              <span className="font-semibold">Mock mode.</span> AI или транскрипция временно недоступны — показан детерминированный fallback. Проверьте `OPENAI_API_KEY` / `DEEPGRAM_API_KEY` на сервере для полноценного анализа.
-            </div>
-          </div>
-        </Card>
-      )}
+      {card.fellBackToMock && <MockModeNotice />}
     </>
+  );
+}
+
+// Sprint 16: для client скрываем env-key подсказки (OPENAI_API_KEY / DEEPGRAM_API_KEY)
+// — это admin/ops информация, фаундер видит только нейтральное «Демо-режим». Admin/
+// manager получают полную диагностику для саппорта.
+function MockModeNotice() {
+  const role = getAuth()?.role ?? 'client';
+  const isOps = role === 'admin' || role === 'manager';
+  return (
+    <Card padded className="border-warning/40 bg-warning/8">
+      <div className="flex items-start gap-2 text-warning text-xs">
+        <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+        <div>
+          <span className="font-semibold">Демо-режим.</span>{' '}
+          {isOps
+            ? 'AI или транскрипция временно недоступны — показан детерминированный fallback. Проверьте OPENAI_API_KEY / DEEPGRAM_API_KEY на сервере для полноценного анализа.'
+            : 'AI-разбор временно недоступен — показан демонстрационный результат. Полный анализ появится автоматически, когда система восстановится.'}
+        </div>
+      </div>
+    </Card>
   );
 }
 

@@ -8,7 +8,9 @@ import { api, type PackagingJob } from '../../lib/api';
 import {
   providerLabel, toolLabel, outputTypeLabel,
   providerTone, outputTypeTone,
+  toolClientLabel, canSeeAIVendors,
 } from '../../lib/aiProviders';
+import { getAuth } from '../../lib/auth';
 
 // Sprint 15: «AI generated materials» — лента того, как AI orchestrator
 // собрал материалы по проекту. Показывает: какой AI работал, чем, какой
@@ -43,6 +45,10 @@ const STATUS_LABEL: Record<PackagingJob['status'], string> = {
 export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
   const [jobs, setJobs] = useState<PackagingJob[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Sprint 16: role-gate AI provenance. Client видит только «AI · Pitch Deck»;
+  // admin/manager — полный «Claude Design · Claude Design PDF · Pitch Deck».
+  const role = getAuth()?.role ?? 'client';
+  const showVendors = canSeeAIVendors(role);
 
   async function load() {
     if (!projectId) return;
@@ -99,8 +105,17 @@ export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                  <StatusBadge tone={providerTone(job.provider)} dot>{providerLabel(job.provider)}</StatusBadge>
-                  <StatusBadge tone="neutral">{toolLabel(job.tool)}</StatusBadge>
+                  {showVendors ? (
+                    // Admin / manager: полная AI provenance.
+                    <>
+                      <StatusBadge tone={providerTone(job.provider)} dot>{providerLabel(job.provider)}</StatusBadge>
+                      <StatusBadge tone="neutral">{toolLabel(job.tool)}</StatusBadge>
+                    </>
+                  ) : (
+                    // Client: только generic AI-бейдж + character инструмента,
+                    // без vendor names («AI Reasoning», «AI Web Studio» и т.п.).
+                    <StatusBadge tone="ai" dot>{toolClientLabel(job.tool)}</StatusBadge>
+                  )}
                   <StatusBadge tone={outputTypeTone(job.outputType)} dot>{outputTypeLabel(job.outputType)}</StatusBadge>
                   <StatusBadge tone={STATUS_TONE[job.status]} dot>{STATUS_LABEL[job.status]}</StatusBadge>
                 </div>
@@ -110,7 +125,7 @@ export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
                 <div className="text-[11px] text-muted mt-1 flex items-center gap-2">
                   <Clock size={11} />
                   {formatTime(job.createdAt)}
-                  {job.model && <span className="font-mono">· {job.model}</span>}
+                  {showVendors && job.model && <span className="font-mono">· {job.model}</span>}
                 </div>
               </div>
               {onRegenerate && job.status !== 'queued' && job.status !== 'running' && (

@@ -15,7 +15,9 @@ import type { ArtefactReview } from '../../lib/api';
 import type { DemoMaterial, DemoMaterialStatus } from '../../lib/demoMaterials';
 import {
   providerLabel, toolLabel, providerTone, resolveTemplateOrchestration,
+  toolClientLabel, canSeeAIVendors,
 } from '../../lib/aiProviders';
+import { getAuth } from '../../lib/auth';
 
 interface Props {
   material: DemoMaterial;
@@ -119,19 +121,25 @@ export function ProjectMaterialCard({
               <div className="flex flex-wrap items-center gap-1.5 mb-1">
                 <StatusBadge tone={STATUS_TONES[status]} dot>{STATUS_LABELS[status]}</StatusBadge>
                 <StatusBadge tone={material.phase === 'after' ? 'ai' : 'neutral'}>v{material.version}</StatusBadge>
-                {/* Sprint 15: orchestration badges на каждом материале. Берём
-                    provider/tool из default registry по promptKind — это и
-                    есть «какой AI собрал этот материал». */}
+                {/* Sprint 15: orchestration badges на каждом материале. Sprint 16
+                    role-gate: client видит только generic «AI · Web Studio», admin/
+                    manager — полную provenance (vendor + tool). */}
                 {(() => {
                   const orch = resolveTemplateOrchestration(material.promptKind);
                   if (!orch) return null;
+                  const role = getAuth()?.role ?? 'client';
+                  if (canSeeAIVendors(role)) {
+                    return (
+                      <>
+                        <StatusBadge tone={providerTone(orch.provider)} dot>
+                          {providerLabel(orch.provider)}
+                        </StatusBadge>
+                        <StatusBadge tone="neutral">{toolLabel(orch.tool)}</StatusBadge>
+                      </>
+                    );
+                  }
                   return (
-                    <>
-                      <StatusBadge tone={providerTone(orch.provider)} dot>
-                        {providerLabel(orch.provider)}
-                      </StatusBadge>
-                      <StatusBadge tone="neutral">{toolLabel(orch.tool)}</StatusBadge>
-                    </>
+                    <StatusBadge tone="ai" dot>{toolClientLabel(orch.tool)}</StatusBadge>
                   );
                 })()}
               </div>

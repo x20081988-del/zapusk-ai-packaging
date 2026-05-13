@@ -96,6 +96,46 @@ export function outputTypeTone(outputType: string | null | undefined): BadgeTone
   return OUTPUT_TYPE_UI[outputType]?.tone ?? 'neutral';
 }
 
+// Sprint 16: client-friendly maps. Фаундер не должен видеть «GPT-5.5» / «Claude Opus» /
+// «Lovable Web» / «Claude Design» — это admin-уровень информации, и упоминание вендоров
+// размывает позиционирование «Zapusk AI оркестрирует AI стек», превращая его в
+// «мы перепродаём чужие модели». Для роли client везде используем эти generic labels.
+
+/** Generic label провайдера для клиента — без брендов. */
+export function providerClientLabel(provider: string | null | undefined): string {
+  if (!provider) return 'AI';
+  // Все провайдеры → один общий «AI» бейдж. Это сознательное решение: клиент
+  // видит, что «работает AI», без vendor name.
+  return 'AI';
+}
+
+/** Generic label инструмента → описывает «характер» работы AI, не бренд. */
+export function toolClientLabel(tool: string | null | undefined): string {
+  if (!tool) return 'AI';
+  switch (tool) {
+    case 'gpt-4.1':
+    case 'gpt-5.5':
+      return 'AI Reasoning';
+    case 'claude-opus':
+      return 'AI Finance';
+    case 'claude-code':
+      return 'AI Calculator';
+    case 'lovable-web':
+      return 'AI Web Studio';
+    case 'claude-design-pdf':
+      return 'AI Design';
+    default:
+      return 'AI';
+  }
+}
+
+/** Используется ли роль с правом видеть полную AI provenance? */
+export function canSeeAIVendors(role: string | null | undefined): boolean {
+  // admin — нужно для orchestration center; manager — нужно для сопровождения проектов;
+  // client — нет, фаундер видит только generic labels.
+  return role === 'admin' || role === 'manager';
+}
+
 /** Default orchestration map — синхрон с server TEMPLATE_ORCHESTRATION для
  *  fallback'а в UI, если template ещё не несёт provider/tool (старый custom
  *  шаблон, который не пересеяли). */
