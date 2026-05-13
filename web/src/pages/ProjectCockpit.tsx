@@ -25,6 +25,7 @@ import { buildReviewIndex, getReview } from '../lib/reviews';
 import { getDemoMaterials, getDemoTransformationCase } from '../lib/demoMaterials';
 import { MissingDataPanel } from '../components/ui/MissingDataPanel';
 import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { RecentMeetings } from '../components/ui/RecentMeetings';
 import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 
@@ -260,6 +261,11 @@ export default function ProjectCockpit() {
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
         <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY} compact />
         <PersonalManagerCard compact />
+      </div>
+
+      {/* Память встреч: последние 3 встречи с инвесторами по этому проекту */}
+      <div className="mb-6">
+        <RecentMeetings projectId={id} limit={3} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">

@@ -47,6 +47,7 @@ model Project {
   generatedDocs    GeneratedDocument[]
   referenceMats    ReferenceMaterial[]
   artefactReviews  ArtefactReview[]
+  salesSessions    SalesSession[]
 }
 
 model UploadedFile {
@@ -177,6 +178,48 @@ model FinancialModelTemplate {
   sheets      String   // JSON structure of sheets / sections
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// Investor Meeting Memory — каждая завершённая встреча превращается в карточку
+// сделки: что важно помнить об инвесторе, возражения, следующий шаг, follow-up.
+model SalesSession {
+  id              String   @id @default(cuid())
+  projectId       String?
+  project         Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  leadId          String?   // necklink to AI Leads when meeting came from a qualified lead
+  investorName    String?
+  investorPhone   String?
+  source          String   @default("sales_assistant")  // sales_assistant / manual / audio_upload / zoom
+
+  startedAt       DateTime?
+  endedAt         DateTime?
+  transcript      String?   // full meeting transcript
+
+  // AI structured summary
+  summary           String?
+  investorInterest  String?
+  checkRange        String?
+  objections        String?  // JSON string[]
+  risks             String?  // JSON string[]
+  materialsToSend   String?  // JSON string[]
+  nextStep          String?
+  followUpMessage   String?
+  probabilityScore  Int?     // 0..100
+  investorType      String?  // dividend / growth / preipo / strategic / unknown
+  tone              String?  // hot / warm / cold
+  managerNote       String?
+
+  // AI provenance — never persist raw OpenAI text directly here in production.
+  aiProvider      String?
+  aiModel         String?
+  fellBackToMock  Boolean   @default(false)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([leadId])
 }
 
 model ReferenceMaterial {

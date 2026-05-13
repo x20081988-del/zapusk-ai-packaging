@@ -15,6 +15,7 @@ import { exportRoutes } from './routes/exportRoute.js';
 import { adminRoutes } from './routes/admin.js';
 import { reviewsRoutes } from './routes/reviews.js';
 import { salesAssistantRoutes } from './routes/salesAssistant.js';
+import { salesSessionsRoutes } from './routes/salesSessions.js';
 import { aiLeadsRoutes } from './routes/aiLeads.js';
 import { managerRoutes } from './routes/manager.js';
 
@@ -69,6 +70,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/manager', managerRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/sales-assistant', salesAssistantRoutes);
+app.use('/api/sales-sessions', salesSessionsRoutes);
 app.use('/api/ai-leads', aiLeadsRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.

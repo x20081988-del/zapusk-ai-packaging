@@ -14,6 +14,7 @@ import ProjectReview from './pages/ProjectReview';
 import Templates from './pages/Templates';
 import Guide from './pages/Guide';
 import SalesAssistant from './pages/SalesAssistant';
+import Meetings from './pages/Meetings';
 import AILeads from './pages/AILeads';
 import AdminDashboard from './pages/AdminDashboard';
 import ManagerDashboard from './pages/ManagerDashboard';
@@ -44,6 +45,7 @@ export default function App() {
       <Route path="/personal-manager" element={<PersonalManager />} />
       <Route path="/ai-leads" element={<AILeads />} />
       <Route path="/sales-assistant" element={<SalesAssistant />} />
+      <Route path="/meetings" element={<Meetings />} />
       <Route path="/manager" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
       <Route path="/manager/:view" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
       <Route path="/admin" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />

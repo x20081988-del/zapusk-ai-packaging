@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Mic, Square, Headphones, AlertTriangle, Sparkles, MessageSquare, Target,
-  Activity, ChevronRight, RefreshCw,
+  Activity, ChevronRight, RefreshCw, Save, CheckCircle2,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
-import { Select } from '../components/ui/Input';
+import { Select, Input } from '../components/ui/Input';
+import { Modal } from '../components/ui/Modal';
+import { MeetingCard } from '../components/ui/MeetingCard';
 import { api, type Project } from '../lib/api';
 import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
+import { completeMeeting, type CompleteResult } from '../lib/salesSessions';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
 interface SRResultLike { transcript: string; isFinal?: boolean }
@@ -81,6 +85,12 @@ export default function SalesAssistant() {
   const [analyzing, setAnalyzing] = useState(false);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
+  // Investor Meeting Memory: «Завершить встречу» → AI summary → сохраняем как SalesSession.
+  const [finishing, setFinishing] = useState(false);
+  const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
+  const [investorName, setInvestorName] = useState('');
+  const [investorPhone, setInvestorPhone] = useState('');
+  const startedAtRef = useRef<string | null>(null);
 
   const srRef = useRef<SRInstance | null>(null);
   const restartTimerRef = useRef<number | null>(null);
@@ -277,7 +287,47 @@ export default function SalesAssistant() {
   function start() {
     shouldListenRef.current = true;
     setPermError(null);
+    if (!startedAtRef.current) startedAtRef.current = new Date().toISOString();
     startRecognition();
+  }
+
+  async function finishMeeting() {
+    const transcriptText = fullTranscript();
+    if (transcriptText.trim().length < 10) {
+      setPermError('Слишком короткая встреча. Дайте AI хотя бы пару фраз для анализа.');
+      return;
+    }
+    stop();
+    setFinishing(true);
+    try {
+      const result = await completeMeeting({
+        projectId: projectId || null,
+        transcript: transcriptText,
+        adviceHistory: adviceHistoryRef.current.slice(-6),
+        investorName: investorName.trim() || null,
+        investorPhone: investorPhone.trim() || null,
+        startedAt: startedAtRef.current,
+        endedAt: new Date().toISOString(),
+      });
+      setFinishResult(result);
+    } catch (err) {
+      setPermError(err instanceof Error ? err.message : 'Не удалось завершить встречу');
+    } finally {
+      setFinishing(false);
+    }
+  }
+
+  function closeFinishModal() {
+    setFinishResult(null);
+    // Reset transcript so next meeting starts clean. Investor fields keep state
+    // — менеджеру обычно нужно проводить серию встреч с одним проектом.
+    setTranscript([]);
+    setInterim('');
+    setCard(null);
+    setAdviceHistory([]);
+    startedAtRef.current = null;
+    speechStatusRef.current = 'idle';
+    setSpeechStatus('idle');
   }
 
   function stop() {
@@ -366,6 +416,16 @@ export default function SalesAssistant() {
           >
             Обновить подсказку
           </Button>
+          <Button
+            variant="primary"
+            iconLeft={<Save size={14} />}
+            onClick={finishMeeting}
+            loading={finishing}
+            disabled={!hasFinalTranscript}
+            title="Превратить разговор в карточку сделки"
+          >
+            Завершить встречу
+          </Button>
           {transcript.length > 0 && !listening && (
             <Button variant="ghost" onClick={reset}>Сбросить</Button>
           )}
@@ -406,6 +466,27 @@ export default function SalesAssistant() {
             {permError}
           </div>
         )}
+      </Card>
+
+      {/* Investor identification — нужно для Meeting Memory */}
+      <Card padded className="mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Input
+            label="Инвестор (имя)"
+            placeholder="Например: Виктор Николаевич"
+            value={investorName}
+            onChange={(e) => setInvestorName(e.target.value)}
+          />
+          <Input
+            label="Телефон или контакт"
+            placeholder="+7 921 ..."
+            value={investorPhone}
+            onChange={(e) => setInvestorPhone(e.target.value)}
+          />
+        </div>
+        <p className="text-[11px] text-muted mt-2">
+          Эти поля попадут в карточку встречи. Можно оставить пустыми — система сохранит «инвестор без имени».
+        </p>
       </Card>
 
       {/* Two-column layout */}
@@ -450,6 +531,27 @@ export default function SalesAssistant() {
           {card && <AdviceCard card={card} />}
         </div>
       </div>
+
+      {/* «Завершить встречу» → AI summary modal с готовой карточкой сделки */}
+      <Modal open={finishResult !== null} onClose={closeFinishModal} title="AI сохранил контекст встречи" width="max-w-3xl">
+        {finishResult && (
+          <div className="p-5 space-y-4">
+            <div className="flex items-start gap-3 p-3 rounded-md bg-success/10 border border-success/30">
+              <CheckCircle2 size={16} className="text-success mt-0.5 shrink-0" />
+              <div className="text-sm text-primary">
+                Встреча сохранена в Память встреч. Готовы карточка сделки, next step и follow-up — можно отправлять инвестору.
+              </div>
+            </div>
+            <MeetingCard session={finishResult.session} />
+            <div className="flex justify-end gap-2 pt-2 border-t border-hairline">
+              <Button variant="ghost" onClick={closeFinishModal}>Закрыть</Button>
+              <Link to="/meetings">
+                <Button variant="secondary">Открыть все встречи</Button>
+              </Link>
+            </div>
+          </div>
+        )}
+      </Modal>
     </AppLayout>
   );
 }

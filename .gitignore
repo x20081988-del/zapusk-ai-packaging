@@ -20,3 +20,7 @@ server/prisma/migrations/dev.db
 
 # web
 web/dist
+
+# stale tsc-emit (Vite uses .tsx; .js next to .tsx shadows imports)
+web/src/**/*.js
+web/tsconfig.tsbuildinfo

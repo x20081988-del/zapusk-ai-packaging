@@ -25,6 +25,7 @@ export interface AILead {
   receivedAt: string;
   title: string;
   investor: AILeadInvestor;
+  tags: string[];
   aiSummary: string;
   whatHappened: {
     summary: string;
@@ -36,6 +37,7 @@ export interface AILead {
   audio: {
     label: string;
     durationSec: number;
+    url?: string;
   };
   communications: AILeadCommunication[];
 }
@@ -271,137 +273,221 @@ function buildStrategy(project: ProjectForAILeads | null): InvestorStrategy {
   };
 }
 
+// Real-shaped demo leads from production AI-calls feed. Names/phones/recordings
+// come from the actual aicallscloud.ru exports the team uses, so the demo
+// looks the same as the live CRM (without exposing private notes).
 function mockLeads(projectName: string): AILead[] {
   const now = Date.now();
-  const minutesAgo = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
-  return [
-    lead('lead-001', 'HOT', 7, 'Алексей Морозов', '+7 921 440-18-03', '1-5 млн ₽', 'в течение 14 дней', 'готов инвестировать', projectName, [
-      'AI заинтересовал инвестора понятной окупаемостью и контролем рисков.',
-      'Инвестор попросил короткие материалы и готов к Zoom на этой неделе.',
-      'Возражение: хочет увидеть юридическую структуру сделки.',
-    ], ['one-pager', 'финансовая модель', 'короткое резюме сделки']),
-    lead('lead-002', 'NEW', 18, 'Марина Котова', '+7 985 120-44-91', 'от 1 млн ₽', '30 дней', 'интерес к дивидендам', projectName, [
-      'Инвестор пришла из базы предпринимателей, интересуется регулярными выплатами.',
-      'AI объяснил сценарий cashflow и отправил презентацию.',
-      'Нужно уточнить, комфортен ли формат доли вместо займа.',
-    ], ['презентация', 'FAQ инвестора']),
-    lead('lead-003', 'WAITING', 34, 'Игорь Самойлов', '+7 911 803-77-12', '500 тыс - 1 млн ₽', 'после изучения', 'просит кейсы', projectName, [
-      'Инвестор запросил кейсы похожих проектов и примеры выплат.',
-      'AI отправил teaser и договорился вернуться после изучения.',
-      'Следующее касание назначено на завтра утром.',
-    ], ['тизер', 'кейсы', 'follow-up']),
-    lead('lead-004', 'CONTACTED', 58, 'Екатерина Громова', '+7 916 444-20-18', '3-7 млн ₽', 'в течение 30 дней', 'интерес к pre-IPO', projectName, [
-      'Инвестор смотрит private equity и pre-IPO сделки.',
-      'AI сфокусировал разговор на росте стоимости доли и прозрачной отчётности.',
-      'Просит Zoom с фаундером и документы по структуре владения.',
-    ], ['pitch deck', 'юридическая структура']),
-    lead('lead-005', 'HOT', 76, 'Руслан Шайхутдинов', '+7 937 220-91-54', 'от 5 млн ₽', '10 дней', 'готов к созвону', projectName, [
-      'Инвестор прямо спросил, как зайти в сделку и кто контролирует деньги.',
-      'AI отработал риск через отчётность и предложил созвон с командой.',
-      'Нужно отправить календарь и подтвердить минимальный чек.',
-    ], ['календарь', 'инвестиционное резюме']),
-    lead('lead-006', 'NEW', 93, 'Ольга Воронова', '+7 999 551-31-07', '1-2 млн ₽', '45 дней', 'интерес к AI', projectName, [
-      'Инвестор реагирует на AI/tech угол и хочет понять масштабируемость.',
-      'AI отправил ссылку на посадочную и короткое описание модели.',
-      'Следующий шаг: показать юнит-экономику и рынок.',
-    ], ['посадочная', 'one-pager']),
-    lead('lead-007', 'WAITING', 125, 'Дмитрий Егоров', '+7 903 118-09-64', 'от 1 млн ₽', 'не раньше месяца', 'сомнение по рискам', projectName, [
-      'Инвестор заинтересован, но опасается сроков возврата.',
-      'AI зафиксировал возражение и отправил блок рисков.',
-      'Если не ответит 7 дней, контакт попадёт в замену.',
-    ], ['risk FAQ']),
-    lead('lead-008', 'CONTACTED', 164, 'Анна Белова', '+7 926 480-77-30', '1-5 млн ₽', 'после Zoom', 'просит Zoom', projectName, [
-      'Инвестор попросила не присылать много файлов до разговора.',
-      'AI согласовал формат: 20 минут, экономика и next step.',
-      'Команде нужно выбрать слот.',
-    ], ['краткий teaser']),
-    lead('lead-009', 'NEW', 212, 'Павел Романов', '+7 921 770-42-70', '500 тыс - 1,5 млн ₽', '30 дней', 'не ответил', projectName, [
-      'AI дозвонился, инвестор попросил написать в мессенджер.',
-      'Отправлено короткое сообщение и презентация.',
-      'Пока нет подтверждения интереса, в работе follow-up.',
-    ], ['Telegram follow-up']),
-    lead('lead-010', 'HOT', 246, 'Сергей Ким', '+7 985 991-28-02', 'от 10 млн ₽', 'в течение недели', 'готов инвестировать', projectName, [
-      'Инвестор имеет опыт в займах и долях, интересуется контролем денег.',
-      'AI сразу перевёл разговор в структуру сделки и next step.',
-      'Нужен звонок с фаундером и финмодель.',
-    ], ['финансовая модель', 'deck']),
-    lead('lead-011', 'WAITING', 310, 'Наталья Соколова', '+7 916 008-45-90', '1-3 млн ₽', 'после материалов', 'запросила материалы', projectName, [
-      'Инвестор запросила материалы без звонка.',
-      'AI уточнил, какие критерии она будет проверять.',
-      'Отправлены презентация, FAQ и follow-up вопрос.',
-    ], ['презентация', 'FAQ', 'follow-up']),
-    lead('lead-012', 'CONTACTED', 385, 'Владимир Орлов', '+7 981 204-16-33', 'от 1 млн ₽', '60 дней', 'интерес к экспорту', projectName, [
-      'Инвестор ищет проекты с экспортным или региональным расширением.',
-      'AI показал сценарий роста и попросил подтвердить чек.',
-      'Ответ ожидается после изучения рынка.',
-    ], ['рынок', 'стратегия роста']),
-  ].map((item, index) => ({
-    ...item,
-    receivedAt: minutesAgo([7, 18, 34, 58, 76, 93, 125, 164, 212, 246, 310, 385][index] ?? 10),
-  }));
-}
+  const recording = (id: string) => `https://aicallscloud.ru/api/process-record-url?recordUrl=${id}.wav`;
 
-function lead(
-  id: string,
-  status: AILeadStatus,
-  _minutesAgo: number,
-  name: string,
-  phone: string,
-  checkRange: string,
-  decisionWindow: string,
-  profile: string,
-  projectName: string,
-  facts: string[],
-  sent: string[],
-): AILead {
-  const channelPlan: AILeadCommunication[] = [
+  type Seed = {
+    id: string;
+    status: AILeadStatus;
+    minutesAgo: number;
+    name: string;
+    phone: string;
+    check: string;
+    horizon: string;
+    profile: string;
+    tags: string[];
+    summary: string;
+    detail: string;
+    objection?: string;
+    nextStep: string;
+    sent: string[];
+    recordingId: string;
+    durationSec: number;
+  };
+
+  const seeds: Seed[] = [
     {
-      id: `${id}-call`,
-      channel: 'AI_CALL',
-      at: new Date(Date.now() - 52 * 60_000).toISOString(),
-      title: 'AI-звонок',
-      body: `AI коротко презентовал ${projectName}, проверил опыт инвестиций и комфортный чек.`,
-      outcome: 'контакт подтвердил интерес',
+      id: 'lead-victor', status: 'HOT', minutesAgo: 6,
+      name: 'Виктор Николаевич', phone: '+7 924 274-54-22',
+      check: 'от 1 млн ₽', horizon: 'в течение недели', profile: 'готов к взаимодействию',
+      tags: ['HOT', 'READY FOR CALL'],
+      summary: 'Предложение заинтересовало, готов перейти к звонку со специалистом.',
+      detail: 'Подтвердил интерес и комфортный чек. Решение готов принять в течение недели.',
+      nextStep: 'Согласовать время созвона с фаундером',
+      sent: ['короткое резюме сделки', 'инвестиционное предложение'],
+      recordingId: '661a66bd-9c5d-4e97-8294-b9edd9af9a90', durationSec: 168,
     },
     {
-      id: `${id}-tg`,
-      channel: 'TELEGRAM',
-      at: new Date(Date.now() - 41 * 60_000).toISOString(),
-      title: 'Telegram сообщение',
-      body: 'Отправлен короткий teaser и вопрос о критериях принятия решения.',
-      outcome: 'сообщение доставлено',
+      id: 'lead-tatiana', status: 'HOT', minutesAgo: 22,
+      name: 'Татьяна Андреевна', phone: '+7 914 147-13-41',
+      check: 'от 1 млн ₽', horizon: '1-2 недели', profile: 'готова к взаимодействию',
+      tags: ['HOT', 'QUALIFIED'],
+      summary: 'Подтвердила интерес. Хочет понять условия и порядок выплат до созвона.',
+      detail: 'Готова обсуждать условия в горизонте двух недель. Спрашивает про дивидендный сценарий.',
+      nextStep: 'Отправить условия и предложить Zoom',
+      sent: ['условия сделки', 'FAQ инвестора'],
+      recordingId: '11faebc3-9d1e-4256-960a-8389fc9f1e0d', durationSec: 184,
     },
     {
-      id: `${id}-follow`,
-      channel: 'FOLLOW_UP',
-      at: new Date(Date.now() - 25 * 60_000).toISOString(),
-      title: 'Follow-up',
-      body: 'AI зафиксировал next step и предложил слот для разговора с командой.',
-      outcome: 'ожидаем подтверждение',
+      id: 'lead-alexey', status: 'HOT', minutesAgo: 41,
+      name: 'Алексей', phone: '+7 908 217-23-64',
+      check: 'от 1 млн ₽', horizon: 'до 30 дней', profile: 'ждёт звонок специалиста',
+      tags: ['HOT', 'AWAITING CALL'],
+      summary: 'Интерес подтверждён, ожидает звонок специалиста для уточнения деталей сделки.',
+      detail: 'AI зафиксировал готовность. Контакт открыт к звонку без дополнительных материалов до созвона.',
+      nextStep: 'Назначить звонок специалиста в течение 24 часов',
+      sent: ['короткий teaser'],
+      recordingId: 'd2a0157d-8e93-418f-87c7-a864832665b7', durationSec: 152,
+    },
+    {
+      id: 'lead-ilya', status: 'WAITING', minutesAgo: 73,
+      name: 'Илья', phone: '+7 913 210-65-03',
+      check: '1-5 млн ₽', horizon: 'до 30 дней', profile: 'просит сначала материалы',
+      tags: ['MATERIALS REQUESTED', 'WARM'],
+      summary: 'Интерес подтверждён. Сначала хочет изучить материалы, дальше готов обсуждать.',
+      detail: 'Готов к диалогу после получения презентации и one-pager. Диапазон чека выше базового.',
+      nextStep: 'Отправить пакет материалов и follow-up через 2 дня',
+      sent: ['презентация', 'one-pager', 'follow-up план'],
+      recordingId: '71863075-3bcf-4ee1-9089-58fc7e2a8252', durationSec: 198,
+    },
+    {
+      id: 'lead-unknown-30d', status: 'WAITING', minutesAgo: 110,
+      name: 'Без имени · уточняется', phone: '+7 950 789-41-92',
+      check: 'от 1 млн ₽', horizon: 'в течение 30 дней', profile: 'просит сначала материалы',
+      tags: ['MATERIALS REQUESTED'],
+      summary: 'Заинтересовался предложением, запросил пакет материалов перед обсуждением.',
+      detail: 'Готов к дальнейшему взаимодействию после изучения материалов.',
+      nextStep: 'Отправить материалы и зафиксировать контакт-имя',
+      sent: ['презентация', 'инвестиционное предложение'],
+      recordingId: 'bec44e43-40ba-45cc-9003-de5401263d1d', durationSec: 142,
+    },
+    {
+      id: 'lead-unknown-guarantees', status: 'WAITING', minutesAgo: 148,
+      name: 'Без имени · уточняется', phone: '+7 922 540-50-92',
+      check: 'от 1 млн ₽', horizon: 'в течение 30 дней', profile: 'интересуют гарантии',
+      tags: ['GUARANTEES', 'AWAITING CALL'],
+      summary: 'Заинтересовался предложением. Хочет обсудить гарантии со специалистом.',
+      objection: 'Просит подробно разобрать гарантии и обязательства сторон.',
+      detail: 'Готов к звонку со специалистом. Базовый чек подходит, но решение зависит от ответов по защите капитала.',
+      nextStep: 'Назначить звонок и проговорить блок гарантий',
+      sent: ['блок гарантий', 'юридическое резюме'],
+      recordingId: '26721cca-9aa4-49cf-9d53-b2add193934d', durationSec: 176,
+    },
+    {
+      id: 'lead-evgeny', status: 'NEW', minutesAgo: 195,
+      name: 'Евгений', phone: '+7 912 284-15-73',
+      check: '1,5 млн ₽', horizon: 'в начале весны', profile: 'готов в ближайшее время',
+      tags: ['QUALIFIED', 'WARM'],
+      summary: 'Подтвердил чек 1,5 млн ₽. Готов к диалогу ближе к началу весны.',
+      detail: 'Срок указан конкретно — комфортно для долгосрочного планирования.',
+      nextStep: 'Поставить напоминание и обновить материалы к сезону',
+      sent: ['резюме сделки'],
+      recordingId: '27b663ac-13f1-4ea9-a055-afb92da195b4', durationSec: 158,
+    },
+    {
+      id: 'lead-mikhail', status: 'WAITING', minutesAgo: 247,
+      name: 'Михаил', phone: '+7 919 631-53-11',
+      check: '1 млн ₽', horizon: 'в начале весны', profile: 'вопросы по конфиденциальности',
+      tags: ['CONFIDENTIALITY', 'WARM'],
+      summary: 'Интерес подтверждён. Беспокоят вопросы конфиденциальности проекта.',
+      objection: 'Хочет понять, как защищена информация по проекту и его участникам.',
+      detail: 'Готов к взаимодействию после ответов по NDA и обращению с данными.',
+      nextStep: 'Отправить блок NDA и расписать конфиденциальность',
+      sent: ['NDA шаблон', 'политика обращения с данными'],
+      recordingId: '97450f75-0cf0-43f4-8df3-869b2643a0be', durationSec: 191,
+    },
+    {
+      id: 'lead-german', status: 'HOT', minutesAgo: 312,
+      name: 'Герман', phone: '+7 916 777-31-72',
+      check: '1 млн ₽', horizon: '1-2 недели', profile: 'согласовал слот на 28.02 11:00',
+      tags: ['HOT', 'SCHEDULED'],
+      summary: 'Согласовал конкретный слот для созвона: 28.02, первая половина дня, 11:00.',
+      detail: 'Один из самых горячих лидов — слот зафиксирован, чек подтверждён.',
+      nextStep: 'Подтвердить созвон 28.02 в 11:00 и подготовить материалы',
+      sent: ['календарное приглашение', 'короткое резюме сделки'],
+      recordingId: '2194b766-5848-4074-8e1b-39e7f5529c5b', durationSec: 207,
+    },
+    {
+      id: 'lead-kostroma', status: 'WAITING', minutesAgo: 388,
+      name: 'Без имени · уточняется', phone: '+7 901 197-65-31',
+      check: 'от 1 млн ₽', horizon: 'в течение 30 дней', profile: 'хочет обсудить договор',
+      tags: ['CONTRACT REVIEW', 'TIMEZONE'],
+      summary: 'Заинтересовался. Из Костромы, знает Главснаб. Хочет проговорить договор инвестирования.',
+      objection: 'Сомневается в гарантиях, требует разбор договора инвестирования.',
+      detail: 'Контактен. Учесть разницу часовых поясов +8: сейчас не в городе. Знаком с экосистемой Главснаба.',
+      nextStep: 'Отправить договор, согласовать звонок с учётом часового пояса',
+      sent: ['договор инвестирования', 'кейс Главснаба'],
+      recordingId: '58e85dc8-d2f5-4b91-8660-52ccc10ff11e', durationSec: 224,
+    },
+    {
+      id: 'lead-vitaly', status: 'NEW', minutesAgo: 456,
+      name: 'Виталий', phone: '+7 920 919-81-52',
+      check: '1 млн ₽', horizon: '1 месяц', profile: 'готов к взаимодействию',
+      tags: ['QUALIFIED'],
+      summary: 'Подтвердил интерес и базовый чек 1 млн ₽ с горизонтом одного месяца.',
+      detail: 'Стандартный профиль квалифицированного лида: чек подтверждён, срок понятен, готов общаться.',
+      nextStep: 'Отправить материалы и поставить follow-up через 5 дней',
+      sent: ['презентация', 'one-pager'],
+      recordingId: '8a56aa3b-379b-420a-993c-5b42c3120ed2', durationSec: 165,
     },
   ];
 
-  return {
-    id,
-    status,
-    receivedAt: new Date().toISOString(),
-    title: 'Новый квалифицированный лид',
-    investor: { name, phone, checkRange, decisionWindow, profile },
-    aiSummary: facts[0] ?? 'AI заинтересовал инвестора предложением проекта.',
+  return seeds.map((seed) => ({
+    id: seed.id,
+    status: seed.status,
+    receivedAt: new Date(now - seed.minutesAgo * 60_000).toISOString(),
+    title: `Квалифицированный лид · ${seed.name}`,
+    investor: {
+      name: seed.name,
+      phone: seed.phone,
+      checkRange: seed.check,
+      decisionWindow: seed.horizon,
+      profile: seed.profile,
+    },
+    tags: seed.tags,
+    aiSummary: seed.summary,
     whatHappened: {
-      summary: facts[1] ?? 'Инвестор запросил материалы и готов обсудить проект после изучения.',
-      interest: profile,
-      objections: facts[2] ? [facts[2]] : [],
-      sent,
-      nextStep: status === 'HOT' ? 'Назначить созвон с фаундером' : 'Дождаться ответа и сделать follow-up',
+      summary: seed.detail,
+      interest: seed.profile,
+      objections: seed.objection ? [seed.objection] : [],
+      sent: seed.sent,
+      nextStep: seed.nextStep,
     },
     audio: {
-      label: 'Запись AI-разговора',
-      durationSec: 140 + id.charCodeAt(id.length - 1) * 2,
+      label: `Запись AI-разговора · ${seed.name}`,
+      durationSec: seed.durationSec,
+      url: recording(seed.recordingId),
     },
-    communications: channelPlan,
-  };
+    communications: communicationsFor(seed, projectName, now),
+  }));
 }
+
+function communicationsFor(seed: { id: string; minutesAgo: number; sent: string[] }, projectName: string, now: number): AILeadCommunication[] {
+  const base = now - seed.minutesAgo * 60_000;
+  return [
+    {
+      id: `${seed.id}-call`,
+      channel: 'AI_CALL',
+      at: new Date(base).toISOString(),
+      title: 'AI-звонок',
+      body: `AI коротко презентовал ${projectName}, проверил опыт инвестиций и подтвердил комфортный чек.`,
+      outcome: 'контакт подтвердил интерес',
+    },
+    {
+      id: `${seed.id}-tg`,
+      channel: 'TELEGRAM',
+      at: new Date(base + 14 * 60_000).toISOString(),
+      title: 'Сообщение в мессенджер',
+      body: `Отправлены: ${seed.sent.join(', ')}.`,
+      outcome: 'материалы доставлены',
+    },
+    {
+      id: `${seed.id}-follow`,
+      channel: 'FOLLOW_UP',
+      at: new Date(base + 36 * 60_000).toISOString(),
+      title: 'Follow-up',
+      body: 'AI зафиксировал next step и поставил напоминание на повторное касание.',
+      outcome: 'ожидаем ответа инвестора',
+    },
+  ];
+}
+
+// Legacy lead() helper removed — mockLeads() now builds AILeads directly from
+// production-shaped seeds with real recording URLs.
 
 function score(items: boolean[]): number {
   return Math.round((items.filter(Boolean).length / items.length) * 100);

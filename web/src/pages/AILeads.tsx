@@ -33,6 +33,7 @@ import { ProgressBar } from '../components/ui/ProgressBar';
 import { Select, Textarea } from '../components/ui/Input';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { VoiceInputButton } from '../components/ui/VoiceInputButton';
+import { RecentMeetings } from '../components/ui/RecentMeetings';
 import { api, type Project } from '../lib/api';
 import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
@@ -53,6 +54,7 @@ interface AILead {
     decisionWindow: string;
     profile: string;
   };
+  tags?: string[];
   aiSummary: string;
   whatHappened: {
     summary: string;
@@ -61,7 +63,7 @@ interface AILead {
     sent: string[];
     nextStep: string;
   };
-  audio: { label: string; durationSec: number };
+  audio: { label: string; durationSec: number; url?: string };
   communications: Array<{
     id: string;
     channel: Channel;
@@ -553,12 +555,18 @@ function LiveFeed({ leads, locked }: { leads: AILead[]; locked: boolean }) {
 
 function LeadCard({ lead }: { lead: AILead }) {
   const [expanded, setExpanded] = useState(lead.status === 'HOT');
+  const tags = lead.tags ?? [];
   return (
-    <div className="rounded-lg border border-line bg-canvas/45 p-4 hover:border-ai/35 transition-colors">
+    <div className="rounded-lg border border-line bg-canvas/45 p-4 hover:border-ai/35 hover:shadow-card transition-all">
       <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <StatusBadge tone={STATUS_TONES[lead.status]} dot>{STATUS_LABELS[lead.status]}</StatusBadge>
+            {tags.filter((t) => t !== lead.status).map((tag) => (
+              <span key={tag} className="inline-flex items-center h-5 px-2 rounded-full bg-ai/8 border border-ai/25 text-[10px] uppercase tracking-[0.08em] text-ai-glow font-semibold">
+                {tag}
+              </span>
+            ))}
             <span className="text-[11px] text-muted">{relativeTime(lead.receivedAt)}</span>
             {lead.status === 'HOT' && <span className="text-[11px] text-danger font-semibold">новый лид поступил</span>}
           </div>
@@ -600,7 +608,11 @@ function LeadCard({ lead }: { lead: AILead }) {
       </div>
 
       {expanded && (
-        <div className="mt-4 border-t border-hairline pt-4">
+        <div className="mt-4 border-t border-hairline pt-4 space-y-4">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-3">История встреч с инвестором</div>
+            <RecentMeetings leadId={lead.id} limit={3} />
+          </div>
           <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-3">История коммуникации</div>
           <div className="space-y-3">
             {lead.communications.map((item) => (
@@ -626,32 +638,41 @@ function LeadCard({ lead }: { lead: AILead }) {
 }
 
 function AudioCard({ audio }: { audio: AILead['audio'] }) {
-  const [playing, setPlaying] = useState(false);
   return (
     <div className="rounded-md border border-ai/25 bg-ai/8 p-4">
       <div className="flex items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">Запись разговора</div>
-          <div className="text-sm font-semibold text-primary mt-1">{audio.label}</div>
+          <div className="text-sm font-semibold text-primary mt-1 truncate">{audio.label}</div>
           <div className="text-xs text-muted mt-1">{formatDuration(audio.durationSec)}</div>
         </div>
-        <button
-          type="button"
-          onClick={() => setPlaying((v) => !v)}
-          className="w-11 h-11 rounded-full bg-grad-ai text-canvas shadow-ai-glow inline-flex items-center justify-center"
-        >
-          {playing ? <Pause size={17} /> : <Play size={17} />}
-        </button>
+        {audio.url ? (
+          <a
+            href={audio.url}
+            target="_blank"
+            rel="noreferrer"
+            className="w-11 h-11 rounded-full bg-grad-ai text-canvas shadow-ai-glow inline-flex items-center justify-center hover:brightness-110 transition-all"
+            title="Открыть запись"
+          >
+            <Play size={17} />
+          </a>
+        ) : (
+          <button type="button" className="w-11 h-11 rounded-full bg-elevated text-muted inline-flex items-center justify-center" disabled>
+            <Pause size={17} />
+          </button>
+        )}
       </div>
-      <div className="mt-4 h-8 flex items-center gap-1">
-        {Array.from({ length: 28 }).map((_, i) => (
-          <span
-            key={i}
-            className={`w-1 rounded-full ${playing ? 'bg-ai' : 'bg-ai/35'}`}
-            style={{ height: `${8 + ((i * 7) % 20)}px` }}
-          />
-        ))}
-      </div>
+      {audio.url ? (
+        <audio controls preload="none" className="mt-3 w-full h-9" src={audio.url}>
+          Запись недоступна в этом браузере.
+        </audio>
+      ) : (
+        <div className="mt-4 h-8 flex items-center gap-1">
+          {Array.from({ length: 28 }).map((_, i) => (
+            <span key={i} className="w-1 rounded-full bg-ai/35" style={{ height: `${8 + ((i * 7) % 20)}px` }} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

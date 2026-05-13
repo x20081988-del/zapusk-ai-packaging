@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, Lock, PlayCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, Lock, Loader2, ArrowRight } from 'lucide-react';
 import { Card, CardHeader } from './Card';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
@@ -18,56 +18,77 @@ const STATUS_TONE: Record<JourneyStatus, 'neutral' | 'info' | 'ai' | 'success'> 
   done: 'success',
 };
 
+// Operating-workflow look: каждый этап — карточка с чётким номером, статусом,
+// 1-строчным описанием и одной кнопкой действия. Никаких длинных абзацев.
 export function ProjectJourney({ stages, compact }: { stages: JourneyStage[]; compact?: boolean }) {
   return (
     <Card padded>
       <CardHeader
         title="Путь проекта по платформе"
-        subtitle="От брифа и упаковки до сделок, закрытия раунда и работы с акционерами"
+        subtitle="На каком этапе сейчас проект и что нужно сделать дальше"
       />
-      <div className={compact ? 'grid grid-cols-1 md:grid-cols-2 gap-3' : 'space-y-3'}>
+      <div className={compact ? 'grid grid-cols-1 md:grid-cols-2 gap-3' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3'}>
         {stages.map((stage, index) => (
-          <div key={stage.id} className="rounded-md border border-hairline bg-canvas/45 p-3">
-            <div className="flex items-start gap-3">
-              <div className={`w-8 h-8 rounded-full border flex items-center justify-center shrink-0 ${iconShell(stage.status)}`}>
-                {iconFor(stage.status)}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-muted font-num">#{index + 1}</span>
-                  <h3 className="text-sm font-semibold text-primary">{stage.title}</h3>
-                  <StatusBadge tone={STATUS_TONE[stage.status]} dot>{STATUS_LABEL[stage.status]}</StatusBadge>
-                </div>
-                <p className="text-xs text-secondary leading-relaxed mt-1">{stage.description}</p>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 mt-3 text-[11px]">
-                  <Meta label="Ответственный" value={stage.owner} />
-                  <Meta label="Дальше" value={stage.requirement} span />
-                </div>
-              </div>
-              <Button size="sm" variant={stage.status === 'locked' ? 'ghost' : 'secondary'} disabled={stage.status === 'locked'}>
-                {stage.cta}
-              </Button>
-            </div>
-          </div>
+          <StageCard key={stage.id} stage={stage} index={index + 1} />
         ))}
       </div>
     </Card>
   );
 }
 
-function Meta({ label, value, span }: { label: string; value: string; span?: boolean }) {
+function StageCard({ stage, index }: { stage: JourneyStage; index: number }) {
+  const isLocked = stage.status === 'locked';
+  const isDone = stage.status === 'done';
   return (
-    <div className={`rounded-md border border-hairline bg-surface px-3 py-2 ${span ? 'lg:col-span-2' : ''}`}>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold">{label}</div>
-      <div className="text-xs text-primary mt-0.5 leading-snug">{value}</div>
+    <div className={`group rounded-lg border p-4 transition-all ${shellClass(stage.status)}`}>
+      <div className="flex items-start gap-3 mb-3">
+        <div className={`w-9 h-9 rounded-full border flex items-center justify-center shrink-0 ${iconShell(stage.status)}`}>
+          {iconFor(stage.status)}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[10px] text-muted font-num font-semibold">ЭТАП {index}</span>
+            <StatusBadge tone={STATUS_TONE[stage.status]} dot>{STATUS_LABEL[stage.status]}</StatusBadge>
+          </div>
+          <h3 className="text-sm font-semibold text-primary leading-snug">{stage.title}</h3>
+        </div>
+      </div>
+
+      <p className="text-xs text-secondary leading-relaxed mb-3 min-h-[2.5rem]">{stage.description}</p>
+
+      <div className="flex items-center gap-2 text-[11px] text-muted mb-3">
+        <span className="rounded-full bg-canvas/60 border border-hairline px-2 py-0.5">{stage.owner}</span>
+        {!isDone && !isLocked && (
+          <span className="flex items-center gap-1 text-primary">
+            <ArrowRight size={11} className="text-zapusk-400" />
+            <span className="font-medium">{stage.nextAction}</span>
+          </span>
+        )}
+      </div>
+
+      <Button
+        size="sm"
+        variant={isDone ? 'ghost' : isLocked ? 'ghost' : 'secondary'}
+        disabled={isLocked}
+        className="w-full"
+      >
+        {stage.cta}
+      </Button>
     </div>
   );
 }
 
+function shellClass(status: JourneyStatus): string {
+  if (status === 'done') return 'border-success/25 bg-success/4 hover:border-success/45';
+  if (status === 'in_progress') return 'border-ai/30 bg-ai/4 hover:border-ai/50';
+  if (status === 'available') return 'border-info/25 bg-canvas/40 hover:border-info/45';
+  return 'border-hairline bg-canvas/30 opacity-70';
+}
+
 function iconFor(status: JourneyStatus) {
-  if (status === 'done') return <CheckCircle2 size={15} />;
-  if (status === 'in_progress') return <PlayCircle size={15} />;
-  if (status === 'available') return <Clock3 size={15} />;
+  if (status === 'done') return <CheckCircle2 size={16} />;
+  if (status === 'in_progress') return <Loader2 size={16} className="animate-spin" />;
+  if (status === 'available') return <Clock3 size={16} />;
   return <Lock size={14} />;
 }
 

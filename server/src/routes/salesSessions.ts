@@ -1,0 +1,63 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { prisma } from '../db.js';
+import { authMiddleware } from '../auth.js';
+import {
+  completeSession,
+  persistSession,
+  listSessions,
+  getSession,
+  type CompleteSessionInput,
+} from '../services/salesSessionService.js';
+
+export const salesSessionsRoutes = Router();
+salesSessionsRoutes.use(authMiddleware);
+
+const completeSchema = z.object({
+  projectId: z.string().optional().nullable(),
+  leadId: z.string().optional().nullable(),
+  investorName: z.string().optional().nullable(),
+  investorPhone: z.string().optional().nullable(),
+  transcript: z.string().min(10, 'transcript_too_short'),
+  adviceHistory: z.array(z.unknown()).optional(),
+  startedAt: z.string().optional().nullable(),
+  endedAt: z.string().optional().nullable(),
+});
+
+// POST /api/sales-sessions/complete — analyze + persist in one call.
+// The route returns both the structured summary and the persisted record so
+// the frontend can show the summary modal immediately and link to the meeting.
+salesSessionsRoutes.post('/complete', async (req, res) => {
+  const parsed = completeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const input: CompleteSessionInput = parsed.data;
+  try {
+    const summary = await completeSession(input);
+    const session = await persistSession(input, summary);
+    res.status(201).json({ summary, session });
+  } catch (err) {
+    console.error('[sales-sessions/complete]', err instanceof Error ? err.message : err);
+    res.status(500).json({ error: 'complete_session_failed' });
+  }
+});
+
+salesSessionsRoutes.get('/', async (req, res) => {
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+  const leadId = typeof req.query.leadId === 'string' ? req.query.leadId : undefined;
+  const sessions = await listSessions({ projectId, leadId });
+  res.json({ sessions });
+});
+
+salesSessionsRoutes.get('/:id', async (req, res) => {
+  const session = await getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: 'not_found' });
+  res.json({ session });
+});
+
+salesSessionsRoutes.delete('/:id', async (req, res) => {
+  // Soft-guarded by demoGuard at app level — destructive ops blocked in demo.
+  const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: 'not_found' });
+  await prisma.salesSession.delete({ where: { id: req.params.id } });
+  res.json({ ok: true });
+});
