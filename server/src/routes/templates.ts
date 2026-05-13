@@ -13,6 +13,18 @@ templatesRoutes.get('/', async (_req, res) => {
   res.json({ templates });
 });
 
+// Sprint 15: registry endpoint — фронт получает каноничные provider/tool/
+// outputType списки одним вызовом, чтобы строить селекты и бейджи.
+templatesRoutes.get('/orchestration/registry', async (_req, res) => {
+  const { PROVIDERS, TOOLS, OUTPUT_TYPES, TEMPLATE_ORCHESTRATION } = await import('../services/aiProviders.js');
+  res.json({
+    providers: Object.values(PROVIDERS),
+    tools: Object.values(TOOLS),
+    outputTypes: Object.values(OUTPUT_TYPES),
+    defaults: TEMPLATE_ORCHESTRATION,
+  });
+});
+
 templatesRoutes.get('/financial-models/list', async (_req, res) => {
   const models = await prisma.financialModelTemplate.findMany();
   res.json({ models });
@@ -25,6 +37,14 @@ const templateSchema = z.object({
   description: z.string().optional(),
   body: z.string().trim().min(1),
   active: z.boolean().optional(),
+  // Sprint 15: orchestration metadata — optional, чтобы старые скрипты не
+  // ломались. Семантическая валидация enum'ов сделана в registry (см.
+  // services/aiProviders.ts), здесь оставляем мягкий string-приём, чтобы
+  // админ мог регистрировать новые провайдеры на лету.
+  provider: z.string().trim().min(1).optional().nullable(),
+  tool: z.string().trim().min(1).optional().nullable(),
+  model: z.string().trim().min(1).optional().nullable(),
+  outputType: z.string().trim().min(1).optional().nullable(),
 });
 
 templatesRoutes.post('/', async (req, res) => {
@@ -33,9 +53,16 @@ templatesRoutes.post('/', async (req, res) => {
   try {
     const template = await prisma.promptTemplate.create({
       data: {
-        ...parsed.data,
+        key: parsed.data.key,
+        name: parsed.data.name,
+        category: parsed.data.category,
+        body: parsed.data.body,
         description: parsed.data.description?.trim() || null,
         active: parsed.data.active ?? true,
+        provider: parsed.data.provider?.trim() || null,
+        tool: parsed.data.tool?.trim() || null,
+        model: parsed.data.model?.trim() || null,
+        outputType: parsed.data.outputType?.trim() || null,
       },
     });
     res.status(201).json({ template });
@@ -59,6 +86,13 @@ const updateSchema = z.object({
   description: z.string().optional(),
   body: z.string().trim().min(1).optional(),
   active: z.boolean().optional(),
+  // Sprint 15: orchestration fields — admin может править провайдера/инструмент
+  // прямо из Templates UI. Передача null очистит поле (если кто-то решит
+  // вернуть template в «default-orchestration» режим).
+  provider: z.string().trim().min(1).nullable().optional(),
+  tool: z.string().trim().min(1).nullable().optional(),
+  model: z.string().trim().min(1).nullable().optional(),
+  outputType: z.string().trim().min(1).nullable().optional(),
 });
 
 templatesRoutes.patch('/:id', async (req, res) => {

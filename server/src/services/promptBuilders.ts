@@ -1,5 +1,6 @@
 import type { Project, ProjectBrief, PromptTemplate } from '@prisma/client';
 import { prisma } from '../db.js';
+import { resolveOrchestration } from './aiProviders.js';
 
 export type PromptKind =
   | 'investment_summary'
@@ -155,9 +156,53 @@ export async function generatePrompt(projectId: string, kind: PromptKind, feedba
   });
   const version = (previous?.version ?? 0) + 1;
 
-  return prisma.generatedPrompt.create({
+  const generatedPrompt = await prisma.generatedPrompt.create({
     data: { projectId, kind, version, body, feedback: feedback ?? null },
   });
+
+  // Sprint 15: оставляем след в PackagingJob — какой AI должен исполнять
+  // этот промпт, какой выход ожидаем. Если template уже несёт provider/tool
+  // — используем их, иначе подтягиваем из default registry. Если ничего не
+  // нашли (custom template без orchestration) — пропускаем job, чтобы не
+  // ломать обратную совместимость.
+  const orchestration = template.provider && template.tool && template.outputType
+    ? {
+        provider: template.provider,
+        tool: template.tool,
+        model: template.model,
+        outputType: template.outputType,
+      }
+    : resolveOrchestration(kind);
+
+  if (orchestration) {
+    await prisma.packagingJob.create({
+      data: {
+        projectId,
+        templateId: template.id,
+        templateKey: template.key,
+        provider: orchestration.provider,
+        tool: orchestration.tool,
+        model: orchestration.model ?? null,
+        outputType: orchestration.outputType,
+        status: 'succeeded', // в MVP мы синхронно собираем промпт; реальный async runner — для будущего sprint
+        prompt: body,
+        resultPreview: previewFrom(body),
+        generatedPromptId: generatedPrompt.id,
+      },
+    });
+  }
+
+  return generatedPrompt;
+}
+
+function previewFrom(body: string): string {
+  // Берём первую содержательную строку, обрезаем до 200 символов — это идёт
+  // в «AI generated materials» history как короткий тизер.
+  const firstLine = body
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l.length > 0 && !l.startsWith('>') && !l.startsWith('---')) ?? '';
+  return firstLine.length > 200 ? `${firstLine.slice(0, 197)}...` : firstLine;
 }
 
 function withFeedbackHeader(body: string, feedback: string): string {

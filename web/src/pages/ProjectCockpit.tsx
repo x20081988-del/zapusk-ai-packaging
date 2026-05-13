@@ -29,6 +29,7 @@ import { RecentMeetings } from '../components/ui/RecentMeetings';
 import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 import { getBriefStatus, briefStatusTone } from '../lib/briefStatus';
+import { AIPackagingHistory } from '../components/ui/AIPackagingHistory';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -348,6 +349,16 @@ export default function ProjectCockpit() {
       {/* Память встреч: последние 3 встречи с инвесторами по этому проекту */}
       <div className="mb-6">
         <RecentMeetings projectId={id} limit={3} />
+      </div>
+
+      {/* Sprint 15: AI generated materials — аудит-трейл оркестрации. Показывает
+          какой AI и каким инструментом собрал каждый артефакт + быстрый
+          regenerate. */}
+      <div className="mb-6">
+        <AIPackagingHistory
+          projectId={id}
+          onRegenerate={(templateKey) => generatePrompt(templateKey)}
+        />
       </div>
 
       {/* READY MATERIALS */}

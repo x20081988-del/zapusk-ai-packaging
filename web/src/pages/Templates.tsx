@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react';
-import { FileCode2, Plus, Trash2 } from 'lucide-react';
+import { FileCode2, Plus, Trash2, Cpu, Wand2 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { StatusBadge } from '../components/ui/StatusBadge';
 import { TemplateCard } from '../components/ui/TemplateCard';
 import { Modal } from '../components/ui/Modal';
-import { Textarea, Input } from '../components/ui/Input';
+import { Textarea, Input, Select } from '../components/ui/Input';
 import { EmptyState } from '../components/ui/EmptyState';
 import { api, type PromptTemplate } from '../lib/api';
+import { PROVIDER_UI, TOOL_UI, OUTPUT_TYPE_UI } from '../lib/aiProviders';
 
-type TemplateDraft = Pick<PromptTemplate, 'key' | 'name' | 'category' | 'description' | 'body' | 'active'> & { id?: string };
+type TemplateDraft = Pick<
+  PromptTemplate,
+  'key' | 'name' | 'category' | 'description' | 'body' | 'active' | 'provider' | 'tool' | 'model' | 'outputType'
+> & { id?: string };
 
 const EMPTY_TEMPLATE: TemplateDraft = {
   key: '',
@@ -18,7 +23,26 @@ const EMPTY_TEMPLATE: TemplateDraft = {
   description: '',
   body: '',
   active: true,
+  provider: null,
+  tool: null,
+  model: null,
+  outputType: null,
 };
+
+// Sprint 15: option lists для select'ов в Templates UI. Берём из общего
+// registry (single source of truth), чтобы list был согласован с server-side.
+const PROVIDER_OPTIONS = [
+  { value: '', label: '— не назначен —' },
+  ...Object.entries(PROVIDER_UI).map(([value, meta]) => ({ value, label: meta.label })),
+];
+const TOOL_OPTIONS = [
+  { value: '', label: '— не назначен —' },
+  ...Object.entries(TOOL_UI).map(([value, meta]) => ({ value, label: `${meta.label} · ${PROVIDER_UI[meta.provider]?.label ?? meta.provider}` })),
+];
+const OUTPUT_TYPE_OPTIONS = [
+  { value: '', label: '— не назначен —' },
+  ...Object.entries(OUTPUT_TYPE_UI).map(([value, meta]) => ({ value, label: meta.label })),
+];
 
 export default function Templates() {
   const [templates, setTemplates] = useState<PromptTemplate[] | null>(null);
@@ -75,6 +99,12 @@ export default function Templates() {
         description: draft.description ?? '',
         body: draft.body,
         active: draft.active,
+        // Sprint 15: orchestration metadata — пустую строку трактуем как null,
+        // чтобы template вернулся в режим «использует default registry».
+        provider: draft.provider?.trim() || null,
+        tool: draft.tool?.trim() || null,
+        model: draft.model?.trim() || null,
+        outputType: draft.outputType?.trim() || null,
       };
       if (current) {
         await api.patch(`/api/templates/${current.id}`, payload);
@@ -106,11 +136,37 @@ export default function Templates() {
   }
 
   return (
-    <AppLayout title="Шаблоны заданий">
+    <AppLayout title="AI Orchestration · Шаблоны">
+      {/* Sprint 15: Templates перестали быть «библиотекой промптов» и стали
+          orchestration center. Объясняем это явно сверху страницы. */}
+      <Card padded className="mb-6" accent="ai">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-md bg-ai/15 border border-ai/30 text-ai-glow flex items-center justify-center shrink-0">
+            <Cpu size={18} />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-base font-semibold text-primary">AI Orchestration Center</h2>
+            <p className="text-xs text-secondary mt-1 leading-relaxed">
+              Каждый шаблон — это не просто текст. Это правило оркестрации: какой AI-провайдер
+              исполняет задание, каким инструментом, и какой тип артефакта получается на выходе.
+              Когда фаундер запускает Packaging Pipeline, мы используем именно эти настройки.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <StatusBadge tone="ai" dot>4 провайдера</StatusBadge>
+              <StatusBadge tone="zapusk" dot>6 инструментов</StatusBadge>
+              <StatusBadge tone="success" dot>9 типов артефактов</StatusBadge>
+              <span className="text-[11px] text-muted self-center">
+                · provider + tool + outputType хранятся прямо в шаблоне
+              </span>
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card padded>
         <CardHeader
-          title="Библиотека шаблонов заданий"
-          subtitle="Базовые шаблоны для материалов инвестора · переменные в фигурных скобках заполняются данными проекта"
+          title="Библиотека шаблонов"
+          subtitle="Каждая карточка показывает, какой AI работает и что генерирует. Переменные в {{фигурных}} заполняются данными проекта."
           action={<Button size="sm" iconLeft={<Plus size={14} />} onClick={createNew}>Создать</Button>}
         />
         {!templates ? (
@@ -148,6 +204,47 @@ export default function Templates() {
               value={draft.description ?? ''}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
             />
+
+            {/* Sprint 15: AI Orchestration mapping. 3 select'а — провайдер,
+                инструмент, тип выхода. Они привязаны к общему registry, но
+                админ может оставить «не назначен» и Pipeline сделает fallback
+                на default mapping по template.key. */}
+            <div className="rounded-md border border-ai/25 bg-ai/8 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Wand2 size={14} className="text-ai-glow" />
+                <div>
+                  <div className="text-sm font-semibold text-primary">AI Orchestration</div>
+                  <div className="text-[11px] text-muted">Какой AI исполняет шаблон и какой артефакт собирается на выходе.</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <Select
+                  label="Провайдер"
+                  options={PROVIDER_OPTIONS}
+                  value={draft.provider ?? ''}
+                  onChange={(e) => setDraft({ ...draft, provider: e.target.value || null })}
+                />
+                <Select
+                  label="Инструмент"
+                  options={TOOL_OPTIONS}
+                  value={draft.tool ?? ''}
+                  onChange={(e) => setDraft({ ...draft, tool: e.target.value || null })}
+                />
+                <Select
+                  label="Тип артефакта"
+                  options={OUTPUT_TYPE_OPTIONS}
+                  value={draft.outputType ?? ''}
+                  onChange={(e) => setDraft({ ...draft, outputType: e.target.value || null })}
+                />
+              </div>
+              <Input
+                label="Конкретная модель (опционально)"
+                hint="Например: gpt-4.1-2025-04, claude-opus-2025. Если пусто — берём дефолт провайдера."
+                value={draft.model ?? ''}
+                onChange={(e) => setDraft({ ...draft, model: e.target.value || null })}
+              />
+            </div>
+
             <Textarea
               label="Текст задания"
               hint="Используйте {{project_name}}, {{raise_amount}}, {{equity}}, {{business_summary}}, {{strengths}}, {{weaknesses}}, {{missing_data}}, {{napkin}} и т.п."

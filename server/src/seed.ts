@@ -3,14 +3,39 @@ import { SEED_TEMPLATES } from './services/templateSeeds.js';
 import { DEMO_PROJECTS, type DemoProject } from './services/demoSeeds.js';
 import { env } from './env.js';
 import { generateAllPrompts } from './services/promptBuilders.js';
+import { resolveOrchestration } from './services/aiProviders.js';
 
 async function main() {
   console.log('[seed] upserting prompt templates...');
   for (const t of SEED_TEMPLATES) {
+    // Sprint 15: проставляем orchestration metadata из единого registry. Для
+    // существующих строк это backfill (update пути обновляет поля), для
+    // новых — заранее правильная провенанс.
+    const orch = resolveOrchestration(t.key);
     await prisma.promptTemplate.upsert({
       where: { key: t.key },
-      update: { name: t.name, category: t.category, description: t.description, body: t.body },
-      create: { ...t, active: true },
+      update: {
+        name: t.name,
+        category: t.category,
+        description: t.description,
+        body: t.body,
+        ...(orch ? {
+          provider: orch.provider,
+          tool: orch.tool,
+          model: orch.model,
+          outputType: orch.outputType,
+        } : {}),
+      },
+      create: {
+        ...t,
+        active: true,
+        ...(orch ? {
+          provider: orch.provider,
+          tool: orch.tool,
+          model: orch.model,
+          outputType: orch.outputType,
+        } : {}),
+      },
     });
   }
 

@@ -355,7 +355,66 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 14 UX polish + brief logic shipped)_
+_(empty — Sprint 15 AI Orchestration shipped)_
+
+---
+
+## Sprint 15 update — 2026-05-13 — AI Orchestration: Templates как ядро
+
+Theme: **Templates перестали быть библиотекой промптов и стали orchestration center.** Каждый AI-материал теперь явно знает, какой провайдер его исполняет, каким инструментом, и какой тип артефакта получается на выходе. Packaging Pipeline читает эту информацию из шаблонов и пишет PackagingJob — аудит-трейл оркестрации, видный фаундеру в Project Cockpit.
+
+Non-goals (фикс): без live API auth flows, без Claude/Lovable API, без async queue infra, без webhook sync, без multi-agent execution, без parallel orchestration. Это architecture + UX + orchestration abstraction.
+
+### Schema (Prisma migration `template_orchestration`)
+
+- **`PromptTemplate`** дополнен 4-мя nullable полями: `provider`, `tool`, `model`, `outputType`. Nullable, чтобы custom-шаблоны без зарегистрированной оркестрации не ломали back-compat.
+- **`PackagingJob`** новый модель: `projectId`, `templateId`, `templateKey`, `provider`, `tool`, `model`, `outputType`, `status` (queued / running / succeeded / failed / mock), `prompt` (resolved body), `resultPreview` (200-char teaser), `generatedPromptId`/`generatedDocumentId` (FK на сам артефакт), `createdAt`. Индексы по `(projectId, createdAt)` и `(projectId, outputType)`.
+- `Project` получил relation `packagingJobs PackagingJob[]`.
+
+### Backend
+
+- **`server/src/services/aiProviders.ts`** — НОВЫЙ. Единый registry: `PROVIDERS` (4: openai / claude / lovable / claude_design), `TOOLS` (6: gpt-4.1 / gpt-5.5 / claude-opus / claude-code / lovable-web / claude-design-pdf), `OUTPUT_TYPES` (9: investor_summary / one_pager / pitch_deck / pitch_structure / landing / financial_model / calculator / faq / sales_assistant) + `TEMPLATE_ORCHESTRATION` мапа `templateKey → (provider, tool, model, outputType)`. `resolveOrchestration()` — fallback для шаблонов без явной metadata.
+- **`server/src/seed.ts`** — апдейтит существующие 10 seed-шаблонов с orchestration metadata из registry (upsert update path обновляет provider/tool/model/outputType). Старые БД получают backfill автоматически при следующем `db:seed:prod` (запускается на `npm start`).
+- **`server/src/services/promptBuilders.ts`** — `generatePrompt()` теперь после создания `GeneratedPrompt` пишет `PackagingJob` со снапшотом provider/tool/outputType + 200-символьным `resultPreview` (первая содержательная строка resolved body). Если в template нет провайдера и нет fallback'а в registry — job не создаётся (back-compat).
+- **`server/src/routes/templates.ts`** — `templateSchema` и `updateSchema` принимают 4 новых поля (опционально, nullable). Новый GET-эндпойнт `/api/templates/orchestration/registry` отдаёт каноничный registry для фронта.
+- **`server/src/routes/packagingJobs.ts`** — НОВЫЙ. `GET /api/packaging-jobs/project/:id` (последние 50, desc), `GET /api/packaging-jobs/:id`. Owner-check на месте.
+- **`server/src/index.ts`** — смонтирован `/api/packaging-jobs`.
+
+### Frontend
+
+- **`web/src/lib/aiProviders.ts`** — НОВЫЙ. Зеркало server registry (display labels + tone-маппинг для StatusBadge + descriptions). `providerLabel()` / `toolLabel()` / `outputTypeLabel()` / `providerTone()` / `outputTypeTone()` хелперы + `DEFAULT_TEMPLATE_ORCHESTRATION` мапа для UI fallback'а.
+- **`web/src/lib/api.ts`** — `PromptTemplate` interface дополнен 4 полями. Новый `PackagingJob` interface.
+- **`web/src/components/ui/TemplateCard.tsx`** — карточка шаблона в админке теперь показывает orchestration row: provider badge + tool badge + outputType label. Если template без metadata — fallback из registry с пометкой «по умолчанию».
+- **`web/src/pages/Templates.tsx`** — заголовок страницы переименован в «AI Orchestration · Шаблоны». Сверху hero-блок «AI Orchestration Center» с объяснением. В модалке редактирования — 3 select'а (Провайдер / Инструмент / Тип артефакта) + поле «Конкретная модель». PATCH/POST шлёт новые поля.
+- **`web/src/components/ui/ProjectMaterialCard.tsx`** — каждая карточка материала показывает provider+tool badges в header'е (берём из `DEFAULT_TEMPLATE_ORCHESTRATION` по `material.promptKind`).
+- **`web/src/components/ui/AIPackagingHistory.tsx`** — НОВЫЙ компонент. Список PackagingJob с provider/tool/outputType badges, статусом, resultPreview, временем и кнопкой «Перезапустить» (опциональный hook `onRegenerate(templateKey)`).
+- **`web/src/pages/ProjectCockpit.tsx`** — секция «AI generated materials» (компонент `AIPackagingHistory`) добавлена перед «Готовые материалы». Кнопка «Перезапустить» зовёт `generatePrompt(kind)`.
+
+### Why this matters
+
+- Пользователь больше не видит «один чат что-то генерирует». Каждый материал имеет явную atrribution: «GPT-5.5 · Investor FAQ», «Claude · Financial Model», «Lovable · Landing Page», «Claude Design · Pitch Deck». Это сильное value-prop: «Zapusk AI orchestrates different AI systems for fundraising».
+- Связи Landing ↔ OnePager ↔ PitchDeck зафиксированы в registry: и Landing, и OnePager идут через Lovable / lovable-web (та же дизайн-система, одни colors). PitchDeck PDF — Claude Design. PitchDeck web-версия — тоже Lovable. Structure (каркас слайдов) — Claude Design.
+- Financial Model pipeline: `financial` template → Claude / claude-opus → financial_model. Calculator (`calculator_spec`) → Claude / claude-code → calculator. Это явные artefact'ы, а не «один большой prompt».
+- Sales GPT (`sales_gpt`) теперь registered template с провайдером openai / gpt-4.1 / sales_assistant. Investor FAQ (`investor_faq`) — openai / gpt-5.5 / faq (reasoning-модель).
+- PackagingJob — это не запуск реальных API. Это аудит-трейл оркестрационного решения: «Pipeline решил, что этот промпт исполнит такой-то AI». Когда мы подключим реальные провайдеры (Lovable API, Claude Design API, Anthropic API), они подхватят эти строки и переключат `status: queued → running → succeeded`.
+
+### Verification
+
+- [x] `prisma migrate dev --name template_orchestration` — мигрировано на dev SQLite
+- [x] `db:seed` — backfill сработал на всех 10 seed-шаблонах
+- [x] Demo-сид прокинул `generateAllPrompts()` → создалось 30 PackagingJob (3 проекта × 10 шаблонов)
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc OK, web vite build OK (427.79 kB / 120.23 kB gzip, +10 kB к Sprint 14)
+- [ ] Production verify: после redeploy `prisma migrate deploy` применит миграцию, `db:seed:prod` backfill'ит template'ы. Проверить `GET /api/templates` (provider/tool/outputType заполнены) + `GET /api/packaging-jobs/project/{id}` (история есть).
+
+### Future integrations roadmap
+
+- **Lovable API** — когда подключим, status flow `queued → running → succeeded` будет real-time для landing/pitch/one_pager типов.
+- **Anthropic API** — financial / calculator_spec пойдут через Claude напрямую, текущий aiClient уже умеет.
+- **Claude Design** — пока заглушка; когда появится API, ходим за PDF pitch deck'ом.
+- **Async queue** — сейчас PackagingJob создаются синхронно в `generatePrompt`. Когда добавим worker, появятся реальные `queued` / `running` промежуточные состояния.
+- **Multi-agent orchestration** — Landing → OnePager → PitchDeck (Web) могут идти параллельным fork'ом одного briefing'а. Это следующий sprint.
 
 ---
 

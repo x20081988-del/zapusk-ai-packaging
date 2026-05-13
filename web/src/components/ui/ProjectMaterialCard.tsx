@@ -13,6 +13,9 @@ import { formatDate } from '../../lib/format';
 import { sanitizePublicText } from '../../lib/publicText';
 import type { ArtefactReview } from '../../lib/api';
 import type { DemoMaterial, DemoMaterialStatus } from '../../lib/demoMaterials';
+import {
+  providerLabel, toolLabel, providerTone, resolveTemplateOrchestration,
+} from '../../lib/aiProviders';
 
 interface Props {
   material: DemoMaterial;
@@ -116,6 +119,21 @@ export function ProjectMaterialCard({
               <div className="flex flex-wrap items-center gap-1.5 mb-1">
                 <StatusBadge tone={STATUS_TONES[status]} dot>{STATUS_LABELS[status]}</StatusBadge>
                 <StatusBadge tone={material.phase === 'after' ? 'ai' : 'neutral'}>v{material.version}</StatusBadge>
+                {/* Sprint 15: orchestration badges на каждом материале. Берём
+                    provider/tool из default registry по promptKind — это и
+                    есть «какой AI собрал этот материал». */}
+                {(() => {
+                  const orch = resolveTemplateOrchestration(material.promptKind);
+                  if (!orch) return null;
+                  return (
+                    <>
+                      <StatusBadge tone={providerTone(orch.provider)} dot>
+                        {providerLabel(orch.provider)}
+                      </StatusBadge>
+                      <StatusBadge tone="neutral">{toolLabel(orch.tool)}</StatusBadge>
+                    </>
+                  );
+                })()}
               </div>
               <h3 className="text-[15px] font-semibold text-primary leading-tight">{material.title}</h3>
               <p className="text-xs text-muted mt-1 leading-relaxed">{material.description}</p>

@@ -131,4 +131,31 @@ export interface PromptTemplate {
   description: string | null;
   body: string;
   active: boolean;
+
+  // Sprint 15: orchestration metadata — null для кастомных шаблонов без
+  // зарегистрированной оркестрации; единый registry на бэкенде гарантирует
+  // согласованность для seed-шаблонов.
+  provider: string | null;
+  tool: string | null;
+  model: string | null;
+  outputType: string | null;
+}
+
+// Sprint 15: каждый запуск AI-orchestrator'а пишет PackagingJob — это
+// аудит-трейл «какой AI собрал какой артефакт».
+export interface PackagingJob {
+  id: string;
+  projectId: string;
+  templateId: string | null;
+  templateKey: string;
+  provider: string;
+  tool: string;
+  model: string | null;
+  outputType: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'mock';
+  prompt: string;
+  resultPreview: string | null;
+  generatedPromptId: string | null;
+  generatedDocumentId: string | null;
+  createdAt: string;
 }

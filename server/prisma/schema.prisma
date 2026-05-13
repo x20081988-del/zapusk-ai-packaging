@@ -49,6 +49,7 @@ model Project {
   artefactReviews      ArtefactReview[]
   salesSessions        SalesSession[]
   conversationAnalyses ConversationAnalysis[]
+  packagingJobs        PackagingJob[]
 }
 
 model UploadedFile {
@@ -116,8 +117,50 @@ model PromptTemplate {
   description String?
   body        String              // template body with {{placeholders}}
   active      Boolean  @default(true)
+
+  // Sprint 15: orchestration metadata. Templates are no longer just "prompt
+  // bodies" — they declare WHICH AI provider runs them and WHAT output type
+  // they produce. The Packaging Pipeline reads these to render badges,
+  // dispatch jobs, and unify the AI orchestration story.
+  provider    String?            // openai / claude / lovable / claude_design
+  tool        String?            // gpt-4.1 / gpt-5.5 / claude-opus / lovable-web / claude-design-pdf
+  model       String?            // optional concrete model id, e.g. gpt-4.1-2025-04
+  outputType  String?            // faq / financial_model / landing / one_pager / pitch_deck / investor_summary / sales_assistant / calculator
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// Sprint 15: every time a packaging artefact is requested we record the
+// orchestration decision — which template/provider/tool produced it. This
+// is the audit trail behind the «AI generated materials» history on the
+// project cockpit.
+model PackagingJob {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  templateId   String?
+  templateKey  String              // PromptTemplate.key — мы зеркалим ключ, чтобы история не ломалась если шаблон удалили
+  provider     String              // snapshot of template.provider at job time
+  tool         String              // snapshot of template.tool
+  model        String?
+  outputType   String              // snapshot of template.outputType
+
+  status       String   @default("succeeded") // queued / running / succeeded / failed / mock
+  prompt       String              // resolved prompt body (the one we'd hand to the AI)
+  resultPreview String?            // short summary of what was produced (for the cockpit history strip)
+
+  // Pointers back to where the artefact actually lives (a GeneratedPrompt row
+  // for prompt-style outputs, a GeneratedDocument for document-style outputs).
+  // Nullable: a queued/failed job doesn't have an artefact yet.
+  generatedPromptId   String?
+  generatedDocumentId String?
+
+  createdAt    DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([projectId, outputType])
 }
 
 model GeneratedPrompt {

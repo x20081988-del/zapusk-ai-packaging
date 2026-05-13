@@ -11,6 +11,10 @@
 //
 // Each template body uses {{placeholders}} that promptBuilders.ts resolves.
 
+// Sprint 15: SeedTemplate теперь несёт orchestration metadata. Сами body /
+// name / description тот же, что был, — поле провайдера/инструмента/output
+// типа подтягивается из aiProviders.TEMPLATE_ORCHESTRATION в seed.ts, чтобы
+// единственный source-of-truth для оркестрации не дублировался.
 export interface SeedTemplate {
   key: string;
   name: string;
