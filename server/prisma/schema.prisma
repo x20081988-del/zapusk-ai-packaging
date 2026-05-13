@@ -46,8 +46,9 @@ model Project {
   generatedPrompts GeneratedPrompt[]
   generatedDocs    GeneratedDocument[]
   referenceMats    ReferenceMaterial[]
-  artefactReviews  ArtefactReview[]
-  salesSessions    SalesSession[]
+  artefactReviews      ArtefactReview[]
+  salesSessions        SalesSession[]
+  conversationAnalyses ConversationAnalysis[]
 }
 
 model UploadedFile {
@@ -220,6 +221,45 @@ model SalesSession {
 
   @@index([projectId])
   @@index([leadId])
+}
+
+// AI Conversation Intelligence — внешние записи разговоров (Zoom / Telegram /
+// диктофон / Meet / WhatsApp / телефон) превращаются в structured AI-feedback:
+// что улучшить, ошибки, что сработало, next best action, AI score.
+// Это data moat — не CRM, а AI-слой поверх инвестиционных переговоров.
+model ConversationAnalysis {
+  id                    String   @id @default(cuid())
+  projectId             String?
+  project               Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  investorName          String?
+  source                String   @default("audio_upload")
+  originalFileName      String?
+  fileSize              Int?
+  mimeType              String?
+  audioUrl              String?
+
+  transcript            String?
+  transcriptProvider    String?
+  transcriptModel       String?
+  transcriptDurationSec Float?
+
+  analysis              String?  // JSON: full structured analysis
+
+  aiScore               Int?     // 0..100 overall meeting score
+  probabilityScore      Int?     // 0..100 deal probability
+  sentiment             String?  // positive / neutral / negative
+  spinStage             String?  // S / P / I / N
+
+  aiProvider            String?
+  aiModel               String?
+  fellBackToMock        Boolean  @default(false)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([createdAt])
 }
 
 model ReferenceMaterial {

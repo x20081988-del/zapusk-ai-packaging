@@ -33,6 +33,12 @@ export const env = {
   OPENAI_MODEL_MAIN: process.env.OPENAI_MODEL_MAIN ?? process.env.OPENAI_MODEL ?? 'gpt-4o',
   OPENAI_MODEL_FAST: process.env.OPENAI_MODEL_FAST ?? 'gpt-4o-mini',
   OPENAI_MODEL_REALTIME: process.env.OPENAI_MODEL_REALTIME ?? 'gpt-4o-realtime-preview',
+
+  // Deepgram pre-recorded transcription. nova-2 supports Russian + diarization.
+  // Without a key the conversation analyzer falls back to a deterministic mock
+  // transcript so the cockpit still flows end-to-end on demo URLs.
+  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY ?? '',
+  DEEPGRAM_MODEL: process.env.DEEPGRAM_MODEL ?? 'nova-2',
 };
 
 export const isProd = env.NODE_ENV === 'production';

@@ -355,7 +355,98 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 10 changes are implemented and under verification)_
+_(empty — Sprint 11 implementation done, production deploy pending)_
+
+---
+
+## Sprint 11 update — 2026-05-13 — AI Conversation Intelligence
+
+Theme: **AI-слой поверх инвестиционных переговоров.** Не CRM. Загрузили запись или paste'нули transcript → получили транскрипцию + AI-анализ с фокусом на «что улучшить» + AI score 0..100 + 6-метричный breakdown + готовый follow-up. Накопление data moat для будущего fine-tuning.
+
+### Backend
+
+- **`ConversationAnalysis` Prisma model + migration `conversation_analysis`** — projectId (SetNull on project delete), source (audio_upload/url/paste), transcription provenance (provider/model/duration), JSON-сериализованный analysis с дублированием top-level scalars (aiScore, probabilityScore, sentiment, spinStage) для индексации, ai provenance (provider/model/fellBackToMock).
+- **`server/src/services/deepgramClient.ts`** — обёртка над Deepgram pre-recorded API. Global fetch, Bearer auth, AbortController с 90-секундным timeout. Params: `model=nova-2`, `language=ru`, `punctuate=true`, `smart_format=true`, `diarize=true`. Без SDK — нативный fetch, нулевые deps. Поддержка mp3/wav/m4a/mp4 через mime type. Mock fallback с двухspeaker-диалогом, который активирует все downstream-эвристики.
+- **`server/src/services/conversationAnalysisService.ts`** — `analyzeConversation()` через `aiClient.generateJson` с strict JSON schema (15 полей, включая breakdown из 6 метрик). System prompt явно требует фокус на mistakes, а не на summary. `ingestConversation()` — единая точка входа: audio buffer → Deepgram → analyze → persist. Heuristic mock с keyword-detection (Situation-skip, ликвидность, materials request, next step missing, конкретные цифры) для production-grade fallback.
+- **`server/src/routes/conversationAnalysis.ts`** — `POST /` (multer memoryStorage, 60 MB cap, multipart с полем `file`), `POST /text` (zod-валидация чистого transcript), `GET /` (filter by projectId), `GET /:id`, `DELETE /:id` (защищён demoGuard).
+- **`server/src/env.ts`** — `DEEPGRAM_API_KEY`, `DEEPGRAM_MODEL=nova-2` defaults.
+- **`server/src/index.ts`** — `/api/conversation-analysis` смонтирован.
+
+### Frontend
+
+- **`web/src/lib/conversationAnalysis.ts`** — типы (15 полей analysis card), API helpers (multipart upload и text-only), SCORE_LABELS, SENTIMENT_TONE/LABEL для UI.
+- **`web/src/pages/ConversationAnalysis.tsx`** — главная страница с 3 режимами ввода (Upload / Paste / URL), drag&drop с визуальным индикатором, fields для проекта + инвестора, результат с ScoreCard и 6 result blocks (Summary, What worked, Mistakes, Concerns, Materials, Next action, Follow-up с копированием), история разборов внизу с возможностью re-open.
+- **`web/src/components/ui/ConversationScoreCard.tsx`** — главный wow-блок: большая цифра aiScore (color-coded: green/orange/yellow) + sentiment badge + SPIN stage + 6 progress bars (rapport / SPIN / nextStepFixation / objectionHandling / clarity / confidence) + deal probability.
+- **`web/src/components/layout/Sidebar.tsx`** — пункт **«AI-разбор переговоров»** (Brain icon) во всех 3 ролях между AI-ассистентом и Встречами.
+- **`web/src/App.tsx`** — route `/conversation-analysis`.
+- **`web/src/pages/SalesAssistant.tsx`** — кнопка **«Загрузить запись»** в action-row слева от Start/Stop, ведёт на `/conversation-analysis`. Позволяет анализировать разговоры, которые были вне Zapusk AI.
+
+### .env.example
+
+```
+DEEPGRAM_API_KEY=
+DEEPGRAM_MODEL=nova-2
+```
+
+### Mock fallback
+
+Работает в трёх случаях: (1) нет `DEEPGRAM_API_KEY` — детерминированный двух-speaker mock-transcript из 10 реплик; (2) AI вернул не парсимый ответ — heuristic анализ по ключевым словам; (3) provider unavailable. Везде `fellBackToMock: true` явно проброшен в карточку, FE показывает warning badge с подсказкой про ENV.
+
+### Что готово под Zoom RTMS
+
+Контракт `ingestConversation()` принимает `audioBuffer | audioUrl | pastedTranscript`. RTMS-стрим можно подключить, накапливая chunks в buffer и в конце меетинга вызвать `ingestConversation({ audioBuffer })`. Schema модели уже поддерживает любую provenance через `source` field и опциональный `audioUrl`. Текущий MVP не делает realtime stream, как и просил бриф.
+
+### Что не делать сейчас (явный non-scope)
+
+- Realtime streaming, Zoom RTMS, WebRTC, websocket audio
+- CRM sync, Telegram sending, auto follow-up
+- Vector DB, embeddings, RAG
+- Call recording infrastructure (S3, persistent storage больше чем local uploads)
+
+### Какие проверки прошли
+
+- `cd server && npx tsc --noEmit` → green
+- `cd web && npx tsc --noEmit` → green
+- `npm run build` → 1636 модулей, JS 398.49 KB / gzip 112.62 KB, CSS 34.94 KB / gzip 7.18 KB
+
+### Что проверить руками после deploy
+
+1. Sidebar → «AI-разбор переговоров» — открывается `/conversation-analysis`
+2. Tab «Загрузить аудио» — drag&drop файла (mp3/wav/m4a/mp4), кнопка «Запустить AI-разбор»
+3. Tab «Вставить transcript» — paste 5-10 строк диалога → 1-3 секунды → результат
+4. Tab «Ссылка на запись» — URL → MVP сохраняет ссылку, transcript = placeholder; для полноценной транскрипции — загрузить файл
+5. Score card — большая цифра + 6 progress bars + sentiment + probability
+6. Блоки результата: «Что улучшить» (XCircle красным), «Что сработало» (CheckCircle зелёным), Возражения, Материалы, Next action, Follow-up с кнопкой «Скопировать»
+7. История внизу — открыть прошлый разбор по клику
+8. SalesAssistant → «Загрузить запись» в action-row → переход на ConversationAnalysis
+9. Если установить `DEEPGRAM_API_KEY` на Render — реальная транскрипция русской речи через `nova-2`
+10. Mock mode: без ключей всё работает с warning badge
+
+### Known risks / limitations
+
+- Audio файлы хранятся только в memory во время запроса. После анализа buffer уходит в GC. Если нужно re-listen — нужен upload в `uploads/` (одна правка в route, не сделана как «не делать infra»).
+- Deepgram free-tier — ~150 минут. Production usage потребует платного плана.
+- `OPENAI_MODEL_MAIN` теперь дефолт `gpt-4o` (исправлено в прошлом hotfix). Если в Render env явно установлен `gpt-4.1` — это валидно и работает.
+- Mock fallback на FE показывается warning-card. В production без ключей это будет видно клиенту — нужно проконтролировать env на Render.
+
+### Изменённые / добавленные файлы
+
+| Side | File | Изменение |
+|------|------|-----------|
+| schema | `prisma/schema.prisma` + migration `conversation_analysis` | new model |
+| server | `src/env.ts` | DEEPGRAM_API_KEY + DEEPGRAM_MODEL |
+| server | `src/services/deepgramClient.ts` | **new** |
+| server | `src/services/conversationAnalysisService.ts` | **new** |
+| server | `src/routes/conversationAnalysis.ts` | **new** |
+| server | `src/index.ts` | + mount /api/conversation-analysis |
+| web | `src/lib/conversationAnalysis.ts` | **new** types + helpers |
+| web | `src/pages/ConversationAnalysis.tsx` | **new** main page |
+| web | `src/components/ui/ConversationScoreCard.tsx` | **new** score visualization |
+| web | `src/components/layout/Sidebar.tsx` | + AI-разбор переговоров (3 roles) |
+| web | `src/App.tsx` | + route /conversation-analysis |
+| web | `src/pages/SalesAssistant.tsx` | + Загрузить запись button |
+| docs | `.env.example` | Deepgram block |
+| docs | `TASKS.md` | this update |
 
 ---
 

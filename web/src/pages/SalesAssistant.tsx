@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Mic, Square, Headphones, AlertTriangle, Sparkles, MessageSquare, Target,
-  Activity, ChevronRight, RefreshCw, Save, CheckCircle2,
+  Activity, ChevronRight, RefreshCw, Save, CheckCircle2, Upload,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -404,6 +404,11 @@ export default function SalesAssistant() {
               />
             </div>
           )}
+          <Link to="/conversation-analysis">
+            <Button variant="secondary" size="md" iconLeft={<Upload size={14} />} title="Загрузить запись разговора для AI-разбора">
+              Загрузить запись
+            </Button>
+          </Link>
           {listening
             ? <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop}>Остановить</Button>
             : <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start}>Начать прослушивание</Button>}

@@ -15,6 +15,7 @@ import Templates from './pages/Templates';
 import Guide from './pages/Guide';
 import SalesAssistant from './pages/SalesAssistant';
 import Meetings from './pages/Meetings';
+import ConversationAnalysis from './pages/ConversationAnalysis';
 import AILeads from './pages/AILeads';
 import AdminDashboard from './pages/AdminDashboard';
 import ManagerDashboard from './pages/ManagerDashboard';
@@ -46,6 +47,7 @@ export default function App() {
       <Route path="/ai-leads" element={<AILeads />} />
       <Route path="/sales-assistant" element={<SalesAssistant />} />
       <Route path="/meetings" element={<Meetings />} />
+      <Route path="/conversation-analysis" element={<ConversationAnalysis />} />
       <Route path="/manager" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
       <Route path="/manager/:view" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
       <Route path="/admin" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />

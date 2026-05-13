@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import {
   LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
-  MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck,
+  MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
@@ -17,6 +17,7 @@ const NAV: Record<UserRole, NavItem[]> = {
     { to: '/demo',             icon: Presentation,    label: 'Демо-кабинет' },
     { to: '/ai-leads',         icon: Radio,           label: 'AI-лиды' },
     { to: '/sales-assistant',  icon: Headphones,      label: 'AI-ассистент' },
+    { to: '/conversation-analysis', icon: Brain,     label: 'AI-разбор переговоров' },
     { to: '/meetings',         icon: ClipboardCheck,  label: 'Встречи' },
     { to: '/personal-manager', icon: MessageCircle,   label: 'Персональный менеджер' },
   ],
@@ -24,6 +25,7 @@ const NAV: Record<UserRole, NavItem[]> = {
     { to: '/manager',          icon: LayoutDashboard, label: 'Рабочий стол менеджера' },
     { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
     { to: '/manager/leads',    icon: Radio,           label: 'Новые лиды' },
+    { to: '/conversation-analysis', icon: Brain,     label: 'AI-разбор переговоров' },
     { to: '/meetings',         icon: ClipboardCheck,  label: 'Встречи' },
     { to: '/manager/meetings', icon: CalendarDays,    label: 'Календарь' },
     { to: '/manager/tasks',    icon: ClipboardList,   label: 'Задачи' },
@@ -35,6 +37,7 @@ const NAV: Record<UserRole, NavItem[]> = {
     { to: '/admin/users',      icon: Users,           label: 'Пользователи' },
     { to: '/templates',        icon: FileCode2,       label: 'Шаблоны' },
     { to: '/admin/leads',      icon: Radio,           label: 'Лиды' },
+    { to: '/conversation-analysis', icon: Brain,     label: 'AI-разбор переговоров' },
     { to: '/meetings',         icon: ClipboardCheck,  label: 'Встречи' },
     { to: '/admin/materials',  icon: PackageCheck,    label: 'Материалы' },
     { to: '/admin/settings',   icon: Settings,        label: 'Настройки' },
