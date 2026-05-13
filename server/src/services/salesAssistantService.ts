@@ -183,7 +183,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     user,
     feature: 'sales_assistant.analyze',
     modelRoute: 'main',
-    maxTokens: 1_900,
+    maxTokens: 2_400,
     temperature: 0.35,
     jsonSchema: {
       name: 'sales_assistant_card',
@@ -637,7 +637,8 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     toneShiftGuidance = 'Переходи в CLOSE: короткие, конкретные цифры и мягкий вопрос про диапазон чека.';
   }
 
-  if (hits(/подумаю|подумать|потом|позже|сейчас не готов/)) {
+  // Word-bound «потом» так, чтобы оно НЕ матчилось внутри «потому/потомок».
+  if (hits(/подумаю|подумать|\bпотом\b|\bпозже\b|сейчас не готов/)) {
     objection = 'I will think';
     stage = 'P'; tone = 'CONTROL'; control = 'LOW'; engagement = 'disengaged'; confidence = 28;
     situation = 'Инвестор уходит в «подумаю» — теряем контроль над next step.';
@@ -666,7 +667,8 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     toneShiftGuidance = 'Сбавь темп, верни в SOFT и попроси конкретику: что именно нужно понять для решения.';
   }
 
-  if (hits(/дорого|чек большой|много|сейчас не могу|не сейчас|нет таких/)) {
+  // «много» word-bound, иначе матчит «многое/многие/немного».
+  if (hits(/дорого|чек большой|\bмного\b|сейчас не могу|не сейчас|нет таких/)) {
     objection = 'Too expensive / not now';
     stage = 'N'; tone = 'CLOSE'; control = 'MEDIUM'; engagement = 'passive'; confidence = 35;
     situation = 'Инвестор не проходит по чеку. Не дави — перенацель на комфортный диапазон.';
