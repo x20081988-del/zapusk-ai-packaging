@@ -1,6 +1,8 @@
 import type { Project, ProjectBrief, PromptTemplate } from '@prisma/client';
 import { prisma } from '../db.js';
 import { resolveOrchestration } from './aiProviders.js';
+import { claudeGenerateText, isClaudeConfigured } from '../ai/providers/claude.js';
+import { createLovableApp, isLovableConfigured } from './lovableClient.js';
 
 export type PromptKind =
   | 'investment_summary'
@@ -175,7 +177,11 @@ export async function generatePrompt(projectId: string, kind: PromptKind, feedba
     : resolveOrchestration(kind);
 
   if (orchestration) {
-    await prisma.packagingJob.create({
+    // Sprint 17: создаём PackagingJob со status='queued', потом dispatch'им
+    // на реальный provider client. Если ключа нет — provider возвращает mock
+    // с понятным errorCode, и мы помечаем job 'mock'. Если call упал —
+    // 'failed' + errorCode. Это синхронный flow, без очередей.
+    const job = await prisma.packagingJob.create({
       data: {
         projectId,
         templateId: template.id,
@@ -184,15 +190,178 @@ export async function generatePrompt(projectId: string, kind: PromptKind, feedba
         tool: orchestration.tool,
         model: orchestration.model ?? null,
         outputType: orchestration.outputType,
-        status: 'succeeded', // в MVP мы синхронно собираем промпт; реальный async runner — для будущего sprint
+        status: 'queued',
         prompt: body,
         resultPreview: previewFrom(body),
         generatedPromptId: generatedPrompt.id,
       },
     });
+
+    // Fire provider in-process. Не блокируем return фронту, но дожидаемся
+    // результата — для текущего MVP это OK, генерация занимает 5-30 сек.
+    // Будущий sprint: вынести в worker и переключить status через polling.
+    await dispatchToProvider({
+      jobId: job.id,
+      projectId,
+      template,
+      orchestration,
+      promptBody: body,
+    });
   }
 
   return generatedPrompt;
+}
+
+interface DispatchArgs {
+  jobId: string;
+  projectId: string;
+  template: PromptTemplate;
+  orchestration: { provider: string; tool: string; model: string | null; outputType: string };
+  promptBody: string;
+}
+
+// Sprint 17: оркестратор реальных provider-вызовов поверх PackagingJob.
+// Каждый provider обновляет одну строку: status / previewUrl / resultJson /
+// errorCode / completedAt. Никаких новых таблиц.
+async function dispatchToProvider({ jobId, projectId, template, orchestration, promptBody }: DispatchArgs): Promise<void> {
+  try {
+    if (orchestration.provider === 'claude') {
+      await runClaudeJob({ jobId, template, orchestration, promptBody });
+      return;
+    }
+    if (orchestration.provider === 'lovable') {
+      await runLovableJob({ jobId, projectId, template, orchestration, promptBody });
+      return;
+    }
+    // openai / claude_design — пока без реального вызова из PackagingPipeline.
+    // openai используется sales-assistant / conversation-analysis напрямую;
+    // claude_design не имеет public API. Помечаем job 'succeeded' с
+    // resultPreview из prompt body — это совместимо с Sprint 15 поведением.
+    await prisma.packagingJob.update({
+      where: { id: jobId },
+      data: {
+        status: 'succeeded',
+        completedAt: new Date(),
+      },
+    });
+  } catch (err) {
+    // Никогда не падаем на фронт — оркестратор всегда оставляет job в
+    // финальном состоянии. errorMessage уже humanized, без секретов.
+    const message = err instanceof Error ? err.message : 'unknown';
+    console.warn(`[packaging.dispatch] job ${jobId} crashed: ${message}`);
+    await prisma.packagingJob.update({
+      where: { id: jobId },
+      data: {
+        status: 'failed',
+        errorCode: 'dispatcher_crash',
+        errorMessage: 'Внутренняя ошибка оркестратора. Повторите запуск.',
+        completedAt: new Date(),
+      },
+    });
+  }
+}
+
+async function runClaudeJob({
+  jobId, template, orchestration, promptBody,
+}: Omit<DispatchArgs, 'projectId'>): Promise<void> {
+  if (!isClaudeConfigured()) {
+    await prisma.packagingJob.update({
+      where: { id: jobId },
+      data: {
+        status: 'mock',
+        resultPreview: previewFrom(promptBody),
+        errorCode: 'anthropic_key_missing',
+        errorMessage: 'Claude не настроен на инстансе — показан детерминированный fallback из промпта.',
+        completedAt: new Date(),
+      },
+    });
+    return;
+  }
+
+  const result = await claudeGenerateText({
+    feature: `packaging.${template.key}`,
+    system: 'Ты — Zapusk AI-аналитик. Готовишь инвестиционные материалы (финмодель, калькулятор, структуру слайдов). Отвечай Markdown, без вступительных фраз вроде «вот ваш ответ».',
+    user: promptBody,
+    model: template.model ?? orchestration.model ?? undefined,
+    maxTokens: 4_000,
+  });
+
+  if (result.fellBackToMock) {
+    await prisma.packagingJob.update({
+      where: { id: jobId },
+      data: {
+        status: 'mock',
+        resultPreview: previewFrom(promptBody),
+        errorCode: result.errorCode,
+        errorMessage: result.errorMessage,
+        completedAt: new Date(),
+      },
+    });
+    return;
+  }
+
+  // Реальный результат: сохраняем preview + полный текст в resultJson.
+  // resultJson — это просто wrapper { text, model, tokens } для аудита.
+  const preview = result.text.split('\n').map((l) => l.trim()).find((l) => l.length > 0 && !l.startsWith('#')) ?? result.text;
+  await prisma.packagingJob.update({
+    where: { id: jobId },
+    data: {
+      status: 'succeeded',
+      model: result.model,
+      resultPreview: preview.length > 240 ? `${preview.slice(0, 237)}...` : preview,
+      resultJson: JSON.stringify({
+        text: result.text,
+        model: result.model,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      }),
+      completedAt: new Date(),
+    },
+  });
+}
+
+async function runLovableJob({
+  jobId, projectId, template, promptBody,
+}: DispatchArgs): Promise<void> {
+  // Достаём human-readable имя проекта для Lovable metadata.
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { name: true },
+  });
+
+  const result = await createLovableApp({
+    prompt: promptBody,
+    metadata: {
+      projectId,
+      templateKey: template.key,
+      outputType: template.outputType ?? 'landing',
+      projectName: project?.name,
+    },
+  });
+
+  const status = result.status === 'mock' ? 'mock'
+    : result.status === 'failed' ? 'failed'
+    : result.status === 'running' ? 'running'
+    : 'succeeded';
+
+  await prisma.packagingJob.update({
+    where: { id: jobId },
+    data: {
+      status,
+      providerJobId: result.providerJobId,
+      previewUrl: result.previewUrl,
+      resultUrl: result.projectUrl,
+      resultJson: result.raw ? JSON.stringify(result.raw) : null,
+      resultPreview: result.previewUrl
+        ? `Landing готов · ${result.previewUrl}`
+        : status === 'running'
+          ? 'Lovable собирает страницу — через 1-2 минуты появится preview.'
+          : previewFrom(promptBody),
+      errorCode: result.errorCode,
+      errorMessage: result.errorMessage,
+      completedAt: status === 'running' ? null : new Date(),
+    },
+  });
 }
 
 function previewFrom(body: string): string {

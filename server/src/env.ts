@@ -25,7 +25,12 @@ export const env = {
   AI_PROVIDER: (process.env.AI_PROVIDER ?? 'mock') as 'anthropic' | 'openai' | 'mock',
   AI_LOG_USAGE: truthy(process.env.AI_LOG_USAGE),
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
-  ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-7',
+  // Sprint 17: разделили на MAIN / FAST по аналогии с OpenAI. ANTHROPIC_MODEL
+  // оставлен как back-compat alias для существующих deployment'ов.
+  ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-1',
+  ANTHROPIC_MODEL_MAIN: process.env.ANTHROPIC_MODEL_MAIN ?? process.env.ANTHROPIC_MODEL ?? 'claude-opus-4-1',
+  ANTHROPIC_MODEL_FAST: process.env.ANTHROPIC_MODEL_FAST ?? 'claude-sonnet-4-5',
+
   OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? '',
   // OPENAI_MODEL is kept as a backward-compatible alias for older deploys.
   // Defaults must be real model names — placeholders like "gpt-5.5" return
@@ -39,6 +44,11 @@ export const env = {
   // transcript so the cockpit still flows end-to-end on demo URLs.
   DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY ?? '',
   DEEPGRAM_MODEL: process.env.DEEPGRAM_MODEL ?? 'nova-2',
+
+  // Sprint 17: Lovable API для генерации landing / one-pager / pitch_deck (web).
+  // Если ключа нет — PackagingPipeline возвращает mock preview URL.
+  LOVABLE_API_KEY: process.env.LOVABLE_API_KEY ?? '',
+  LOVABLE_API_BASE_URL: process.env.LOVABLE_API_BASE_URL ?? 'https://api.lovable.dev',
 };
 
 export const isProd = env.NODE_ENV === 'production';

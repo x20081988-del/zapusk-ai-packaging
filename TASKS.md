@@ -355,7 +355,86 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 15 AI Orchestration shipped)_
+_(empty — Sprint 17 Real AI Provider Integrations shipped)_
+
+---
+
+## Sprint 17 update — 2026-05-13 — Real AI Provider Integrations
+
+Theme: **Templates → Provider → PackagingJob теперь идут до реальных API.** Поверх orchestration layer из Sprint 15 подключены три реальных provider-клиента: Deepgram (транскрибация), Claude (Anthropic Messages API для financial / calculator_spec), Lovable (landing / one_pager / pitch_deck web). Без ключа каждый клиент честно возвращает `status='mock'` + `errorCode` — UX flow не блокируется.
+
+Non-goals (фикс): без async queue, без workers, без webhook'ов, без XLSX/PDF export, без Zoom RTMS, без multi-agent parallel execution. Это синхронные fetch'и с timeout + 1 retry на transient errors.
+
+### Schema (migration `packaging_job_provider_result`)
+
+- `PackagingJob` дополнен полями: `providerJobId`, `previewUrl`, `resultUrl`, `resultJson`, `errorCode`, `errorMessage`, `completedAt`. Все nullable — старые записи не ломаются.
+
+### Backend
+
+- **`server/src/env.ts`** — добавлены `ANTHROPIC_MODEL_MAIN=claude-opus-4-1`, `ANTHROPIC_MODEL_FAST=claude-sonnet-4-5`, `LOVABLE_API_KEY`, `LOVABLE_API_BASE_URL=https://api.lovable.dev`. `ANTHROPIC_MODEL` оставлен как back-compat alias.
+- **`server/src/ai/providers/claude.ts`** — НОВЫЙ. Standalone Anthropic Messages client (`claudeGenerateText` / `claudeGenerateJson`). Не зависит от `env.AI_PROVIDER` — используется per-template из Packaging Pipeline. Timeout 45s, 1 retry на transient errors (429, 5xx, network/abort). НЕ повторяет 401/403/400. Structured `classifyError()` возвращает короткий `errorCode` без секретов. `logUsage()` пишет одну JSON-строку с latency + tokens, без ключей (только если `AI_LOG_USAGE=true`).
+- **`server/src/services/lovableClient.ts`** — НОВЫЙ. `createLovableApp({ prompt, metadata })` → POST `{LOVABLE_API_BASE_URL}/projects` с `{ prompt, name, metadata: { source: 'zapusk-ai', zapusk_project_id, template_key, output_type } }`. Парсит ответ best-effort: `id` / `preview_url` / `project_url` / `status`. Если ответ другой формы — мы выживаем (берём первое непустое поле). Без `LOVABLE_API_KEY` → mock preview URL `https://zapusk.tech/demo/{templateKey}?project={slug}`.
+- **`server/src/services/promptBuilders.ts`** — добавлен `dispatchToProvider()`. После создания `PackagingJob{status:'queued'}` он смотрит на `orchestration.provider` и:
+  - `claude` → `claudeGenerateText` → сохраняет результат в `resultPreview` (240 char first line) и полный текст в `resultJson` (`{ text, model, inputTokens, outputTokens }`)
+  - `lovable` → `createLovableApp` → сохраняет `providerJobId`, `previewUrl`, `resultUrl`, raw response в `resultJson`
+  - `openai` / `claude_design` → status=`succeeded` без реального вызова (Sprint 15 совместимое поведение). OpenAI используется напрямую sales-assistant'ом и conversation-analysis'ом.
+  - Если ключа провайдера нет → status=`mock`, `errorCode` объясняет что именно.
+  - Если упало внутри dispatcher'а → status=`failed` + `dispatcher_crash`, в обоих случаях `completedAt` проставлен.
+- **`server/src/services/deepgramClient.ts`** — без изменений; уже production-ready с Sprint 11. mp3/wav/m4a/mp4 через `mimeType` header, ru-language, punctuation, smart_format, diarization, 90s timeout, deterministic fallback.
+- **`server/src/index.ts`** `/health` дополнен блоком `integrations: { openai, anthropic, deepgram, lovable }` — booleans без секретов. Старый `ai.*` блок оставлен для back-compat.
+
+### Frontend
+
+- **`web/src/lib/api.ts`** — `PackagingJob` interface дополнен `providerJobId / previewUrl / resultUrl / resultJson / errorCode / errorMessage / completedAt`.
+- **`web/src/components/ui/AIPackagingHistory.tsx`** — каждая строка job'а теперь:
+  - Показывает `completedAt ?? createdAt` (когда провайдер реально закончил)
+  - Если есть `previewUrl` → кнопка «Открыть результат» (target=blank). Variant `ai` для succeeded, `secondary` для mock.
+  - Если есть `errorMessage` — баннер под строкой. Client видит обезличенное «AI временно недоступен — показан демонстрационный результат». Admin/manager видит точный `errorMessage` от провайдера.
+  - `errorCode` (моно-шрифт, warning) виден только admin/manager — для ops-диагностики.
+
+### Why this matters
+
+- Когда фаундер запускает «Сформировать комплект материалов» с реальным `LOVABLE_API_KEY` на инстансе, в «AI generated materials» появляется кнопка «Открыть результат» с реальным preview URL'ом из Lovable. Это видимая разница между mock-режимом и подключённой инфраструктурой.
+- Provider abstraction Sprint 15 (Templates с provider/tool/outputType) теперь имеет рабочее «низ» — реальные API через unified dispatcher. Подключение нового provider'а (например, Claude Design / Replicate / Runware) — это добавление одной функции в `dispatchToProvider()` + один новый client-файл.
+- Безопасность ключей: ни Claude SDK errors, ни Lovable raw responses никогда не попадают в `console.warn` целиком — только `errorCode` и первые 240 символов body. `logUsage()` пишет JSON только если `AI_LOG_USAGE=true`.
+
+### Production rollout — что настроить вручную в Render
+
+Добавить env vars в Render dashboard (Service → Environment):
+- `ANTHROPIC_API_KEY` — получить на https://console.anthropic.com/settings/keys
+- `ANTHROPIC_MODEL_MAIN` (опционально) — default `claude-opus-4-1`
+- `ANTHROPIC_MODEL_FAST` (опционально) — default `claude-sonnet-4-5`
+- `DEEPGRAM_API_KEY` — https://console.deepgram.com/
+- `LOVABLE_API_KEY` — https://lovable.dev/settings/api (если Lovable экспонирует API)
+- `LOVABLE_API_BASE_URL` (опционально) — default `https://api.lovable.dev`
+
+После сохранения Render автоматически redeploy'ит. `npm start` → `start:prod` → `prisma migrate deploy` применит `packaging_job_provider_result` миграцию идемпотентно.
+
+Проверить: `curl https://zapusk-ai.tech/health | jq '.integrations'` — все 4 должны вернуть `true` после установки ключей.
+
+### Verification
+
+- [x] `prisma migrate dev --name packaging_job_provider_result` — миграция применена
+- [x] `db:seed` — demo-проекты прогоняют generatePrompt: claude / lovable templates получают `status='mock'` с правильным `errorCode` (так как dev без ключей)
+- [x] Lovable mock возвращает `https://zapusk.tech/demo/{templateKey}?project={slug}` — UI показывает кнопку «Открыть результат» с этой ссылкой
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc + web vite OK
+- [ ] Production verify: `curl /health | jq '.integrations'` показывает текущий уровень конфигурации; запустить generation для `financial` под admin'ом → строка в `/api/packaging-jobs/project/{id}` должна иметь `status='mock'` если ключа нет / `status='succeeded'` + `resultJson` с реальным Claude текстом если ключ установлен.
+
+### Known limitations
+
+- Lovable API контракт не задокументирован публично — реализация best-effort. Если реальный endpoint вернёт другие имена полей (`live_url` вместо `preview_url`, etc.), мы парсим до 4 алиасов; при несовпадении result сохранится в `resultJson` и не сломает UI.
+- Generation сейчас синхронный (in-process). Долгие job'ы (>30s для Lovable, >45s для Claude) timeout'ят и попадают в `status='mock'` или `'failed'`. Async queue — следующий sprint.
+- `claude_design` (pitch_structure, cloud_design) пока без реального provider'а — Anthropic не экспонирует Claude Design API. Помечаются `status='succeeded'` с body промпта в `resultPreview`.
+
+---
+
+## Sprint 16 update — 2026-05-13 — скрытие AI vendor names от client UI
+
+Theme: фаундер не должен видеть «OpenAI / GPT-5.5 / Claude / Lovable / Deepgram» — это admin-уровень информации, упоминания вендоров размывают позиционирование «Zapusk AI оркестрирует AI стек».
+
+Role-gate подход через `canSeeAIVendors(role)`: client → generic «AI Reasoning / AI Web Studio / AI Finance / AI Design / AI Calculator»; admin/manager → полная provenance. Затронуто: `lib/aiProviders.ts`, `ui/AIPackagingHistory.tsx`, `ui/ProjectMaterialCard.tsx`, `pages/SalesAssistant.tsx`, `pages/ConversationAnalysis.tsx`. Admin-only routes (`/templates`, `/admin/*`) сохранили полные labels.
 
 ---
 

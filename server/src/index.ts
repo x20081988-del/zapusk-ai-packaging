@@ -50,23 +50,38 @@ const candidates = [
 ];
 const webDistPath = candidates.find((p): p is string => Boolean(p) && fs.existsSync(path.join(p, 'index.html'))) ?? null;
 
-app.get('/health', (_req, res) => res.json({
-  ok: true,
-  ts: Date.now(),
-  demo: env.DEMO_MODE,
-  env: env.NODE_ENV,
-  spaReady: Boolean(webDistPath),
-  spaPath: webDistPath,
-  // AI configuration diagnostic — never expose key values, only presence
-  // booleans. Lets ops verify Render env without dashboard access:
-  //   curl https://<host>/health | jq '.ai'
-  ai: {
-    provider: env.AI_PROVIDER,
-    openaiKeyConfigured: Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 10),
-    anthropicKeyConfigured: Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 10),
-    openaiModelMain: env.OPENAI_MODEL_MAIN,
-  },
-}));
+app.get('/health', (_req, res) => {
+  // Sprint 17: integrations booleans — `curl /health | jq '.integrations'`
+  // показывает ops какие реальные provider'ы сконфигурированы, без секретов.
+  const openaiConfigured = Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 10);
+  const anthropicConfigured = Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 10);
+  const deepgramConfigured = Boolean(env.DEEPGRAM_API_KEY && env.DEEPGRAM_API_KEY.length > 10);
+  const lovableConfigured = Boolean(env.LOVABLE_API_KEY && env.LOVABLE_API_KEY.length > 6 && env.LOVABLE_API_BASE_URL);
+
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    demo: env.DEMO_MODE,
+    env: env.NODE_ENV,
+    spaReady: Boolean(webDistPath),
+    spaPath: webDistPath,
+    // Legacy ai block — оставляем для обратной совместимости c существующими
+    // диагностическими скриптами (см. Sprint 11.1 hotfix).
+    ai: {
+      provider: env.AI_PROVIDER,
+      openaiKeyConfigured: openaiConfigured,
+      anthropicKeyConfigured: anthropicConfigured,
+      openaiModelMain: env.OPENAI_MODEL_MAIN,
+    },
+    // Sprint 17: новый блок — все 4 интеграции одним взглядом.
+    integrations: {
+      openai: openaiConfigured,
+      anthropic: anthropicConfigured,
+      deepgram: deepgramConfigured,
+      lovable: lovableConfigured,
+    },
+  });
+});
 
 app.use('/uploads', express.static(path.resolve(env.UPLOADS_DIR)));
 

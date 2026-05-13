@@ -157,6 +157,18 @@ model PackagingJob {
   generatedPromptId   String?
   generatedDocumentId String?
 
+  // Sprint 17: real-provider result fields. Заполняются после реального вызова
+  // Claude / Lovable / Deepgram. Если ключ провайдера отсутствует — остаются
+  // null, status переключается в 'mock', и UI рендерит детерминированный
+  // fallback (resultPreview).
+  providerJobId String?              // внешний id job'а у провайдера (Lovable вернёт свой id)
+  previewUrl    String?              // ссылка на preview артефакта (Lovable preview URL)
+  resultUrl     String?              // ссылка на сам артефакт (Lovable project URL / pdf download)
+  resultJson    String?              // полный JSON ответа провайдера (для аудита)
+  errorCode     String?              // короткий код ошибки если status='failed' (НЕ содержит ключей)
+  errorMessage  String?              // одно-строчное сообщение пользователю
+  completedAt   DateTime?            // когда провайдер вернул результат
+
   createdAt    DateTime @default(now())
 
   @@index([projectId, createdAt])

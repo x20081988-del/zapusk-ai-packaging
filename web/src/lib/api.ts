@@ -143,6 +143,8 @@ export interface PromptTemplate {
 
 // Sprint 15: каждый запуск AI-orchestrator'а пишет PackagingJob — это
 // аудит-трейл «какой AI собрал какой артефакт».
+// Sprint 17: добавлены provider-result поля (previewUrl, resultUrl,
+// providerJobId, errorCode, errorMessage, completedAt, resultJson).
 export interface PackagingJob {
   id: string;
   projectId: string;
@@ -157,5 +159,13 @@ export interface PackagingJob {
   resultPreview: string | null;
   generatedPromptId: string | null;
   generatedDocumentId: string | null;
+  // Sprint 17: real-provider result fields
+  providerJobId: string | null;
+  previewUrl: string | null;
+  resultUrl: string | null;
+  resultJson: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  completedAt: string | null;
   createdAt: string;
 }

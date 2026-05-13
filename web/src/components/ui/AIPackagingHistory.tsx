@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, ChevronRight, Clock, Cpu, RefreshCw } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronRight, Clock, Cpu, ExternalLink, RefreshCw } from 'lucide-react';
 import { Card, CardHeader } from './Card';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
@@ -119,25 +119,57 @@ export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
                   <StatusBadge tone={outputTypeTone(job.outputType)} dot>{outputTypeLabel(job.outputType)}</StatusBadge>
                   <StatusBadge tone={STATUS_TONE[job.status]} dot>{STATUS_LABEL[job.status]}</StatusBadge>
                 </div>
-                <div className="text-sm text-primary leading-snug truncate">
+                <div className="text-sm text-primary leading-snug line-clamp-2">
                   {job.resultPreview || job.templateKey}
                 </div>
-                <div className="text-[11px] text-muted mt-1 flex items-center gap-2">
+                <div className="text-[11px] text-muted mt-1 flex items-center gap-2 flex-wrap">
                   <Clock size={11} />
-                  {formatTime(job.createdAt)}
+                  {formatTime(job.completedAt ?? job.createdAt)}
                   {showVendors && job.model && <span className="font-mono">· {job.model}</span>}
+                  {/* Sprint 17: errorCode виден admin/manager на failed/mock job'ах
+                      — нужен для ops-диагностики, без секретов наружу. */}
+                  {showVendors && job.errorCode && (
+                    <span className="flex items-center gap-1 text-warning">
+                      <AlertTriangle size={11} />
+                      <span className="font-mono">{job.errorCode}</span>
+                    </span>
+                  )}
                 </div>
+                {/* Sprint 17: client-facing error message без секретов. Показывается
+                    всем ролям если provider вернул human-readable сообщение
+                    (например, «LOVABLE_API_KEY не настроен — показан mock preview»). */}
+                {job.errorMessage && (job.status === 'failed' || job.status === 'mock') && (
+                  <div className="mt-1.5 text-[11px] text-warning leading-snug">
+                    {showVendors ? job.errorMessage : 'AI временно недоступен — показан демонстрационный результат.'}
+                  </div>
+                )}
               </div>
-              {onRegenerate && job.status !== 'queued' && job.status !== 'running' && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  iconRight={<ChevronRight size={12} />}
-                  onClick={() => onRegenerate(job.templateKey)}
-                >
-                  Перезапустить
-                </Button>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Sprint 17: если provider вернул previewUrl (Lovable landing,
+                    Claude Design pdf, ...) — главная CTA-кнопка ведёт на сам
+                    результат, а не на «перезапустить». */}
+                {job.previewUrl && (
+                  <a href={job.previewUrl} target="_blank" rel="noreferrer">
+                    <Button
+                      size="sm"
+                      variant={job.status === 'mock' ? 'secondary' : 'ai'}
+                      iconRight={<ExternalLink size={12} />}
+                    >
+                      Открыть результат
+                    </Button>
+                  </a>
+                )}
+                {onRegenerate && job.status !== 'queued' && job.status !== 'running' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    iconRight={<ChevronRight size={12} />}
+                    onClick={() => onRegenerate(job.templateKey)}
+                  >
+                    Перезапустить
+                  </Button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
