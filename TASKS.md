@@ -355,7 +355,38 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 12 AI Sales Assistant mini-brief shipped)_
+_(empty — Sprint 13 AI Sales Assistant emotional layer shipped)_
+
+---
+
+## Sprint 13 update — 2026-05-13 — AI Sales Assistant emotional layer
+
+Theme: **Эмоциональная динамика поверх structured mini-brief.** AI co-pilot теперь чувствует не только текст, но и психологию сделки: в каком состоянии инвестор, какая температура диалога, куда движется momentum, ПОЧЕМУ инвестор так отвечает, что может сломать сделку прямо сейчас и как изменить тон. Это переход от «хорошего sales-скрипта» к «он понимает переговоры».
+
+Non-goals (фикс): без sentiment ML pipeline, без embeddings, без vector memory, без realtime voice emotion, без Zoom RTMS, без CRM, без notifications, без tasks. Только эвристический + GPT-reasoning слой поверх существующего `/api/sales-assistant/analyze`.
+
+### Backend
+
+- **`server/src/ai/salesAssistantPrompt.ts`** — добавлен раздел «🫀 ЭМОЦИОНАЛЬНЫЙ СЛОЙ»: явные определения `investorState` (8 значений: OPEN/CURIOUS/SKEPTICAL/DEFENSIVE/ENGAGED/RATIONALIZING/READY/DISCONNECTED), `conversationTemperature` (COLD/WARM/HOT), `momentum` (POSITIVE/NEUTRAL/NEGATIVE) + примеры объяснений для `emotionalState`, `whyBehavior`, `momentumReason`, `emotionalRisks`, `toneShiftGuidance`. ENGAGEMENT detection расширен расширенной эвристикой (длина ответов, встречные вопросы, конкретика, эмоциональные слова, защитные реакции, уход в «подумаю»). JSON envelope расширен с 18 до 26 полей. Новый запрет в `🚫 ЗАПРЕЩЕНО`: «не игнорировать эмоциональный сигнал ради «правильного» SPIN-хода».
+- **`server/src/services/salesAssistantService.ts`** — `AssistantCard` interface дополнен 8 полями. Новые типы `InvestorState`, `Momentum`, `ConversationTemperature`. `SALES_ASSISTANT_RESPONSE_SCHEMA` обновлён в strict mode с required для каждого нового поля. Новые normalizers (`normalizeInvestorState`, `normalizeMomentum`, `normalizeTemperature`) + defaults (`defaultEmotionalState`, `defaultWhyBehavior`, `defaultMomentumReason`, `defaultToneShift`) для graceful degradation если AI вернул пустоту. `maxTokens` поднят с 1400 до 1900. Heuristic mock расширен per-scenario: каждый детектор (расскажите / проблема / упустил / деньги / подумаю / дорого / риск) теперь устанавливает investorState + momentum + temperature + emotionalState + whyBehavior + momentumReason + emotionalRisks + toneShiftGuidance соответствующие сценарию. `avoidRepeatedAdvice` тоже шифтит эмоциональный контекст при переходе SPIN-этапа.
+
+### Frontend
+
+- **`web/src/pages/SalesAssistant.tsx`** — `AssistantCard` interface синхронизирован с backend (8 новых полей). Добавлены label/tone мапы для всех новых enum'ов (`STATE_LABEL/TONE`, `TEMP_LABEL/TONE`, `MOMENTUM_LABEL/TONE`). Новый компонент `<EmotionalLayer />` — компактная subcard сразу после Situation: 3 badge'а в ряд (Investor State / Temperature / Momentum со стрелкой) + emotionalState (HeartHandshake) + whyBehavior (Brain, с подписью «Почему:») + momentumReason (мелкий muted). Добавлены ещё два блока: «Как изменить тон» (Wand2, ai-стиль, между «Что делать» и «Главный вопрос») и «Что может сломать сделку» (HeartCrack, красный, до «Что НЕ делать»). Иконки: HeartHandshake, Brain, Thermometer, TrendingUp/Down/Minus, HeartCrack, Wand2, UserRound (все lucide-react, нулевая стоимость bundle).
+
+### Why this matters
+
+- **Психология сделки ≠ sales-скрипт.** До Sprint 13 ассистент знал, какой SPIN-вопрос задать. После — он понимает, что инвестор сейчас в RATIONALIZING-состоянии, температура COLD, momentum NEGATIVE — и говорит фаундеру «сейчас лучше замедлиться» вместо «дави на ROI».
+- **emotionalRisks отдельный от riskOrMissed.** Первый — процессный (пропустили SPIN, нет next step), второй — про доверие («если додавить — закроется», «если уйти в цифры — потеряешь sense of safety»). Это два разных взгляда на одну встречу.
+- **Mock-фоллбек тоже эмоциональный.** Каждая ветка эвристики (включая «подумаю», «дорого», «риск») теперь устанавливает свой эмоциональный контекст — карточка остаётся «боевой» даже без AI ключа.
+- **UI остался scannable.** Эмоциональный слой собран в одну компактную subcard с 3 badge и 2-3 строками текста — не превратился в простыню.
+
+### Verification
+
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc OK, web vite build OK (409.75 kB / 115.16 kB gzip, +5 kB от Sprint 12)
+- [ ] Production verify: `POST /api/sales-assistant/analyze` на 4 сценариях (сомневающийся / активный / «я подумаю» / негативный опыт) должен вернуть согласованные `investorState`/`momentum`/`conversationTemperature` + читаемые `emotionalState`/`whyBehavior`/`emotionalRisks`/`toneShiftGuidance`.
 
 ---
 

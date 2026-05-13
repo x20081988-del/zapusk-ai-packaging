@@ -4,6 +4,8 @@ import {
   Mic, Square, Headphones, AlertTriangle, Sparkles, MessageSquare, Target,
   Activity, ChevronRight, RefreshCw, Save, CheckCircle2, Upload,
   Compass, ShieldAlert, HelpCircle, Megaphone, Ban, Gauge, Zap,
+  HeartHandshake, Brain, Thermometer, TrendingUp, TrendingDown, Minus,
+  HeartCrack, Wand2, UserRound,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -59,6 +61,16 @@ interface AssistantCard {
   engagementSignal: 'active' | 'passive' | 'disengaged';
   confidence: number;
   objection: string | null;
+
+  // Sprint 13: emotional layer
+  emotionalState: string;
+  whyBehavior: string;
+  investorState: 'OPEN' | 'CURIOUS' | 'SKEPTICAL' | 'DEFENSIVE' | 'ENGAGED' | 'RATIONALIZING' | 'READY' | 'DISCONNECTED';
+  momentum: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE';
+  momentumReason: string;
+  conversationTemperature: 'COLD' | 'WARM' | 'HOT';
+  emotionalRisks: string[];
+  toneShiftGuidance: string;
 
   // legacy aliases (back-compat with older clients / analytics)
   risk: string | null;
@@ -124,6 +136,48 @@ const ENGAGEMENT_LABEL: Record<AssistantCard['engagementSignal'], string> = {
   active: 'Инвестор · активен',
   passive: 'Инвестор · пассивен',
   disengaged: 'Инвестор · уходит',
+};
+
+// Sprint 13: emotional layer labels & tones
+const STATE_LABEL: Record<AssistantCard['investorState'], string> = {
+  OPEN: 'Открыт',
+  CURIOUS: 'Любопытен',
+  SKEPTICAL: 'Скептичен',
+  DEFENSIVE: 'Защищается',
+  ENGAGED: 'Вовлечён',
+  RATIONALIZING: 'Рационализирует',
+  READY: 'Готов',
+  DISCONNECTED: 'Уходит',
+};
+const STATE_TONE: Record<AssistantCard['investorState'], 'success' | 'info' | 'warning' | 'danger' | 'zapusk' | 'neutral' | 'ai'> = {
+  OPEN: 'info',
+  CURIOUS: 'ai',
+  SKEPTICAL: 'warning',
+  DEFENSIVE: 'warning',
+  ENGAGED: 'success',
+  RATIONALIZING: 'warning',
+  READY: 'zapusk',
+  DISCONNECTED: 'danger',
+};
+const TEMP_LABEL: Record<AssistantCard['conversationTemperature'], string> = {
+  COLD: 'COLD · холодно',
+  WARM: 'WARM · тепло',
+  HOT: 'HOT · горячо',
+};
+const TEMP_TONE: Record<AssistantCard['conversationTemperature'], 'info' | 'warning' | 'danger' | 'success'> = {
+  COLD: 'info',
+  WARM: 'warning',
+  HOT: 'success',
+};
+const MOMENTUM_LABEL: Record<AssistantCard['momentum'], string> = {
+  POSITIVE: 'Растёт',
+  NEUTRAL: 'Ровно',
+  NEGATIVE: 'Падает',
+};
+const MOMENTUM_TONE: Record<AssistantCard['momentum'], 'success' | 'neutral' | 'danger'> = {
+  POSITIVE: 'success',
+  NEUTRAL: 'neutral',
+  NEGATIVE: 'danger',
 };
 
 export default function SalesAssistant() {
@@ -643,6 +697,10 @@ function AdviceCard({ card }: { card: AssistantCard }) {
       {/* SITUATION — one sentence */}
       <Field icon={<Activity size={14} />} label="Что происходит">{card.situation}</Field>
 
+      {/* Sprint 13: EMOTIONAL LAYER — compact subcard. Это то, что отличает AI
+          co-pilot от sales-скрипта: он считывает не текст, а психологию сделки. */}
+      <EmotionalLayer card={card} />
+
       {/* RISK / MISSED — warning banner if anything is off */}
       {card.riskOrMissed && (
         <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
@@ -679,6 +737,18 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         </div>
       )}
 
+      {/* Sprint 13: TONE SHIFT GUIDANCE — мост между «что делать» и репликой.
+          Подсказывает, как изменить стиль/темп — это самый «co-pilot» блок. */}
+      {card.toneShiftGuidance && (
+        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-ai/8 border border-ai/25">
+          <Wand2 size={13} className="text-ai-glow mt-0.5 shrink-0" />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-ai-glow font-semibold mb-0.5">Как изменить тон</div>
+            <div className="text-sm text-primary leading-relaxed">{card.toneShiftGuidance}</div>
+          </div>
+        </div>
+      )}
+
       {/* MAIN QUESTION — flagship live phrase */}
       <div className="mt-4">
         <SectionLabel icon={<MessageSquare size={12} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
@@ -712,6 +782,21 @@ function AdviceCard({ card }: { card: AssistantCard }) {
           <ul className="space-y-1">
             {card.selfSaleQuestions.map((q, i) => (
               <li key={i} className="text-[13px] text-primary leading-relaxed">• {q}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Sprint 13: EMOTIONAL RISKS — что может СЛОМАТЬ сделку прямо сейчас
+          (отличается от riskOrMissed: тот про процесс/SPIN, этот про доверие). */}
+      {card.emotionalRisks.length > 0 && (
+        <div className="mt-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2.5">
+          <SectionLabel icon={<HeartCrack size={12} className="text-danger" />}>
+            Что может сломать сделку
+          </SectionLabel>
+          <ul className="space-y-1">
+            {card.emotionalRisks.map((line, i) => (
+              <li key={i} className="text-[13px] text-primary leading-relaxed">⚠ {line}</li>
             ))}
           </ul>
         </div>
@@ -786,6 +871,59 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         </div>
       </div>
     </Card>
+  );
+}
+
+// Sprint 13: emotional layer. Не очередной список — это «вторая голова»
+// карточки. Badges + 2-3 коротких инсайта про психологию сделки.
+function EmotionalLayer({ card }: { card: AssistantCard }) {
+  const MomentumIcon = card.momentum === 'POSITIVE' ? TrendingUp : card.momentum === 'NEGATIVE' ? TrendingDown : Minus;
+  return (
+    <div className="mt-4 rounded-md border border-ai/25 bg-grad-ink/40 p-3">
+      <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <HeartHandshake size={13} className="text-ai-glow" />
+          <span className="text-[10px] uppercase tracking-[0.14em] text-ai-glow font-semibold">
+            Эмоциональный слой
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <StatusBadge tone={STATE_TONE[card.investorState]} dot>
+            <UserRound size={10} className="mr-1 inline-block -mt-0.5" />
+            {STATE_LABEL[card.investorState]}
+          </StatusBadge>
+          <StatusBadge tone={TEMP_TONE[card.conversationTemperature]} dot>
+            <Thermometer size={10} className="mr-1 inline-block -mt-0.5" />
+            {TEMP_LABEL[card.conversationTemperature]}
+          </StatusBadge>
+          <StatusBadge tone={MOMENTUM_TONE[card.momentum]} dot>
+            <MomentumIcon size={10} className="mr-1 inline-block -mt-0.5" />
+            {MOMENTUM_LABEL[card.momentum]}
+          </StatusBadge>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        {card.emotionalState && (
+          <div className="flex items-start gap-2 text-[13px] text-primary leading-relaxed">
+            <HeartHandshake size={12} className="text-ai-glow mt-1 shrink-0" />
+            <span>{card.emotionalState}</span>
+          </div>
+        )}
+        {card.whyBehavior && (
+          <div className="flex items-start gap-2 text-[13px] text-secondary leading-relaxed">
+            <Brain size={12} className="text-zapusk-400 mt-1 shrink-0" />
+            <span><span className="text-muted">Почему: </span>{card.whyBehavior}</span>
+          </div>
+        )}
+        {card.momentumReason && (
+          <div className="flex items-start gap-2 text-[12px] text-muted leading-relaxed">
+            <MomentumIcon size={11} className="mt-1 shrink-0" />
+            <span>{card.momentumReason}</span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

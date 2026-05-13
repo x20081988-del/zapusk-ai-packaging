@@ -15,6 +15,18 @@ export type SpinStage = 'S' | 'P' | 'I' | 'N';
 export type Tone = 'SOFT' | 'CONTROL' | 'CLOSE';
 export type DealControl = 'LOW' | 'MEDIUM' | 'HIGH';
 export type Engagement = 'active' | 'passive' | 'disengaged';
+// Sprint 13: emotional layer
+export type InvestorState =
+  | 'OPEN'
+  | 'CURIOUS'
+  | 'SKEPTICAL'
+  | 'DEFENSIVE'
+  | 'ENGAGED'
+  | 'RATIONALIZING'
+  | 'READY'
+  | 'DISCONNECTED';
+export type Momentum = 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE';
+export type ConversationTemperature = 'COLD' | 'WARM' | 'HOT';
 
 export interface AssistantCard {
   // Sprint 12 structured mini-brief
@@ -36,6 +48,16 @@ export interface AssistantCard {
   engagementSignal: Engagement;
   confidence: number; // 0..100
   objection: string | null;
+
+  // Sprint 13: emotional layer
+  emotionalState: string;
+  whyBehavior: string;
+  investorState: InvestorState;
+  momentum: Momentum;
+  momentumReason: string;
+  conversationTemperature: ConversationTemperature;
+  emotionalRisks: string[];
+  toneShiftGuidance: string;
 
   // Legacy aliases (kept so older UI / history consumers keep working)
   risk: string | null;
@@ -73,6 +95,18 @@ const SALES_ASSISTANT_RESPONSE_SCHEMA = {
     engagementSignal: { type: 'string', enum: ['active', 'passive', 'disengaged'] },
     confidence: { type: 'number', minimum: 0, maximum: 100 },
     objection: { type: ['string', 'null'] },
+    // Sprint 13: emotional layer
+    emotionalState: { type: 'string' },
+    whyBehavior: { type: 'string' },
+    investorState: {
+      type: 'string',
+      enum: ['OPEN', 'CURIOUS', 'SKEPTICAL', 'DEFENSIVE', 'ENGAGED', 'RATIONALIZING', 'READY', 'DISCONNECTED'],
+    },
+    momentum: { type: 'string', enum: ['POSITIVE', 'NEUTRAL', 'NEGATIVE'] },
+    momentumReason: { type: 'string' },
+    conversationTemperature: { type: 'string', enum: ['COLD', 'WARM', 'HOT'] },
+    emotionalRisks: { type: 'array', items: { type: 'string' } },
+    toneShiftGuidance: { type: 'string' },
   },
   required: [
     'situation',
@@ -93,6 +127,14 @@ const SALES_ASSISTANT_RESPONSE_SCHEMA = {
     'engagementSignal',
     'confidence',
     'objection',
+    'emotionalState',
+    'whyBehavior',
+    'investorState',
+    'momentum',
+    'momentumReason',
+    'conversationTemperature',
+    'emotionalRisks',
+    'toneShiftGuidance',
   ],
 } satisfies Record<string, unknown>;
 
@@ -123,14 +165,15 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     [
       'Задача:',
       '1. Определи spinStage и какие spinGaps ещё открыты в разговоре.',
-      '2. Оцени engagementSignal и dealControlLevel по transcript.',
-      '3. Если перескочили этап — верни на нужный вопрос через mainQuestion.',
-      '4. Дай 2-4 backupQuestions на случай, если основной не пошёл.',
-      '5. Если S/P или passive — добавь 1-2 selfSaleQuestions; иначе [].',
-      '6. miniPitch — только если виден сигнал интереса в transcript; иначе null.',
-      '7. whatToDo: 1-2 действия. whatNotToDo: 1-3 пункта.',
-      '8. conversationObjective — цель именно текущего этапа. conversationDirection — куда ведём дальше.',
-      '9. dealNextStep — конкретный шаг сделки, если уже уместно (диапазон чека, дата встречи).',
+      '2. Оцени engagementSignal и dealControlLevel по transcript (учитывай длину ответов, встречные вопросы, эмоциональные слова, защитные реакции, уход в «подумаю»).',
+      '3. Sprint 13 — эмоциональный слой: определи investorState, conversationTemperature, momentum (с прошлой реплики). Напиши emotionalState (что эмоционально происходит), whyBehavior (почему он так отвечает), momentumReason (что сдвинуло динамику), emotionalRisks (что может сломать сделку прямо сейчас), toneShiftGuidance (как изменить стиль).',
+      '4. Если перескочили этап — верни на нужный вопрос через mainQuestion.',
+      '5. Дай 2-4 backupQuestions на случай, если основной не пошёл.',
+      '6. Если S/P или passive — добавь 1-2 selfSaleQuestions; иначе [].',
+      '7. miniPitch — только если виден сигнал интереса в transcript; иначе null.',
+      '8. whatToDo: 1-2 действия. whatNotToDo: 1-3 пункта.',
+      '9. conversationObjective — цель именно текущего этапа. conversationDirection — куда ведём дальше.',
+      '10. dealNextStep — конкретный шаг сделки, если уже уместно (диапазон чека, дата встречи).',
       'Верни строго JSON без markdown.',
     ].join('\n'),
   ].join('\n');
@@ -140,7 +183,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     user,
     feature: 'sales_assistant.analyze',
     modelRoute: 'main',
-    maxTokens: 1_400,
+    maxTokens: 1_900,
     temperature: 0.35,
     jsonSchema: {
       name: 'sales_assistant_card',
@@ -174,6 +217,15 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   const spinGaps = arrStages(parsed.spinGaps, stage);
   const conversationObjective = String(parsed.conversationObjective ?? '').trim() || defaultObjective(stage);
   const conversationDirection = String(parsed.conversationDirection ?? '').trim() || defaultDirection(stage);
+  // Sprint 13 emotional layer
+  const investorState = normalizeInvestorState(parsed.investorState);
+  const momentum = normalizeMomentum(parsed.momentum);
+  const conversationTemperature = normalizeTemperature(parsed.conversationTemperature);
+  const emotionalState = String(parsed.emotionalState ?? '').trim() || defaultEmotionalState(investorState);
+  const whyBehavior = String(parsed.whyBehavior ?? '').trim() || defaultWhyBehavior(investorState);
+  const momentumReason = String(parsed.momentumReason ?? '').trim() || defaultMomentumReason(momentum);
+  const emotionalRisks = arrStrings(parsed.emotionalRisks, 4);
+  const toneShiftGuidance = String(parsed.toneShiftGuidance ?? '').trim() || defaultToneShift(tone, investorState);
 
   const card: CoreCard = {
     situation: String(parsed.situation),
@@ -194,6 +246,16 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     engagementSignal: engagement,
     confidence: clampConfidence(parsed.confidence),
     objection: nullableString(parsed.objection),
+
+    // Sprint 13 emotional layer
+    emotionalState,
+    whyBehavior,
+    investorState,
+    momentum,
+    momentumReason,
+    conversationTemperature,
+    emotionalRisks,
+    toneShiftGuidance,
 
     // legacy aliases
     risk: nullableString(parsed.riskOrMissed),
@@ -304,6 +366,74 @@ function normalizeEngagement(raw: unknown): Engagement {
   return 'passive';
 }
 
+function normalizeInvestorState(raw: unknown): InvestorState {
+  const v = String(raw ?? '').toUpperCase();
+  const allowed: InvestorState[] = ['OPEN', 'CURIOUS', 'SKEPTICAL', 'DEFENSIVE', 'ENGAGED', 'RATIONALIZING', 'READY', 'DISCONNECTED'];
+  return (allowed as string[]).includes(v) ? (v as InvestorState) : 'OPEN';
+}
+
+function normalizeMomentum(raw: unknown): Momentum {
+  const v = String(raw ?? '').toUpperCase();
+  if (v === 'POSITIVE' || v === 'NEGATIVE') return v;
+  return 'NEUTRAL';
+}
+
+function normalizeTemperature(raw: unknown): ConversationTemperature {
+  const v = String(raw ?? '').toUpperCase();
+  if (v === 'COLD' || v === 'HOT') return v;
+  return 'WARM';
+}
+
+function defaultEmotionalState(state: InvestorState): string {
+  switch (state) {
+    case 'OPEN': return 'Инвестор спокойно слушает, без барьеров.';
+    case 'CURIOUS': return 'Появилось любопытство — задаёт уточняющие вопросы.';
+    case 'SKEPTICAL': return 'Инвестор анализирует, ищет подвох в цифрах.';
+    case 'DEFENSIVE': return 'Появилась настороженность, инвестор закрывается.';
+    case 'ENGAGED': return 'Инвестор эмоционально включён, ведёт диалог сам.';
+    case 'RATIONALIZING': return 'Инвестор обосновывает свою осторожность логикой.';
+    case 'READY': return 'Внутренне готов к решению, ждёт мягкого нажатия.';
+    case 'DISCONNECTED': return 'Инвестор отстранился, отвечает формально.';
+  }
+}
+
+function defaultWhyBehavior(state: InvestorState): string {
+  switch (state) {
+    case 'OPEN': return 'Знакомится с проектом, не торопится оценивать.';
+    case 'CURIOUS': return 'Хочет понять, как это вписывается в его картину мира.';
+    case 'SKEPTICAL': return 'Похоже, сравнивает с прошлым неудачным опытом.';
+    case 'DEFENSIVE': return 'Защищается от ощущения давления — нужно снизить темп.';
+    case 'ENGAGED': return 'Видит в проекте потенциал и хочет проверить детали.';
+    case 'RATIONALIZING': return 'Ищет логичный повод не двигаться вперёд — нужен sense of safety.';
+    case 'READY': return 'Уже принял внутреннее решение, ждёт чёткого предложения.';
+    case 'DISCONNECTED': return 'Не видит связи проекта со своей задачей.';
+  }
+}
+
+function defaultMomentumReason(momentum: Momentum): string {
+  switch (momentum) {
+    case 'POSITIVE': return 'Инвестор открылся после конкретных деталей.';
+    case 'NEGATIVE': return 'После последнего хода менеджера температура просела.';
+    case 'NEUTRAL': return 'Динамика ровная, без значимых сдвигов.';
+  }
+}
+
+function defaultToneShift(tone: Tone, state: InvestorState): string {
+  if (state === 'DEFENSIVE' || state === 'DISCONNECTED') {
+    return 'Замедлись, дай инвестору больше говорить, не дави.';
+  }
+  if (state === 'RATIONALIZING') {
+    return 'Не аргументируй цифрами — сначала уточни, что именно вызывает сомнение.';
+  }
+  if (state === 'READY') {
+    return 'Пора мягко фиксировать next step — конкретный чек или дата.';
+  }
+  if (state === 'ENGAGED' && tone !== 'CLOSE') {
+    return 'Можно переходить к более уверенному CONTROL tone.';
+  }
+  return 'Держи текущий темп, не торопись с переходом.';
+}
+
 function clampConfidence(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n)) return 40;
@@ -391,6 +521,15 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
   let dealNextStep: string | null = 'Получить 2-3 факта о текущем портфеле инвестора';
   let objection: string | null = null;
   let riskOrMissed: string | null = null;
+  // Sprint 13: emotional defaults
+  let investorState: InvestorState = 'OPEN';
+  let momentum: Momentum = 'NEUTRAL';
+  let conversationTemperature: ConversationTemperature = 'WARM';
+  let emotionalState = 'Инвестор спокойно слушает, без барьеров.';
+  let whyBehavior = 'Пока знакомится с проектом, не торопится оценивать.';
+  let momentumReason = 'Разговор только начался, динамика ровная.';
+  let emotionalRisks: string[] = [];
+  let toneShiftGuidance = 'Держи SOFT, не торопись с переходом в продажу.';
 
   if (hits(/расскажите|кто вы|что вы делаете|чем зани/)) {
     stage = 'S'; tone = 'SOFT'; confidence = 42;
@@ -405,6 +544,14 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     dealNextStep = 'Завершить мини-питч встречным вопросом';
     objective = 'Завести разговор и узнать, что для инвестора важнее в первую очередь';
     direction = 'От мини-питча к выявлению критериев инвестора (S → P)';
+    investorState = 'CURIOUS';
+    conversationTemperature = 'WARM';
+    momentum = 'NEUTRAL';
+    emotionalState = 'Инвестор открыт и любопытен, но ещё не вовлечён эмоционально.';
+    whyBehavior = 'Ему нужен якорь, на который опереться, чтобы решить, как слушать дальше.';
+    momentumReason = 'Заход вежливый, динамика только формируется.';
+    emotionalRisks = ['Если уйти в монолог дольше 60 секунд — интерес упадёт.'];
+    toneShiftGuidance = 'Держи SOFT, дай ему направить угол разговора.';
   }
 
   if (hits(/проблем|сложн|не получает|тяжел|не устраив|просад|падает/)) {
@@ -422,6 +569,17 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     dealNextStep = 'Получить конкретику по проблеме до перехода в Implication';
     objective = 'Найти конкретную dissatisfaction в текущем портфеле';
     direction = 'От обозначенной проблемы — к её последствиям (P → I)';
+    investorState = 'ENGAGED';
+    conversationTemperature = 'WARM';
+    momentum = 'POSITIVE';
+    emotionalState = 'Инвестор сам поднял тему боли — это эмоциональное открытие, не упусти.';
+    whyBehavior = 'Он хочет, чтобы его проблему услышали, а не сразу решили продажей.';
+    momentumReason = 'После упоминания просадки динамика пошла вверх — инвестор готов раскрываться.';
+    emotionalRisks = [
+      'Если сейчас перепрыгнуть в питч — он закроется и вернётся в осторожность.',
+      'Если обесценить его проблему («у всех так») — доверие просядет мгновенно.',
+    ];
+    toneShiftGuidance = 'Замедлись, дай ему рассказать конкретику — твоя задача слушать, не отвечать.';
   }
 
   if (hits(/упуст|можно было|если бы|разрыв|ожидал|планировал|год назад|должен был/)) {
@@ -438,6 +596,17 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     dealNextStep = 'Подвести к Need-Payoff: «такое решение для вас приоритет?»';
     objective = 'Усилить implication через упущенную возможность';
     direction = 'От признанного последствия — к выгоде и деньгам (I → N)';
+    investorState = 'ENGAGED';
+    conversationTemperature = 'HOT';
+    momentum = 'POSITIVE';
+    emotionalState = 'Инвестор эмоционально вошёл — оценивает, что он потерял, и хочет это компенсировать.';
+    whyBehavior = 'Он ищет внутреннее «оправдание» для нового действия — момент окна для предложения.';
+    momentumReason = 'Признание упущенной возможности резко подняло температуру.';
+    emotionalRisks = [
+      'Если сейчас «продавать» — это убьёт ощущение, что он сам пришёл к решению.',
+      'Слишком быстрый переход к деньгам может вызвать защиту.',
+    ];
+    toneShiftGuidance = 'Удерживай CONTROL, но дай паузу — пусть он сам произнесёт следствие.';
   }
 
   if (hits(/сколько|какой возврат|какая доходность|когда вернёт|через сколько|чек|оценк|ирр|irr|x\d/)) {
@@ -455,6 +624,17 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     dealNextStep = 'Зафиксировать диапазон чека и дату следующей встречи';
     objective = 'Зафиксировать комфортный диапазон чека';
     direction = 'От цифр — к фиксации next step и дате созвона';
+    investorState = 'READY';
+    conversationTemperature = 'HOT';
+    momentum = 'POSITIVE';
+    emotionalState = 'Инвестор готов считать — это сигнал внутреннего «да», но он ещё хочет подтверждения надёжности.';
+    whyBehavior = 'Деньги — это его проверка реальности, а не возражение. Цифры должны быть простыми и прямыми.';
+    momentumReason = 'Прямой вопрос про деньги поднял температуру до HOT.';
+    emotionalRisks = [
+      'Если завалить цифрами и допущениями — он переключится в SKEPTICAL.',
+      'Если уйти от прямого ответа — потеряешь доверие за один ход.',
+    ];
+    toneShiftGuidance = 'Переходи в CLOSE: короткие, конкретные цифры и мягкий вопрос про диапазон чека.';
   }
 
   if (hits(/подумаю|подумать|потом|позже|сейчас не готов/)) {
@@ -473,6 +653,17 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     riskOrMissed = 'Без конкретики next step встреча закончится без продвижения сделки';
     objective = 'Перевести «подумаю» в конкретный список вопросов и дату';
     direction = 'От ухода — обратно в Problem и фиксированный follow-up';
+    investorState = 'RATIONALIZING';
+    conversationTemperature = 'COLD';
+    momentum = 'NEGATIVE';
+    emotionalState = 'Инвестор начал рационализировать выход — это эмоциональный «стоп», а не логический.';
+    whyBehavior = 'Он не видит понятного сценария и пытается снизить эмоциональный риск через «подумаю».';
+    momentumReason = '«Подумаю» — стандартный маркер падения momentum, температура просела.';
+    emotionalRisks = [
+      'Если согласиться с «подумаю» без вопросов — встреча станет последней.',
+      'Если сейчас додавить продажей — он закроется окончательно.',
+    ];
+    toneShiftGuidance = 'Сбавь темп, верни в SOFT и попроси конкретику: что именно нужно понять для решения.';
   }
 
   if (hits(/дорого|чек большой|много|сейчас не могу|не сейчас|нет таких/)) {
@@ -490,6 +681,17 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     dealNextStep = 'Подобрать вариант под обозначенный чек';
     objective = 'Зафиксировать комфортный диапазон чека без давления';
     direction = 'От возражения «дорого» — к альтернативному проекту под чек';
+    investorState = 'DEFENSIVE';
+    conversationTemperature = 'WARM';
+    momentum = 'NEGATIVE';
+    emotionalState = 'Появилась осторожность по чеку — инвестор защищается, но не уходит.';
+    whyBehavior = 'Чек воспринимается как риск, и он хочет понять, можно ли войти меньшим шагом.';
+    momentumReason = 'Возражение «дорого» — естественный спад, но это диалог, а не выход.';
+    emotionalRisks = [
+      'Если давить на ценность проекта — инвестор закроется в защите.',
+      'Если предложить скидку — обесценишь проект в его глазах.',
+    ];
+    toneShiftGuidance = 'Прими возражение спокойно, разверни в вопрос про комфортный диапазон.';
   }
 
   if (hits(/риск|опасно|сомнев|не уверен|боюсь|ликвид/)) {
@@ -503,6 +705,17 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
       'Какой сценарий выхода был бы для вас наиболее спокойным?',
       'Что должно быть в проекте, чтобы этот риск перестал быть блокером?',
     ];
+    investorState = 'SKEPTICAL';
+    conversationTemperature = 'WARM';
+    momentum = 'NEGATIVE';
+    emotionalState = 'Инвестор включил защитное мышление — ищет, чего боится конкретно.';
+    whyBehavior = 'Скорее всего, сравнивает с прошлым неудачным опытом и ищет sense of safety.';
+    momentumReason = 'После темы рисков температура слегка просела — нужна перезагрузка доверия.';
+    emotionalRisks = [
+      'Если отмахнуться от страха — потеряешь доверие на одной фразе.',
+      'Если назвать слишком много митигаторов сразу — это звучит как защита.',
+    ];
+    toneShiftGuidance = 'Сначала признай риск как валидный, потом дай один сильный митигатор.';
   }
 
   // SPIN gaps default — everything STRICTLY before current is considered done,
@@ -528,6 +741,15 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     engagementSignal: engagement,
     confidence,
     objection,
+    // Sprint 13 emotional layer
+    emotionalState,
+    whyBehavior,
+    investorState,
+    momentum,
+    momentumReason,
+    conversationTemperature,
+    emotionalRisks,
+    toneShiftGuidance,
     risk: riskOrMissed,
     recommendation: whatToDo[0] ?? '—',
     suggestedPhrase: mainQuestion,
@@ -564,6 +786,13 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
       nextStep: 'Получить одну конкретную проблему инвестора',
       conversationObjective: defaultObjective(stage),
       conversationDirection: defaultDirection(stage),
+      investorState: 'CURIOUS',
+      conversationTemperature: 'WARM',
+      momentum: 'POSITIVE',
+      emotionalState: 'Инвестор открыт, но динамика топчется — пора углубляться.',
+      whyBehavior: 'Поверхностный slой исчерпал любопытство, нужен новый угол.',
+      momentumReason: 'Повторение S без сдвига гасит интерес — переход в P подстегнёт momentum.',
+      toneShiftGuidance: 'Сдвинься из SOFT в более уверенный CONTROL: один точный вопрос про разрыв.',
     };
   }
 
@@ -590,6 +819,14 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
       nextStep: 'Получить признание последствия от самого инвестора',
       conversationObjective: defaultObjective(stage),
       conversationDirection: defaultDirection(stage),
+      investorState: 'ENGAGED',
+      conversationTemperature: 'HOT',
+      momentum: 'POSITIVE',
+      emotionalState: 'Инвестор готов прожить последствия — это эмоциональное окно для Implication.',
+      whyBehavior: 'Он хочет сам произнести «у меня есть проблема» — это разблокирует решение.',
+      momentumReason: 'Переход от констатации Problem к её последствиям подогрел разговор.',
+      emotionalRisks: ['Если подсказать последствие за него — окно закроется.'],
+      toneShiftGuidance: 'Дай паузу после вопроса, не заполняй её — пусть он закончит мысль.',
     };
   }
 
@@ -617,6 +854,14 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
       nextStep: 'Зафиксировать диапазон чека',
       conversationObjective: defaultObjective(stage),
       conversationDirection: defaultDirection(stage),
+      investorState: 'READY',
+      conversationTemperature: 'HOT',
+      momentum: 'POSITIVE',
+      emotionalState: 'Инвестор внутренне готов — пора оформить решение цифрами.',
+      whyBehavior: 'Он уже принял эмоциональное «да», осталось получить безопасную форму для шага.',
+      momentumReason: 'Признание implication подняло температуру до HOT — окно для Close.',
+      emotionalRisks: ['Если уйти в новые темы — окно закроется, придётся начинать заново.'],
+      toneShiftGuidance: 'Переходи в CLOSE: короткий вопрос про чек, без дополнительных аргументов.',
     };
   }
 
@@ -641,5 +886,13 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
     nextStep: 'Назначить дату следующего контакта и критерии решения',
     conversationObjective: 'Зафиксировать дату следующего контакта и критерии решения',
     conversationDirection: 'Закрепляем next step встречи и материалы',
+    investorState: 'READY',
+    conversationTemperature: 'HOT',
+    momentum: 'POSITIVE',
+    emotionalState: 'Сделка фактически собрана, осталось зафиксировать рамки.',
+    whyBehavior: 'Инвестор уже на решении — ему нужна простая форма следующего шага.',
+    momentumReason: 'Дополнительные ходы лишние, momentum максимальный сейчас.',
+    emotionalRisks: ['Если открыть новый аргумент — momentum разряд­ит­ся.'],
+    toneShiftGuidance: 'CLOSE короткими ходами: дата + критерий, и заверши встречу.',
   };
 }
