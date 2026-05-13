@@ -5,6 +5,7 @@ async function request(path, init = {}) {
     const headers = {
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
         ...(auth ? { 'x-user-email': auth.email } : {}),
+        ...(auth ? { 'x-user-role': auth.role } : {}),
         ...(init.headers ?? {}),
     };
     const res = await fetch(`${BASE}${path}`, { ...init, headers });

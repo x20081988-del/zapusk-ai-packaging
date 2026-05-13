@@ -1,10 +1,16 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
+import { getRole } from '../auth.js';
 
 export const authRoutes = Router();
 
-const loginSchema = z.object({ email: z.string().email(), name: z.string().optional() });
+const roleSchema = z.enum(['client', 'manager', 'admin']);
+const loginSchema = z.object({
+  email: z.string().email(),
+  name: z.string().optional(),
+  role: roleSchema.optional(),
+});
 
 // MVP login: take any email, upsert a user, return profile. The web client
 // then sends `x-user-email` on subsequent requests.
@@ -18,7 +24,7 @@ authRoutes.post('/login', async (req, res) => {
     update: parsed.data.name ? { name: parsed.data.name } : {},
     create: { email, name: parsed.data.name ?? email.split('@')[0] },
   });
-  res.json({ user });
+  res.json({ user: { ...user, role: parsed.data.role ?? 'client' } });
 });
 
 authRoutes.get('/me', async (req, res) => {
@@ -26,5 +32,5 @@ authRoutes.get('/me', async (req, res) => {
   if (!email) return res.status(401).json({ error: 'unauthenticated' });
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return res.status(404).json({ error: 'user_not_found' });
-  res.json({ user });
+  res.json({ user: { ...user, role: getRole(req) } });
 });

@@ -4,11 +4,11 @@
 
 /* ──────────────────────────────────────────────────────────────
  * ZAPUSK theme tokens
- * Default = dark (the cockpit). Light overrides via data-theme="light".
+ * Default product experience = light. Dark cockpit stays available via switch.
  * Every Tailwind colour utility reads these via rgb(var(--…)/<alpha>).
  * ─────────────────────────────────────────────────────────────*/
 
-/* DARK — default (no flicker on first paint) */
+/* DARK — cockpit mode */
 :root,
 :root[data-theme="dark"] {
   /* surfaces */
@@ -68,7 +68,8 @@
   --selection-bg:          rgba(255, 90, 31, 0.30);
 }
 
-/* LIGHT — premium B2B SaaS (Linear / Stripe / Notion vibe) */
+/* LIGHT — premium B2B SaaS (default for fresh users) */
+:root,
 :root[data-theme="light"] {
   /* surfaces — off-white canvas, pure-white cards for crispness */
   --color-canvas:   250 250 251;

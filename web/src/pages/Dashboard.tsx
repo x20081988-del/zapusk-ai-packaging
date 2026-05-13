@@ -6,20 +6,23 @@ import { ProjectCard } from '../components/ui/ProjectCard';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
+import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { api, type Project } from '../lib/api';
 import { computeProgress } from '../lib/progress';
-import { useMode } from '../lib/mode';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
+import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
+import { getAuth } from '../lib/auth';
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
-  const [mode] = useMode();
+  const role = getAuth()?.role ?? 'client';
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
   }, []);
 
-  const visibleProjects = projects?.filter((p) => mode === 'team' || !isLegacyDemoProject(p)) ?? null;
+  const visibleProjects = projects?.filter((p) => role !== 'client' || !isLegacyDemoProject(p)) ?? null;
   const total = visibleProjects?.length ?? 0;
   const ready = visibleProjects?.filter((p) => p.status === 'ready').length ?? 0;
   const inWork = visibleProjects?.filter((p) => p.status === 'packaging').length ?? 0;
@@ -75,6 +78,25 @@ export default function Dashboard() {
           </div>
         </Card>
       </Link>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6 mb-6">
+        <PersonalManagerCard compact />
+        <div className="space-y-6">
+          <Link to="/demo" className="block">
+            <Card hoverable accent="zapusk">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold">Демо-кабинет</div>
+                  <h2 className="text-lg font-semibold text-primary mt-1">Посмотреть, как выглядит готовый проект</h2>
+                  <p className="text-sm text-secondary mt-1">Главснаб: бриф, материалы, AI-лиды, запись разговора и путь сделки.</p>
+                </div>
+                <Button variant="secondary">Открыть демо</Button>
+              </div>
+            </Card>
+          </Link>
+          <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY.slice(0, 5)} compact />
+        </div>
+      </div>
 
       <div className="mb-4 flex items-end justify-between">
         <div>

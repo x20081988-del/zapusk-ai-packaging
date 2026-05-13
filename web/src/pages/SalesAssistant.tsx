@@ -9,7 +9,7 @@ import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Select } from '../components/ui/Input';
 import { api, type Project } from '../lib/api';
-import { useMode } from '../lib/mode';
+import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
@@ -71,7 +71,7 @@ const TONE_TONE: Record<AssistantCard['tone'], 'info' | 'zapusk' | 'success'> = 
 
 export default function SalesAssistant() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [mode] = useMode();
+  const role = getAuth()?.role ?? 'client';
   const [projectId, setProjectId] = useState<string>('');
   const [listening, setListening] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
@@ -308,8 +308,8 @@ export default function SalesAssistant() {
   );
   const hasFinalTranscript = transcript.some((t) => t.final);
   const visibleProjects = useMemo(
-    () => projects.filter((p) => mode === 'team' || !isLegacyDemoProject(p)),
-    [mode, projects],
+    () => projects.filter((p) => role !== 'client' || !isLegacyDemoProject(p)),
+    [role, projects],
   );
 
   const statusText: Record<SpeechStatus, { title: string; hint: string }> = {

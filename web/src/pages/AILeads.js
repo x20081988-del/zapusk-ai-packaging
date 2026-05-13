@@ -10,7 +10,7 @@ import { Select, Textarea } from '../components/ui/Input';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { VoiceInputButton } from '../components/ui/VoiceInputButton';
 import { api } from '../lib/api';
-import { useMode } from '../lib/mode';
+import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 const STATUS_LABELS = {
     HOT: 'HOT',
@@ -38,16 +38,16 @@ export default function AILeads() {
     const [loading, setLoading] = useState(true);
     const [launched, setLaunched] = useState(false);
     const [briefReply, setBriefReply] = useState('');
-    const [mode] = useMode();
+    const role = getAuth()?.role ?? 'client';
     useEffect(() => {
         api.get('/api/projects').then((r) => {
-            const visible = r.projects.filter((p) => mode === 'team' || !isLegacyDemoProject(p));
+            const visible = r.projects.filter((p) => role !== 'client' || !isLegacyDemoProject(p));
             setProjects(visible);
             if (!selectedProjectId && visible[0]?.id)
                 setSelectedProjectId(visible[0].id);
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mode]);
+    }, [role]);
     useEffect(() => {
         setLoading(true);
         const query = selectedProjectId ? `?projectId=${encodeURIComponent(selectedProjectId)}` : '';

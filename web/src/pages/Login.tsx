@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Rocket } from 'lucide-react';
 import { api } from '../lib/api';
-import { setAuth } from '../lib/auth';
+import { defaultRouteForRole, setAuth, type UserRole } from '../lib/auth';
 import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
+import { Input, Select } from '../components/ui/Input';
 import { Logo } from '../components/ui/Logo';
 
 export default function Login() {
   const [email, setEmail] = useState('founder@zapusk.tech');
   const [name, setName] = useState('Zapusk Founder');
+  const [role, setRole] = useState<UserRole>('client');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -19,9 +20,10 @@ export default function Login() {
     setLoading(true);
     setErr(null);
     try {
-      const res = await api.post<{ user: { email: string; name: string } }>('/api/auth/login', { email, name });
-      setAuth({ email: res.user.email, name: res.user.name ?? email });
-      navigate('/dashboard');
+      const res = await api.post<{ user: { email: string; name: string; role?: UserRole } }>('/api/auth/login', { email, name, role });
+      const nextRole = res.user.role ?? role;
+      setAuth({ email: res.user.email, name: res.user.name ?? email, role: nextRole });
+      navigate(defaultRouteForRole(nextRole));
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'login failed');
     } finally {
@@ -65,6 +67,16 @@ export default function Login() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Как к вам обращаться"
+            />
+            <Select
+              label="Роль для демо"
+              value={role}
+              onChange={(e) => setRole(e.target.value as UserRole)}
+              options={[
+                { value: 'client', label: 'Клиент' },
+                { value: 'manager', label: 'Менеджер Zapusk' },
+                { value: 'admin', label: 'Админ Zapusk' },
+              ]}
             />
             {err && <div className="text-xs text-danger">{err}</div>}
             <Button type="submit" loading={loading} className="w-full" size="lg">

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Sparkles, FileText, Download, ArrowLeft, ExternalLink, Trash2, Link2, Rocket, ChevronRight, Wand2, Package,
+  MessageCircle,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Button } from '../components/ui/Button';
@@ -23,6 +24,9 @@ import { computeProgress } from '../lib/progress';
 import { buildReviewIndex, getReview } from '../lib/reviews';
 import { getDemoMaterials, getDemoTransformationCase } from '../lib/demoMaterials';
 import { MissingDataPanel } from '../components/ui/MissingDataPanel';
+import { PersonalManagerCard } from '../components/ui/PersonalManagerCard';
+import { ProjectJourney } from '../components/ui/ProjectJourney';
+import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -153,6 +157,9 @@ export default function ProjectCockpit() {
           <Link to={`/projects/${id}/review`}>
             <Button variant="secondary" size="sm">Проверка материалов</Button>
           </Link>
+          <Link to="/personal-manager">
+            <Button variant="secondary" size="sm" iconLeft={<MessageCircle size={14} />}>Менеджер</Button>
+          </Link>
           <a href={`/api/projects/${id}/export/zip`}>
             <Button variant="secondary" size="sm" iconLeft={<Package size={14} />}>
               Скачать комплект
@@ -249,6 +256,11 @@ export default function ProjectCockpit() {
           ))}
         </div>
       </Card>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
+        <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY} compact />
+        <PersonalManagerCard compact />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         {/* MATERIALS */}

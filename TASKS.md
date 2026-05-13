@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-13 (production repo sync: AI Leads + OpenAI/Sales Assistant changes).
+Last updated: 2026-05-13 (Sprint 1: roles + admin + manager + demo cabinet).
 
 ---
 
@@ -27,7 +27,95 @@ zapusk-ai-packaging/
 
 ---
 
-## Completed (this sprint — AI Leads MVP 2026-05-13)
+## Completed (this sprint — roles + admin + demo cabinet 2026-05-13)
+
+- [x] Light theme is now the default for new users; saved `zapusk.theme` values are preserved and dark mode stays available through the theme toggle.
+- [x] Added MVP roles: `client`, `manager`, `admin`. The role is stored in demo auth state and sent as `x-user-role` with API calls.
+- [x] Added role-based frontend routing: admin and manager pages redirect away when the current role is not allowed.
+- [x] Added role-based sidebar navigation:
+  - client: Рабочий стол, Новый проект, Демо-кабинет, AI-лиды, AI-ассистент, Персональный менеджер, База знаний.
+  - manager: Рабочий стол менеджера, Мои проекты, Новые лиды, Встречи, Задачи, Клиенты.
+  - admin: Админ-панель, Все проекты, Пользователи, Шаблоны, Лиды, Материалы, Настройки.
+- [x] Added backend role guards for admin/manager surfaces:
+  - `/api/admin/*` → `admin` only.
+  - `/api/templates/*` → `admin` only.
+  - `/api/manager/*` → `manager` or `admin`.
+- [x] Added `/admin` dashboard with KPI cards, full projects table, users overview, leads/materials/settings sections and quick actions.
+- [x] Added `/manager` workspace with project pipeline, tasks, stuck projects, new lead indicators and next-step prompts.
+- [x] Added `/personal-manager` page and reusable personal manager card; surfaced it in Sidebar, Dashboard and Project Cockpit.
+- [x] Added reusable Project Journey component with 10 stages: brief, marketing packaging, legal packaging, AI leads, investor meetings, deal mechanics, акционирование/эскроу/конвертируемый займ, platform deals, round close, shareholder work.
+- [x] Added `/demo` demo cabinet for **Главснаб**: ready state, materials “Было → Стало”, AI lead, real call-recording link, personal manager, legal/deal stage and project journey.
+- [x] Connected Главснаб demo-assets from local files into `web/public/demo-assets`.
+- [x] Updated README with roles MVP, guards and limitations.
+
+**Files changed**
+- Server:
+  - `server/src/auth.ts`
+  - `server/src/index.ts`
+  - `server/src/routes/auth.ts`
+  - `server/src/routes/admin.ts`
+  - `server/src/routes/manager.ts`
+  - `server/src/routes/templates.ts`
+- Web:
+  - `web/index.html`
+  - `web/src/index.css`
+  - `web/src/App.tsx`
+  - `web/src/lib/auth.ts`
+  - `web/src/lib/api.ts`
+  - `web/src/lib/theme.ts`
+  - `web/src/lib/demoMaterials.ts`
+  - `web/src/lib/projectJourney.ts`
+  - `web/src/components/layout/Sidebar.tsx`
+  - `web/src/components/layout/Topbar.tsx`
+  - `web/src/components/ui/PersonalManagerCard.tsx`
+  - `web/src/components/ui/ProjectJourney.tsx`
+  - `web/src/pages/AdminDashboard.tsx`
+  - `web/src/pages/ManagerDashboard.tsx`
+  - `web/src/pages/DemoCabinet.tsx`
+  - `web/src/pages/PersonalManager.tsx`
+  - `web/src/pages/Dashboard.tsx`
+  - `web/src/pages/ProjectCockpit.tsx`
+  - `web/src/pages/Login.tsx`
+  - `web/src/pages/AILeads.tsx`
+  - `web/src/pages/SalesAssistant.tsx`
+- Demo assets:
+  - `web/public/demo-assets/glavsnab-before-pitch.pdf`
+  - `web/public/demo-assets/glavsnab-before-pitch-sept-2025.pdf`
+  - `web/public/demo-assets/glavsnab-after-pitch.pdf`
+  - `web/public/demo-assets/glavsnab-before-finmodel.xlsx`
+  - `web/public/demo-assets/glavsnab-after-finmodel.xlsx`
+  - `web/public/demo-assets/glavsnab-initial-description.docx`
+  - `web/public/demo-assets/glavsnab-info.docx`
+- Docs:
+  - `README.md`
+  - `TASKS.md`
+
+**Checks**
+- `cd server && npx tsc --noEmit` → green.
+- `cd web && npx tsc --noEmit` → green.
+- `npm run build` → green.
+- Local API smoke on `PORT=4110` → green:
+  - client role gets `403` on `/api/admin/dashboard`.
+  - admin role gets `200` on `/api/admin/dashboard`.
+  - manager role gets `200` on `/api/manager/dashboard`.
+  - `/demo` SPA route returns `200`.
+- Browser smoke on `http://localhost:4110` → green:
+  - fresh `/login` renders with `data-theme="light"`.
+  - client sees AI-лиды, AI-ассистент, Персональный менеджер and does not see admin navigation.
+  - `/demo` shows Главснаб, project journey, HOT lead, AI call recording and manager card.
+  - admin login lands on `/admin` and sees projects/users/templates navigation.
+  - manager login lands on `/manager` and does not see admin navigation.
+
+**MVP limitations / known risks**
+- Roles are demo-RBAC: stored in localStorage and sent in `x-user-role`. Backend guards exist, but a technical user can spoof the header. Real production needs persisted roles, sessions/JWT and ownership checks.
+- Manager assignment is mocked/derived from projects, not persisted in the DB.
+- Demo cabinet is static/sample data and uses public demo-assets, not a persisted `ProjectMaterial` / `ProjectLead` model yet.
+- Personal manager form is UI-only; no real chat/task creation yet.
+
+**Next recommended task**
+- Add persisted `role`, `managerId`, `ProjectLead`, `ProjectMaterial`, `ProjectTask` models and migrate demo-RBAC to real auth/session checks.
+
+## Completed (previous sprint — AI Leads MVP 2026-05-13)
 
 - [x] Added a new client entry point before Sales Assistant: sidebar item “Получать AI-лиды” and a large Dashboard card “AI привлекает инвесторов за вас”.
 - [x] Added `/ai-leads` page with product onboarding, launch lock, briefing readiness, investor strategy, KPI cards, live-looking lead feed, lead cards, mock audio records and communication timeline.

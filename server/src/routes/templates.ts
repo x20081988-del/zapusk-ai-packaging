@@ -2,10 +2,11 @@ import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { authMiddleware } from '../auth.js';
+import { authMiddleware, requireRole } from '../auth.js';
 
 export const templatesRoutes = Router();
 templatesRoutes.use(authMiddleware);
+templatesRoutes.use(requireRole(['admin']));
 
 templatesRoutes.get('/', async (_req, res) => {
   const templates = await prisma.promptTemplate.findMany({ orderBy: { category: 'asc' } });

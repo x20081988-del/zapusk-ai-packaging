@@ -7,14 +7,14 @@
     <title>Платформа ZAPUSK AI</title>
 
     <!-- Apply theme before paint to avoid flash of wrong theme.
-         Reads localStorage('zapusk.theme'); default = dark. -->
+         Reads localStorage('zapusk.theme'); default = light. -->
     <script>
       (function () {
         try {
           var t = localStorage.getItem('zapusk.theme');
-          document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+          document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
         } catch (_) {
-          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.setAttribute('data-theme', 'light');
         }
       })();
     </script>

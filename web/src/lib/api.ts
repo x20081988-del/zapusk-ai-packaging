@@ -7,6 +7,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
     ...(auth ? { 'x-user-email': auth.email } : {}),
+    ...(auth ? { 'x-user-role': auth.role } : {}),
     ...((init.headers as Record<string, string>) ?? {}),
   };
   const res = await fetch(`${BASE}${path}`, { ...init, headers });

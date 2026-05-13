@@ -7,7 +7,7 @@ import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Select } from '../components/ui/Input';
 import { api } from '../lib/api';
-import { useMode } from '../lib/mode';
+import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 function getSR() {
     const w = window;
@@ -32,7 +32,7 @@ const TONE_TONE = {
 };
 export default function SalesAssistant() {
     const [projects, setProjects] = useState([]);
-    const [mode] = useMode();
+    const role = getAuth()?.role ?? 'client';
     const [projectId, setProjectId] = useState('');
     const [listening, setListening] = useState(false);
     const [permError, setPermError] = useState(null);
@@ -275,7 +275,7 @@ export default function SalesAssistant() {
     }
     const wordCount = useMemo(() => transcript.filter((t) => t.final).reduce((acc, t) => acc + t.text.split(/\s+/).length, 0), [transcript]);
     const hasFinalTranscript = transcript.some((t) => t.final);
-    const visibleProjects = useMemo(() => projects.filter((p) => mode === 'team' || !isLegacyDemoProject(p)), [mode, projects]);
+    const visibleProjects = useMemo(() => projects.filter((p) => role !== 'client' || !isLegacyDemoProject(p)), [role, projects]);
     const statusText = {
         idle: {
             title: 'Готов к старту',

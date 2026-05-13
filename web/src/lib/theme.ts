@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 // Theme system — mirrors lib/mode.ts. localStorage key 'zapusk.theme', values
-// 'dark' (default) | 'light'. Initial paint is set inline in index.html
+// 'light' (default) | 'dark'. Initial paint is set inline in index.html
 // (anti-flicker). Runtime updates flip <html data-theme> + dispatch event so
 // any subscribed component rerenders without a reload.
 
@@ -12,9 +12,9 @@ const EVENT = 'zapusk:theme';
 
 export function getTheme(): Theme {
   try {
-    return localStorage.getItem(KEY) === 'light' ? 'light' : 'dark';
+    return localStorage.getItem(KEY) === 'dark' ? 'dark' : 'light';
   } catch {
-    return 'dark';
+    return 'light';
   }
 }
 

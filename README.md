@@ -97,6 +97,11 @@ Log in with any email (MVP single-user dev mode). Open the seeded demo "Венс
 | JSON export `/api/projects/:id/export`           | ✅                                 |
 | Internal user guide `/guide`                     | ✅                                 |
 | AI Leads MVP `/ai-leads`                         | ✅ mock provider + briefing lock   |
+| Role-based demo navigation (`client` / `manager` / `admin`) | ✅ MVP via demo auth state + headers |
+| Admin panel `/admin`                             | ✅ KPI + projects + users + admin sections |
+| Manager workspace `/manager`                     | ✅ projects + tasks + stuck states |
+| Client demo cabinet `/demo`                      | ✅ Главснаб sample journey + materials |
+| Personal manager `/personal-manager`             | ✅ mock contact + request form |
 | 4 seeded demo projects                           | ✅                                 |
 | AI Interview answer persistence                  | 🟡 UI only, no save to brief      |
 | Templates CRUD                                   | 🟡 list + edit body, no create    |
@@ -137,6 +142,24 @@ If Render logs show `http_401`, check the API key. If they show `http_403` or `h
 ### Sales Assistant API
 
 `POST /api/sales-assistant/analyze` is a manual live-coach refresh endpoint. The web app sends the accumulated meeting `transcript`, `recentContext`, optional `previousAdvice`, optional `previousSpinStage`, optional `adviceHistory`, and optional `projectId`. The response returns a structured card with `situation`, `risk`, `recommendation`, `suggestedPhrase`, `spinStage`, `tone`, `confidence`, `objection`, `nextStep`, plus `provider`, `model` and `fellBackToMock` so the UI can show OpenAI vs Mock honestly.
+
+## Roles MVP
+
+The current demo auth is still lightweight: login stores `{ email, name, role }` in `localStorage('zapusk.auth')`, and every API call sends `x-user-email` plus `x-user-role`. This is enough for a controlled demo and local development, but it is not a replacement for real SSO/JWT.
+
+Roles:
+
+- `client` — dashboard, new project, demo cabinet, AI leads, sales assistant, project materials/briefs, knowledge base and personal manager.
+- `manager` — manager workspace with assigned-project style view, stuck projects, tasks, leads, meetings and client follow-up prompts.
+- `admin` — admin panel, all projects, users, templates, leads/materials/settings overview.
+
+Server-side guard:
+
+- `/api/admin/*` requires `x-user-role: admin`.
+- `/api/templates/*` requires `x-user-role: admin`.
+- `/api/manager/*` requires `x-user-role: manager` or `admin`.
+
+Known limitation: because role lives in demo auth state/header, a technical user can still spoof the role outside the UI. Production needs real auth, persisted roles and server-side ownership checks.
 
 ## AI Leads MVP
 
@@ -266,7 +289,7 @@ npm start
 **Что важно НЕ делать:**
 
 - Не комитить `.env` с реальными ключами — они должны жить только в секретах хостинга.
-- Не выставлять `/admin/projects` в навигацию по умолчанию. В client-mode (default) пункт скрыт, но URL всё ещё открыт. Это by-design для демо; для настоящего production добавьте server-side guard.
+- Не считать demo-role полноценной безопасностью. `/api/admin`, `/api/templates` и `/api/manager` уже защищены серверным guard, но роль пока приходит из demo-заголовка.
 
 ### Переход на настоящий production
 
@@ -274,8 +297,8 @@ npm start
 
 1. **Postgres вместо SQLite** — поменять `provider = "postgresql"` в `prisma/schema.prisma` и `DATABASE_URL` на managed Postgres (Neon / Supabase / Render Postgres).
 2. **S3/R2 вместо локального диска** — заменить `server/src/services/storage.ts` (одна реализация интерфейса).
-3. **Реальная auth** — заменить middleware `auth.ts` на SSO / JWT, добавить роли (client/team/admin), убрать `DEV_USER_EMAIL` fallback.
-4. **Server-side guard** на team-only маршруты (`/admin`, `/templates`, опционально `/sales-assistant`).
+3. **Реальная auth** — заменить middleware `auth.ts` на SSO / JWT, хранить роли в БД, добавить ownership/manager assignment checks и убрать `DEV_USER_EMAIL` fallback.
+4. **Server-side guard второго уровня** — заменить demo header role на проверку persisted role/session для `/admin`, `/manager`, `/templates`.
 5. **Постоянный AI-провайдер** — `AI_PROVIDER=openai` + `OPENAI_API_KEY` и OpenAI model env в секретах. Мониторинг usage через Render Logs.
 6. **CDN перед SPA** — Cloudflare / Fastly. Express отдаёт только `/api`.
 

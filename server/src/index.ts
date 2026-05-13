@@ -16,6 +16,7 @@ import { adminRoutes } from './routes/admin.js';
 import { reviewsRoutes } from './routes/reviews.js';
 import { salesAssistantRoutes } from './routes/salesAssistant.js';
 import { aiLeadsRoutes } from './routes/aiLeads.js';
+import { managerRoutes } from './routes/manager.js';
 
 const app = express();
 
@@ -65,6 +66,7 @@ app.use('/api/prompts', promptsRoutes);
 app.use('/api/templates', templatesRoutes);
 app.use('/api/projects', exportRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/manager', managerRoutes);
 app.use('/api/reviews', reviewsRoutes);
 app.use('/api/sales-assistant', salesAssistantRoutes);
 app.use('/api/ai-leads', aiLeadsRoutes);

@@ -1,26 +1,46 @@
 import { NavLink } from 'react-router-dom';
 import clsx from 'clsx';
-import { LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Rocket, BookText, Headphones, Radio } from 'lucide-react';
+import {
+  LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
+  BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
+  MessageCircle, Handshake, KanbanSquare, PackageCheck,
+} from 'lucide-react';
 import { Logo } from '../ui/Logo';
-import { ModeToggle } from '../ui/ModeToggle';
-import { useMode } from '../../lib/mode';
+import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
 
-interface NavItem { to: string; icon: typeof LayoutDashboard; label: string; teamOnly?: boolean }
+interface NavItem { to: string; icon: typeof LayoutDashboard; label: string }
 
-const NAV: NavItem[] = [
-  { to: '/dashboard',       icon: LayoutDashboard, label: 'Рабочий стол' },
-  { to: '/projects/new',    icon: FolderPlus,      label: 'Новый проект' },
-  { to: '/guide',           icon: BookText,        label: 'Гайд команды' },
-  { to: '/ai-leads',        icon: Radio,           label: 'Получать AI-лиды' },
-  { to: '/sales-assistant', icon: Headphones,      label: 'AI-ассистент на продажах' },
-  // team-only navigation lives below — hidden from clients
-  { to: '/templates',       icon: FileCode2,       label: 'Шаблоны заданий', teamOnly: true },
-  { to: '/admin/projects',  icon: ShieldCheck,     label: 'Админ', teamOnly: true },
-];
+const NAV: Record<UserRole, NavItem[]> = {
+  client: [
+    { to: '/dashboard',        icon: LayoutDashboard, label: 'Рабочий стол' },
+    { to: '/projects/new',     icon: FolderPlus,      label: 'Новый проект' },
+    { to: '/demo',             icon: Presentation,    label: 'Демо-кабинет' },
+    { to: '/ai-leads',         icon: Radio,           label: 'AI-лиды' },
+    { to: '/sales-assistant',  icon: Headphones,      label: 'AI-ассистент' },
+    { to: '/personal-manager', icon: MessageCircle,   label: 'Персональный менеджер' },
+  ],
+  manager: [
+    { to: '/manager',          icon: LayoutDashboard, label: 'Рабочий стол менеджера' },
+    { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
+    { to: '/manager/leads',    icon: Radio,           label: 'Новые лиды' },
+    { to: '/manager/meetings', icon: CalendarDays,    label: 'Встречи' },
+    { to: '/manager/tasks',    icon: ClipboardList,   label: 'Задачи' },
+    { to: '/manager/clients',  icon: Users,           label: 'Клиенты' },
+  ],
+  admin: [
+    { to: '/admin',            icon: ShieldCheck,     label: 'Админ-панель' },
+    { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
+    { to: '/admin/users',      icon: Users,           label: 'Пользователи' },
+    { to: '/templates',        icon: FileCode2,       label: 'Шаблоны' },
+    { to: '/admin/leads',      icon: Radio,           label: 'Лиды' },
+    { to: '/admin/materials',  icon: PackageCheck,    label: 'Материалы' },
+    { to: '/admin/settings',   icon: Settings,        label: 'Настройки' },
+  ],
+};
 
 export function Sidebar() {
-  const [mode] = useMode();
-  const visibleNav = NAV.filter((n) => !n.teamOnly || mode === 'team');
+  const role = getAuth()?.role ?? 'client';
+  const visibleNav = NAV[role];
 
   return (
     <aside className="hidden lg:flex flex-col w-sidebar bg-ink border-r border-line shrink-0 h-screen sticky top-0">
@@ -29,7 +49,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 px-3 py-5 space-y-1">
-        <SectionLabel>Навигация</SectionLabel>
+        <SectionLabel>{roleLabel(role)}</SectionLabel>
         {visibleNav.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
@@ -62,21 +82,14 @@ export function Sidebar() {
         </div>
       </nav>
 
-      <div className="mx-3 mb-3">
-        <div className="text-[10px] uppercase tracking-[0.14em] text-faint font-semibold mb-1.5 px-1">
-          Режим интерфейса
-        </div>
-        <ModeToggle />
-      </div>
-
       <div className="mx-3 mb-4 p-4 rounded-lg border border-line bg-grad-ink relative overflow-hidden">
         <div className="absolute -top-8 -right-8 w-24 h-24 bg-zapusk/20 rounded-full blur-2xl" />
-        <Rocket size={16} className="text-zapusk-400 mb-2" />
+        {role === 'client' ? <UserRound size={16} className="text-zapusk-400 mb-2" /> : role === 'manager' ? <Handshake size={16} className="text-zapusk-400 mb-2" /> : <KanbanSquare size={16} className="text-zapusk-400 mb-2" />}
         <div className="text-[13px] font-semibold text-primary leading-tight">
-          ZAPUSK AI
+          {role === 'client' ? 'Ваш менеджер' : role === 'manager' ? 'Команда сопровождения' : 'ZAPUSK AI Admin'}
         </div>
         <div className="text-[11px] text-muted mt-1 leading-snug">
-          Платформа подготовки проектов к инвесторам.
+          {role === 'client' ? 'Екатерина · упаковка и лиды' : role === 'manager' ? 'Фокус на проектах и следующих шагах.' : 'Роли, проекты, шаблоны и статусы.'}
         </div>
       </div>
     </aside>
