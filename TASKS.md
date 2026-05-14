@@ -355,7 +355,69 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 19 User Registration & Login UX shipped)_
+_(empty — Sprint 20 AI Search Visibility & AEO shipped)_
+
+---
+
+## Sprint 20 update — 2026-05-14 — AI Search Visibility & AEO Infrastructure
+
+Theme: **Zapusk AI собирает не просто landing для инвестора, а AI-readable инвестиционную упаковку.** Каждая страница должна легко читаться, структурироваться и цитироваться AI search engines (ChatGPT / Claude / Perplexity / answer engines). Это сдвиг от классического SEO к AEO (Answer Engine Optimization) поверх существующего Packaging Pipeline.
+
+Non-goals (фикс): без SERP tracking, Semrush integration, Google Search Console, indexing APIs, crawler analytics, ranking dashboards, backlink systems. И никаких упоминаний Lovable / Semrush / GPT / Claude в client-facing UI — это собственная инфраструктура ZAPUSK AI.
+
+### Backend
+
+- **`server/src/services/templateSeeds.ts`** — добавлен общий `AEO_LAYER` константа, инжектится в `${AEO_LAYER}` через template literal в 4 landing-style шаблона: `one_pager`, `pitch_structure`, `lovable_landing`, `lovable_pitch`. Слой требует:
+  - Semantic HTML (H1 / H2 / H3, реальные заголовки)
+  - 9 обязательных semantic sections (Hero summary / Что делает / Почему рынок / Почему сейчас / Revenue / ICP / Investment opportunity / FAQ / Structured summaries)
+  - 8+ self-contained Q/A в FAQ для AI citation
+  - Bold цифры, internal anchors, meta description / Open Graph
+  - Anti-patterns: текст в картинках, длинные параграфы, JS-only контент, жаргон без объяснений
+- **Новый seed `ai_visibility_report`** — внутренний AI Discoverability аудит. provider=openai / tool=gpt-4.1 / outputType=ai_visibility_report / category=summary. Output — структурированный Markdown с AI Discoverability Score (0..100), 5 segment-scores (AI Readability / Investor Keyword Coverage / FAQ Quality / Semantic Structure / Citation Readiness), 10-pt checklist на coverage инвестор-intent topics, FAQ coverage audit на 8 базовых вопросов, missing AI-search topics + recommendations с приоритетами.
+- **`server/src/services/promptBuilders.ts`** — `PromptKind` + `ALL_PROMPT_KINDS` + `KIND_TITLES` дополнены `ai_visibility_report`. KIND_TITLES для клиента: «AI Discoverability отчёт».
+- **`server/src/services/aiProviders.ts`** — `OutputTypeId` enum дополнен `ai_visibility_report`, `OUTPUT_TYPES` мапа дополнена записью «AI Discoverability Report», `TEMPLATE_ORCHESTRATION` мапа дополнена. Provider=openai, tool=gpt-4.1, model=null (берёт env.OPENAI_MODEL_MAIN).
+
+### Frontend
+
+- **`web/src/lib/aiProviders.ts`** — `OUTPUT_TYPE_UI` дополнен `ai_visibility_report` («AI Discoverability» badge, tone=ai). `DEFAULT_TEMPLATE_ORCHESTRATION` дополнен fallback'ом.
+- **`web/src/components/ui/AIDiscoverabilityScore.tsx`** — НОВЫЙ компонент. Большой score 0..100 + 5 progress-bar'ов по сегментам + AI/AEO статус-badge («AI Search Ready / AEO в работе / нужны улучшения») + последний timestamp обновления. Логика:
+  - Если на проекте есть succeeded job с outputType=ai_visibility_report — парсим из его resultJson markdown'а явные оценки (regex по «AI Readability — N» / «Готовность — N»)
+  - Если AI отчёта ещё нет — heuristic baseline: считаем сколько artefact'ов готово (landing/pitch/faq/summary/financial) и поднимаем segment-scores соответственно
+  - Если ничего не готово — baseline ~30-40 с CTA «Сгенерировать отчёт»
+  - Badge `source` показывает, AI это или эвристика (admin/manager диагностика)
+- **`web/src/pages/ProjectCockpit.tsx`** — `<AIDiscoverabilityScore />` встроен справа от «AI generated materials» в grid `[1fr_360px]`. CTA «Сгенерировать отчёт» вызывает `generatePrompt('ai_visibility_report')`.
+- **`web/src/components/ui/AIPackagingHistory.tsx`** — каждый landing-style job (landing / one_pager / pitch_deck / pitch_structure / ai_visibility_report) получает **«AI-ready»** pill рядом с обычными статусами. Это визуальный сигнал, что страница включает AEO слой.
+
+### Marketing copy
+
+- **`web/src/pages/Dashboard.tsx`** — новый AEO-баннер под KPI: «AI Search Ready · собственная инфраструктура» + объяснение «Лендинги собираются с semantic structure и AEO-слоем — их видят и могут процитировать AI answer engines». 
+- **`web/src/pages/DemoCabinet.tsx`** — обновлён hero subtitle: «...AI-ready упаковка с semantic structure под AI-search...» + 3 badge'а (AI Search Ready / AEO-ready structure / AI Discoverable).
+- **`web/src/pages/Signup.tsx`** — subtitle: «AI-ready упаковка, semantic structure под AI-search и собственный AI Discoverability Score».
+
+Все тексты сознательно избегают vendor names. Client видит «AI Discoverability» / «AI Search Ready» / «AEO-ready structure» — это инфраструктура ZAPUSK AI.
+
+### Role visibility (Sprint 16 + 20 stack)
+
+- **Client** видит: «AI Discoverability» (через `outputTypeLabel`), generic «AI Reasoning» (вместо «GPT-4.1»), AI-ready бейджи, AEO marketing copy. Никаких vendor names.
+- **Manager/Admin** видит ту же AEO marketing copy, плюс полную orchestration metadata: provider=openai, tool=gpt-4.1, errorCode, completedBy. Templates на `/templates` показывают `ai_visibility_report` в orchestration center с full provenance.
+
+### Verification
+
+- [x] Re-seed dev: template `ai_visibility_report` создан, 3 demo проекта получили job'ы со status=succeeded (потому что openai provider — fast path, реальный GPT call'а не делает)
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — server tsc + web vite OK (452.10 kB / 127.02 kB gzip, +8 kB к Sprint 19)
+- [ ] Production verify (после redeploy):
+  - `/dashboard` показывает AEO-баннер «AI Search Ready»
+  - `/projects/{id}` показывает `<AIDiscoverabilityScore />` справа в cockpit'е, с baseline или heuristic scoring
+  - `/api/packaging-jobs/project/{id}` содержит запись с `templateKey=ai_visibility_report` + `outputType=ai_visibility_report`
+  - `/templates` (admin) показывает «AI Discoverability Report» в orchestration center с provider=OpenAI / tool=GPT-4.1
+  - `/demo` показывает 3 AEO badge'а в hero
+
+### Known limitations
+
+- AI Discoverability Score сейчас в основном heuristic — точные числовые оценки появляются только когда сгенерирован `ai_visibility_report` через реальный OpenAI call и оценки прописаны в markdown'е по нужному паттерну (regex-парсер пытается вытащить).
+- AEO_LAYER инжектится в prompt только при следующем `db:seed:prod` на проде. Существующие seed-шаблоны в prod БД не обновятся автоматически до запуска seed — но `start:prod` запускает `db:seed:prod` каждый рестарт, так что обновятся после redeploy.
 
 ---
 

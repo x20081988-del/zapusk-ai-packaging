@@ -170,6 +170,12 @@ function JobRow({
           )}
           <StatusBadge tone={outputTypeTone(job.outputType)} dot>{outputTypeLabel(job.outputType)}</StatusBadge>
           <StatusBadge tone={STATUS_TONE[job.status]} dot>{statusLabel}</StatusBadge>
+          {/* Sprint 20: AI-ready pill для landing-style материалов. Это
+              визуальный сигнал, что страница включает AEO/semantic слой —
+              готова к AI-search и answer engines. */}
+          {isAEOMaterial(job.outputType) && (
+            <StatusBadge tone="ai" dot>AI-ready</StatusBadge>
+          )}
         </div>
         <div className="text-sm text-primary leading-snug line-clamp-3">
           {/* Sprint 18: managerComment — приоритетный текст для клиента, его
@@ -238,6 +244,16 @@ function JobRow({
       </div>
     </li>
   );
+}
+
+// Sprint 20: landing-style материалы получают AEO/semantic слой в prompt'е,
+// и в UI помечаются «AI-ready» бейджем.
+function isAEOMaterial(outputType: string): boolean {
+  return outputType === 'landing'
+    || outputType === 'one_pager'
+    || outputType === 'pitch_deck'
+    || outputType === 'pitch_structure'
+    || outputType === 'ai_visibility_report';
 }
 
 function formatTime(iso: string): string {

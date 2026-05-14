@@ -30,6 +30,7 @@ import { ProjectJourney } from '../components/ui/ProjectJourney';
 import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 import { getBriefStatus, briefStatusTone } from '../lib/briefStatus';
 import { AIPackagingHistory } from '../components/ui/AIPackagingHistory';
+import { AIDiscoverabilityScore } from '../components/ui/AIDiscoverabilityScore';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -351,13 +352,17 @@ export default function ProjectCockpit() {
         <RecentMeetings projectId={id} limit={3} />
       </div>
 
-      {/* Sprint 15: AI generated materials — аудит-трейл оркестрации. Показывает
-          какой AI и каким инструментом собрал каждый артефакт + быстрый
-          regenerate. */}
-      <div className="mb-6">
+      {/* Sprint 20: AI Discoverability Score — собственная метрика ZAPUSK AI
+          поверх AEO-инфраструктуры. Показывает, насколько материалы проекта
+          видны в AI search engines / answer engines. */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
         <AIPackagingHistory
           projectId={id}
           onRegenerate={(templateKey) => generatePrompt(templateKey)}
+        />
+        <AIDiscoverabilityScore
+          projectId={id}
+          onGenerate={() => generatePrompt('ai_visibility_report')}
         />
       </div>
 

@@ -80,7 +80,8 @@ export default function Signup() {
             </div>
             <h1 className="text-2xl font-bold text-primary tracking-tight">Создайте аккаунт</h1>
             <p className="text-sm text-secondary mt-1.5">
-              Начните подготовку проекта к привлечению инвестиций через ZAPUSK AI.
+              Подготовьте проект к привлечению инвестиций: AI-ready упаковка, semantic structure
+              под AI-search и собственный AI Discoverability Score.
             </p>
           </div>
 

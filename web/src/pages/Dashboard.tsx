@@ -44,6 +44,29 @@ export default function Dashboard() {
         <StatCard label="Готово к показу инвестору" value={ready} icon={<TrendingUp size={16} />} accent="zapusk" />
       </div>
 
+      {/* Sprint 20: AEO / AI-search positioning баннер. Объясняет на главной
+          странице, что упаковка проекта собирается под AI search engines —
+          собственная инфраструктура ZAPUSK AI, без vendor names. */}
+      <Card padded accent="ai" className="mb-6 overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(35,214,176,0.12),transparent_30%),radial-gradient(circle_at_88%_0%,rgba(196,148,58,0.10),transparent_28%)]" />
+        <div className="relative flex flex-col md:flex-row md:items-center gap-4">
+          <div className="w-12 h-12 rounded-lg bg-grad-ai/15 border border-ai/30 text-ai-glow flex items-center justify-center shrink-0">
+            <Sparkles size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
+              AI Search Ready · собственная инфраструктура
+            </div>
+            <h2 className="text-base font-semibold text-primary">AI-ready упаковка проекта</h2>
+            <p className="text-xs text-secondary mt-1 leading-relaxed max-w-2xl">
+              Лендинги, презентации и one-pager'ы собираются с semantic structure и AEO-слоем — их
+              видят и могут процитировать ChatGPT, Claude, Perplexity и другие AI answer engines.
+              Каждый проект получает собственный AI Discoverability Score.
+            </p>
+          </div>
+        </div>
+      </Card>
+
       {/* Sprint 14: «Проекты» сразу под KPI — пользователь должен видеть свои
           проекты, а не искать их ниже AI-плашки. */}
       <div className="mb-4 flex items-end justify-between">

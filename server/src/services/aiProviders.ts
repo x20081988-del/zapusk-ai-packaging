@@ -30,7 +30,8 @@ export type OutputTypeId =
   | 'financial_model'
   | 'calculator'
   | 'faq'
-  | 'sales_assistant';
+  | 'sales_assistant'
+  | 'ai_visibility_report'; // Sprint 20
 
 export interface ProviderMeta {
   id: AIProviderId;
@@ -174,6 +175,15 @@ export const OUTPUT_TYPES: Record<OutputTypeId, OutputTypeMeta> = {
     description: 'Live co-pilot переговоров по SPIN + эмоциональный слой.',
     category: 'sales',
   },
+  // Sprint 20: AEO / AI search visibility audit. Оценивает, насколько готовая
+  // упаковка проекта видна и цитируема AI answer engines (ChatGPT/Claude/
+  // Perplexity). Output — Markdown с Discoverability Score + recommendations.
+  ai_visibility_report: {
+    id: 'ai_visibility_report',
+    label: 'AI Discoverability Report',
+    description: 'Аудит готовности материалов к AI-search и answer engines.',
+    category: 'summary',
+  },
 };
 
 // Карта PromptTemplate.key → (provider, tool, model, outputType). Это
@@ -253,6 +263,14 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
     tool: 'gpt-4.1',
     model: null,
     outputType: 'sales_assistant',
+  },
+  ai_visibility_report: {
+    // Sprint 20: GPT-4.1 как reasoning-модель для аудита (длинный context,
+    // structured Markdown output). model=null → env.OPENAI_MODEL_MAIN.
+    provider: 'openai',
+    tool: 'gpt-4.1',
+    model: null,
+    outputType: 'ai_visibility_report',
   },
 };
 

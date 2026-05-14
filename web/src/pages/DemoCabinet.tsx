@@ -31,9 +31,15 @@ export default function DemoCabinet() {
               </div>
               <h1 className="text-3xl md:text-4xl font-bold text-primary tracking-tight">Главснаб</h1>
               <p className="text-sm text-secondary mt-3 max-w-3xl leading-relaxed">
-                Идеальный demo cabinet: заполненный бриф, готовая маркетинговая упаковка, презентация,
-                финансовая модель, посадочная страница, AI-лиды, запись разговора и следующий юридический этап.
+                Идеальный demo cabinet: заполненный бриф, AI-ready упаковка с semantic structure под
+                AI-search, готовая презентация, финансовая модель, посадочная страница, AI-лиды,
+                запись разговора и следующий юридический этап.
               </p>
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                <StatusBadge tone="ai" dot>AI Search Ready</StatusBadge>
+                <StatusBadge tone="success" dot>AEO-ready structure</StatusBadge>
+                <StatusBadge tone="zapusk" dot>AI Discoverable</StatusBadge>
+              </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
                 <Metric icon={<Wallet size={14} />} label="Чек инвестора" value="от 1 млн ₽" />
                 <Metric icon={<TrendingUp size={14} />} label="Готовность" value="92%" />

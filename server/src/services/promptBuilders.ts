@@ -16,7 +16,8 @@ export type PromptKind =
   | 'financial'
   | 'calculator_spec'
   | 'investor_faq'
-  | 'sales_gpt';
+  | 'sales_gpt'
+  | 'ai_visibility_report'; // Sprint 20
 
 export const ALL_PROMPT_KINDS: PromptKind[] = [
   'investment_summary',
@@ -29,6 +30,7 @@ export const ALL_PROMPT_KINDS: PromptKind[] = [
   'calculator_spec',
   'investor_faq',
   'sales_gpt',
+  'ai_visibility_report',
 ];
 
 // Human-readable titles for materials we hand to the team. Keys stay internal
@@ -44,6 +46,9 @@ export const KIND_TITLES: Record<PromptKind, string> = {
   calculator_spec: 'Спецификация инвестиционного калькулятора',
   investor_faq: 'Ответы на вопросы инвестора',
   sales_gpt: 'Материал для встречи с инвестором',
+  // Sprint 20: внутренний аудит AI Discoverability. Клиенту показывается как
+  // «AI Discoverability Report» — собственная инфраструктура ZAPUSK AI.
+  ai_visibility_report: 'AI Discoverability отчёт',
 };
 
 export function titleForKind(kind: string): string {

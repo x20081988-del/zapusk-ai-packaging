@@ -69,6 +69,9 @@ export const OUTPUT_TYPE_UI: Record<string, OutputTypeUiMeta> = {
   calculator: { label: 'Investor Calculator', description: 'Производная от финмодели.', tone: 'success' },
   faq: { label: 'Investor FAQ', description: 'Снятие возражений.', tone: 'ai' },
   sales_assistant: { label: 'AI Sales Assistant', description: 'Live co-pilot по SPIN.', tone: 'ai' },
+  // Sprint 20: AEO / AI search discoverability audit. Тон ai-glow, чтобы
+  // визуально совпадал с другими AI-блоками в UI.
+  ai_visibility_report: { label: 'AI Discoverability', description: 'Готовность к AI-search.', tone: 'ai' },
 };
 
 export function providerLabel(provider: string | null | undefined): string {
@@ -150,6 +153,7 @@ export const DEFAULT_TEMPLATE_ORCHESTRATION: Record<string, { provider: string; 
   calculator_spec:    { provider: 'claude', tool: 'claude-code', outputType: 'calculator' },
   investor_faq:       { provider: 'openai', tool: 'gpt-5.5', outputType: 'faq' },
   sales_gpt:          { provider: 'openai', tool: 'gpt-4.1', outputType: 'sales_assistant' },
+  ai_visibility_report: { provider: 'openai', tool: 'gpt-4.1', outputType: 'ai_visibility_report' },
 };
 
 export function resolveTemplateOrchestration(templateKey: string | null | undefined) {
