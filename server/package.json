@@ -13,6 +13,7 @@
     "db:reset": "prisma migrate reset --force",
     "db:seed": "tsx src/seed.ts",
     "db:seed:prod": "node dist/seed.js",
+    "db:seed:dev-reset": "tsx src/scripts/devReset.ts",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate"
   },

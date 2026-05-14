@@ -199,12 +199,34 @@ const STATUS_TONE_ADMIN: Record<string, 'neutral' | 'ai' | 'warning' | 'success'
   archived: 'danger',
 };
 
+// Sprint 29 — фильтры по workspaceStatus, чтобы invited users не «пропадали»
+// визуально из-за длинной таблицы. Все варианты + явная категория «инвайты
+// без регистрации» (не пользователи как таковые, но видны как ожидающие).
+type UsersFilter = 'all' | 'active' | 'demo' | 'awaiting_payment' | 'archived' | 'pending_invites';
+
+const USERS_FILTERS: Array<{ id: UsersFilter; label: string }> = [
+  { id: 'all', label: 'Все' },
+  { id: 'active', label: 'Активные' },
+  { id: 'demo', label: 'Демо' },
+  { id: 'awaiting_payment', label: 'Ожидают оплаты' },
+  { id: 'archived', label: 'Архивные' },
+  { id: 'pending_invites', label: 'Инвайты без регистрации' },
+];
+
 function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boolean }) {
   const [list, setList] = useState<AdminUserRow[]>(users);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [filter, setFilter] = useState<UsersFilter>('all');
   const me = getAuth();
 
   useEffect(() => { setList(users); }, [users]);
+
+  const filtered = list.filter((u) => {
+    if (filter === 'all') return true;
+    if (filter === 'pending_invites') return false; // pending invites живут отдельно, в InvitesPanel
+    const status = u.workspaceStatus ?? 'lead';
+    return status === filter;
+  });
 
   // Sprint 25 — impersonate: SUPER_ADMIN может войти как кто угодно, ADMIN
   // может войти как кто угодно кроме SUPER_ADMIN. И не в собственный аккаунт.
@@ -266,6 +288,38 @@ function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boole
         subtitle={compact ? 'Последние подключённые пользователи и их режим' : 'Все пользователи: роль, режим кабинета, активность'}
         action={<Users size={16} className="text-muted" />}
       />
+      {!compact && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {USERS_FILTERS.map((f) => {
+            const count = f.id === 'all'
+              ? list.length
+              : f.id === 'pending_invites'
+                ? null // показываем счёт из InvitesPanel
+                : list.filter((u) => (u.workspaceStatus ?? 'lead') === f.id).length;
+            const active = filter === f.id;
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id)}
+                className={`h-8 px-3 rounded-md text-xs border transition-all ${
+                  active
+                    ? 'bg-zapusk/15 text-primary border-zapusk/40'
+                    : 'bg-surface text-secondary border-line hover:border-zapusk/30'
+                }`}
+              >
+                {f.label}
+                {count !== null && <span className="ml-1.5 text-muted font-num">{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {filter === 'pending_invites' && (
+        <div className="rounded-md border border-warning/25 bg-warning/6 px-3 py-2.5 mb-3 text-xs text-secondary">
+          Инвайты без регистрации показаны ниже в разделе «Приглашения» — это не пользователи, а ожидающие токены.
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[760px]">
           <thead>
@@ -280,7 +334,10 @@ function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boole
             </tr>
           </thead>
           <tbody>
-            {list.map((u) => {
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} className="py-6 text-center text-xs text-muted">Нет пользователей под текущим фильтром.</td></tr>
+            )}
+            {filtered.map((u) => {
               const status = u.workspaceStatus ?? 'lead';
               const tone = STATUS_TONE_ADMIN[status] ?? 'neutral';
               return (

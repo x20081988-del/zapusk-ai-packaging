@@ -355,7 +355,92 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 28 dynamic project journey shipped)_
+_(empty — Sprint 29 user data protection shipped; требуется upgrade Render plan для активации persistent disk)_
+
+---
+
+## Sprint 29 update — 2026-05-14 — Защита пользовательских данных от затирания при деплое
+
+Theme: **Реальные пользователи и проекты не должны исчезать после deploy.** После Sprint 28 жалоба: пропал `luquid@ya.ru`, созданный через invite. Диагностика показала, что seed.ts чист (нет ни одного `deleteMany`), но **render.yaml не имеет блока `disk:`** — Render free tier работает на ephemeral filesystem, `prod.db` пересоздаётся при каждом deploy.
+
+### Срочная диагностика
+
+- Проверка БД: `luquid@yandex.ru` (правильный домен — в спеке был typo `ya.ru`) **сейчас существует** на проде. createdAt=2026-05-14T12:51:44, **после** Sprint 28 deploy в 12:38:08. Сигнал — пользователь зарегистрировался заново после wipe.
+- Invite `luquid@yandex.ru` тоже есть, помечен USED.
+- `seed.ts` audit: `grep deleteMany` пуст. Все операции upsert. Не источник.
+- `render.yaml` audit: блока `disk:` нет. Комментарий обещает «persistent disk holds the SQLite database», но реальной конфигурации не было. Это и есть root cause.
+
+### Главное исправление — `render.yaml`
+
+- Добавлен `disk: { name: zapusk-data, mountPath: /var/data, sizeGB: 1 }`.
+- `plan` поднят с `free` → `starter` (Render free НЕ поддерживает disks).
+- `DATABASE_URL` теперь `file:/var/data/prod.db`, `UPLOADS_DIR` теперь `/var/data/uploads` — данные живут на mount, переживают деплой.
+
+⚠️ **Без upgrade Render plan'а до starter+ disk: блок игнорируется и SQLite снова становится ephemeral.** После push'а нужно в Render dashboard подтвердить переход на starter ($7/mo) и attach диска. До этого момента — каждый deploy всё ещё wipe-ит data.
+
+### Defense in depth — seed.ts
+
+- Новый `server/src/seedGuards.ts` — выделенный модуль для guards:
+  - `IS_PRODUCTION`, `LOG_PREFIX`, `seedLog()` — единый логгер с маркером `[seed:prod]` на проде / `[seed]` локально.
+  - **`assertNotProduction(operation: string)`** — кидает Error, если `NODE_ENV=production`. Любой будущий код, который собирается делать `deleteMany`, обязан позвать guard первым. Сейчас в `seed.ts` нет ни одного destructive op, но guard защитит от регрессии.
+- `seed.ts` обновлён:
+  - Все `console.log('[seed] ...')` заменены на `log(...)` через единый logger
+  - На production добавлены явные сообщения: `safe mode enabled — only upsert/update operations allowed` + `no destructive operations on real user data (User, Project, InviteToken, files, briefs, prompts, jobs, sessions, reviews)`
+- `seedDemoArchetype()` теперь отказывается обновлять project с тем же name, если у него `isDemo=false` (защита от случайного override реального клиентского проекта).
+
+### Two-mode seed
+
+- **`npm run db:seed:prod`** (без изменений в команде, но теперь safe) — компилируется в `dist/seed.js`, чисто upsert.
+- **`npm run db:seed:dev-reset`** — НОВЫЙ. Запускает `tsx src/scripts/devReset.ts`, который:
+  1. Сразу зовёт `assertNotProduction('db:seed:dev-reset wipe')`
+  2. На `NODE_ENV=production` падает с `Refusing destructive seed operation "db:seed:dev-reset wipe" in production`
+  3. Локально — стирает все таблицы в правильном порядке (зависимые первыми)
+- Старый `npm run db:reset` (`prisma migrate reset --force`) тоже на месте, но prisma сама блокирует его в production.
+
+### Admin /users filter UI
+
+`web/src/pages/AdminDashboard.tsx` `UsersTable` получил фильтры: **Все / Активные / Демо / Ожидают оплаты / Архивные / Инвайты без регистрации**. Счётчики per-filter справа от лейбла. Фильтр `pending_invites` показывает баннер «инвайты живут в разделе Приглашения». Это устраняет визуальное «исчезновение» инвайт-юзеров — даже если они отфильтрованы по workspaceStatus, фильтр явно показан.
+
+### Production safety test (smoke)
+
+Локальный прогон на чистой DB:
+1. Создан inviter (ADMIN) + invite + safety-test user (FOUNDER, active) + project (isDemo=false)
+2. Выполнен `NODE_ENV=production node dist/seed.js`
+3. Прогон логов:
+   ```
+   [seed:prod] starting seed run
+   [seed:prod] safe mode enabled — only upsert/update operations allowed
+   [seed:prod] no destructive operations on real user data
+   ```
+4. После seed: `User EXISTS`, `Invite EXISTS (used=false, revoked=false)`, `Project EXISTS (isDemo=false, userId=...)`. **PASS — production seed не тронул реальные данные.**
+
+Также прогнан `db:seed:dev-reset` под `NODE_ENV=production` — упал на assertNotProduction до того, как открыть БД. **PASS — destructive reset заблокирован в проде.**
+
+### Как теперь защищены реальные пользователи
+
+1. **Hardware-level**: persistent disk (после upgrade plan'а) — SQLite на mountPath, переживает container restart
+2. **Code-level**: production seed чисто-upsert по дизайну. Audit подтверждает 0 destructive ops
+3. **Guard-level**: `assertNotProduction()` помечает любую будущую destructive операцию как боевую — упадёт на проде громко
+4. **UI-level**: admin filters показывают всех пользователей и инвайты — никто визуально не «пропадает»
+5. **Demo isolation**: `seedDemoArchetype()` отказывается обновлять non-demo project с тем же именем
+
+### Что осталось / next steps
+
+1. **САМОЕ ВАЖНОЕ**: команда должна в Render dashboard:
+   - Apply Blueprint (или нажать «Sync» на сервисе)
+   - Подтвердить переход с Free на Starter plan ($7/mo)
+   - Подтвердить attach `zapusk-data` disk (1 GB)
+   - Без этого render.yaml `disk:` блок просто игнорируется
+2. После активации disk'а — переcоздать invite для `luquid@yandex.ru` через `POST /api/admin/invites` (предыдущий уже USED). Пользователь получит ссылку и зарегистрируется заново.
+3. Текущий ephemeral DB будет wiped ОДИН РАЗ при переходе на disk (новый mount, пустой). После этого данные сохраняются.
+
+### Verification
+
+- [x] `cd server && npx tsc --noEmit` — clean
+- [x] `cd web && npx tsc --noEmit` — clean
+- [x] `npm run build` — OK (528.31 kB / 148.96 kB gzip, +1 kB к Sprint 28)
+- [x] Production safety test PASS (создан real user → seed:prod → user сохранился)
+- [x] `db:seed:dev-reset` под NODE_ENV=production падает с явной ошибкой ✓
 
 ---
 

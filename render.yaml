@@ -17,7 +17,12 @@ services:
   - type: web
     name: zapusk-ai
     runtime: node
-    plan: free
+    # Sprint 29: persistent disk требуется, чтобы реальные пользователи не
+    # терялись на каждый deploy. Render free plan НЕ поддерживает disks —
+    # сервис обязательно должен быть на starter+ ($7/mo за 1 GB).
+    # Без upgrade'а render.yaml читается, но disk: блок игнорируется и SQLite
+    # снова станет ephemeral.
+    plan: starter
     region: frankfurt
     # Render auto-sets NODE_ENV=production which would normally cause `npm install`
     # to skip devDependencies (prisma, vite, typescript). install:all passes
@@ -25,6 +30,12 @@ services:
     buildCommand: npm run install:all && npm run build
     startCommand: npm start
     healthCheckPath: /health
+    # Sprint 29: 1 GB persistent disk для SQLite + uploads. DATABASE_URL и
+    # UPLOADS_DIR ниже указывают на /var/data, чтобы данные пережили deploy.
+    disk:
+      name: zapusk-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       # Keep Render on Node 22 LTS. Prisma 5.22 schema engine is unreliable on
       # the local Node 24 runtime when applying migrations to a fresh SQLite DB.
@@ -34,10 +45,14 @@ services:
         value: production
       - key: DEMO_MODE
         value: "true"
+      # Sprint 29: SQLite и uploads теперь живут на persistent disk.
+      # Раньше file:./prod.db и ./uploads оба указывали на ephemeral working
+      # directory — каждый deploy создавал новый контейнер с пустой БД,
+      # и invited users (luquid@yandex.ru и т.д.) исчезали.
       - key: DATABASE_URL
-        value: "file:./prod.db"
+        value: "file:/var/data/prod.db"
       - key: UPLOADS_DIR
-        value: ./uploads
+        value: /var/data/uploads
       - key: CORS_ORIGIN
         value: "*"
       - key: AI_PROVIDER

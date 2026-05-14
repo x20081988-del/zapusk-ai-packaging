@@ -5,9 +5,20 @@ import { env } from './env.js';
 import { generateAllPrompts } from './services/promptBuilders.js';
 import { resolveOrchestration } from './services/aiProviders.js';
 import { hashPassword } from './authCrypto.js';
+import { IS_PRODUCTION, seedLog as log } from './seedGuards.js';
+
+// Sprint 29 — production seed чисто-upsert. Никаких deleteMany на user/project/
+// invite/файлах/брифах/promptах/job'ах/sessions/reviews. Demo-проекты
+// обновляются только по isDemo=true. Reset-режим (полный wipe) живёт в
+// scripts/devReset.ts и отказывает в production через assertNotProduction().
 
 async function main() {
-  console.log('[seed] upserting prompt templates...');
+  log('starting seed run');
+  if (IS_PRODUCTION) {
+    log('safe mode enabled — only upsert/update operations allowed');
+    log('no destructive operations on real user data (User, Project, InviteToken, files, briefs, prompts, jobs, sessions, reviews)');
+  }
+  log('upserting prompt templates...');
   for (const t of SEED_TEMPLATES) {
     // Sprint 15: проставляем orchestration metadata из единого registry. Для
     // существующих строк это backfill (update пути обновляет поля), для
@@ -116,8 +127,13 @@ async function main() {
     });
   }
 
-  console.log('[seed] seeding demo project "Венский ветер"...');
-  const demoExisting = await prisma.project.findFirst({ where: { name: 'Венский ветер', userId: user.id } });
+  log('seeding demo project "Венский ветер"...');
+  // Sprint 29: demo-проекты обновляются только если они уже isDemo=true ИЛИ
+  // принадлежат dev-user (исторический owner всех seed-проектов).
+  // Это защищает реальные проекты с тем же name (маловероятно, но возможно).
+  const demoExisting = await prisma.project.findFirst({
+    where: { name: 'Венский ветер', userId: user.id, OR: [{ isDemo: true }, { userId: user.id }] },
+  });
   const demo = demoExisting
     ? await prisma.project.update({
         where: { id: demoExisting.id },
@@ -258,11 +274,11 @@ async function main() {
     await seedDemoArchetype(user.id, d);
   }
 
-  console.log('[seed] done.');
+  log('done.');
 }
 
 async function seedDemoArchetype(userId: string, d: DemoProject) {
-  console.log(`[seed] seeding archetype "${d.name}"...`);
+  log(`seeding archetype "${d.name}"...`);
   const projectData = {
     inn: d.inn,
     website: d.website,
@@ -280,7 +296,16 @@ async function seedDemoArchetype(userId: string, d: DemoProject) {
     // глобальные демо-витрины для demo пользователей.
     isDemo: true,
   };
-  const existing = await prisma.project.findFirst({ where: { name: d.name, userId } });
+  // Sprint 29: archetype project обновляется ТОЛЬКО если он demo (isDemo=true)
+  // или принадлежит dev-owner. Защита от случайного override реального проекта
+  // с тем же именем.
+  const existing = await prisma.project.findFirst({
+    where: { name: d.name, userId, OR: [{ isDemo: true }, { userId }] },
+  });
+  if (existing && !existing.isDemo) {
+    log(`refusing to update non-demo project "${d.name}" (userId=${userId})`);
+    return;
+  }
   const project = existing
     ? await prisma.project.update({ where: { id: existing.id }, data: projectData })
     : await prisma.project.create({ data: { userId, name: d.name, ...projectData } });
