@@ -108,7 +108,7 @@ export default function AdminAudit() {
   }
 
   async function downloadBackup() {
-    if (!window.confirm('Скачать резервную копию базы? Файл содержит passwordHashes — храните в безопасном месте.')) return;
+    if (!window.confirm('Скачать полный backup (.tar.gz): SQLite база + uploads + snapshots. Файл содержит passwordHashes — храните в зашифрованном месте.')) return;
     setBackupRunning(true);
     try {
       const res = await fetch('/api/admin/backup', {
@@ -121,7 +121,7 @@ export default function AdminAudit() {
       const a = document.createElement('a');
       const ts = new Date().toISOString().replace(/[:.]/g, '-');
       a.href = url;
-      a.download = `zapusk-${ts}.db`;
+      a.download = `zapusk-backup-${ts}.tar.gz`;
       a.click();
       URL.revokeObjectURL(url);
       // Refresh events to show backup record
@@ -247,8 +247,8 @@ export default function AdminAudit() {
       {tab === 'backup' && (
         <Card padded>
           <CardHeader
-            title="Резервная копия базы"
-            subtitle="Скачать SQLite файл целиком. Хранить вне Render — это off-site backup."
+            title="Резервная копия платформы"
+            subtitle="Полный backup: SQLite база + uploads + pre-deploy snapshots — как tar.gz"
           />
           {!isSuperAdmin ? (
             <div className="rounded-md border border-warning/25 bg-warning/8 px-3 py-3 flex items-start gap-2">
@@ -260,8 +260,16 @@ export default function AdminAudit() {
           ) : (
             <div className="space-y-3">
               <p className="text-xs text-secondary leading-relaxed max-w-2xl">
-                Создаёт полный snapshot базы и отдаёт его как `.db` файл. Файл содержит **passwordHashes** и **invite tokens** — храните в зашифрованном хранилище.
-                Render автоматически делает snapshots дисков каждые 24ч (хранятся 7 дней), но off-site backup — дополнительный слой защиты.
+                Создаёт <code>.tar.gz</code> со всем содержимым платформы:
+              </p>
+              <ul className="text-xs text-secondary space-y-1 ml-4 list-disc">
+                <li><code>db/prod.db</code> — вся SQLite база (пользователи, проекты, audit log)</li>
+                <li><code>uploads/</code> — все загруженные файлы (презентации, финмодели, изображения)</li>
+                <li><code>snapshots/</code> — pre-deploy snapshots последних 7 деплоев</li>
+              </ul>
+              <p className="text-xs text-secondary leading-relaxed max-w-2xl">
+                Файл содержит <strong>passwordHashes</strong> и <strong>invite tokens</strong> — храните в зашифрованном off-site месте.
+                Render автоматически снимает disk snapshots каждые 24ч (хранятся 7 дней) — этот backup дополнительный слой защиты.
               </p>
               <Button
                 variant="primary"
@@ -269,7 +277,7 @@ export default function AdminAudit() {
                 loading={backupRunning}
                 onClick={downloadBackup}
               >
-                Скачать backup .db
+                Скачать backup .tar.gz
               </Button>
             </div>
           )}

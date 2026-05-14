@@ -355,7 +355,69 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 30 soft-delete + audit + backup shipped)_
+_(empty — Sprint 31 critical-only: pre-deploy snapshot + full backup shipped)_
+
+---
+
+## Sprint 31 update — 2026-05-14 — Pre-deploy snapshot + full backup (db + uploads)
+
+Theme: **Закрыли два сценария где данные исчезают навсегда без шанса откатить.** До Sprint 31:
+1. `start:prod` запускал `prisma migrate deploy` **без снапшота** — destructive migration = безвозвратная потеря БД.
+2. `POST /api/admin/backup` стримил **только `prod.db`** — uploads (презентации, финмодели, изображения) не были в backup'е, disk corrupt = половина платформы потеряна.
+
+Узкий scope: только catastrophic-grade защита. Seed overwrite, transactions, versioning — Sprint 32+.
+
+### Backend
+
+- **`server/src/scripts/preDeploySnapshot.ts`** — НОВЫЙ. Запускается перед `prisma migrate deploy`:
+  - Resolves `DATABASE_URL` → абсолютный путь к `prod.db`
+  - Копирует через `fs.copyFile` → `/var/data/snapshots/prod-{ISO-timestamp}.db`
+  - Retention: keep последние 7 snapshots, остальные `unlink`
+  - Если DB файла нет (первый deploy / fresh container) → silent skip, не валит deploy
+  - Любая ошибка → warn + exit 0 (deploy продолжается, лучше deploy без snapshot чем no-deploy)
+- **`server/package.json`**:
+  - Новый script `db:snapshot` = `node dist/scripts/preDeploySnapshot.js`
+  - `start:prod` обновлён: `npm run db:snapshot && npm run db:deploy && npm run db:seed:prod && node dist/index.js`
+  - Snapshot бежит ПЕРЕД migrate — если migrate corrupt, snapshot уже на диске
+- **`server/src/routes/admin.ts`** — `POST /api/admin/backup` переписан с `application/octet-stream` на `application/gzip`:
+  - Archiver streams `.tar.gz` с тремя директориями:
+    - `db/prod.db` — вся SQLite база (через `createReadStream` чтобы не грузить в RAM)
+    - `uploads/` — содержимое `UPLOADS_DIR` (`archive.directory`)
+    - `snapshots/` — все pre-deploy snapshots (для cross-deploy восстановления)
+  - Audit logs `system.backup_download` с payload `{dbSizeBytes, includesUploads, includesSnapshots}`
+  - SUPER_ADMIN only (через `requireRole(['SUPER_ADMIN'])`)
+
+### Frontend
+
+- **`web/src/pages/AdminAudit.tsx`** — backup tab показывает что внутри:
+  - `db/prod.db` (SQLite база)
+  - `uploads/` (файлы пользователей)
+  - `snapshots/` (последние 7 deploy snapshots)
+  - Кнопка «Скачать backup .tar.gz»
+
+### Verification
+
+- [x] `server tsc --noEmit` clean
+- [x] `web tsc --noEmit` clean
+- [x] `npm run build` OK (537.46 kB / 151.71 kB gzip, +1 kB к Sprint 30)
+- [x] Local smoke snapshot script: 9 runs → 7 keep, oldest 2 deleted (retention works)
+- [x] Local smoke snapshot script: missing DB → silent skip (graceful)
+
+### Catastrophic scenarios теперь закрыты
+
+| Scenario | До Sprint 31 | После Sprint 31 |
+|---|---|---|
+| Destructive Prisma migration corrupts DB | unrecoverable | можно откатить на `prod-{prev-timestamp}.db` из `/var/data/snapshots/` |
+| Disk corrupt / Render incident | uploads потеряны навсегда | `.tar.gz` backup содержит uploads, snapshots, db — single off-site archive |
+| Admin случайно потер шаблон через `prisma migrate dev` | unrecoverable | предыдущий snapshot живёт на disk |
+
+### Что осталось вне scope (Sprint 32+)
+
+- **Seed overwrite production data** — `promptTemplate.upsert` всё ещё перезаписывает name/body на каждом deploy. Reversible (admin может откатить), не катастрофично.
+- **Brief versioning** — `prisma.projectBrief.upsert` стирает старые версии при regenerate. Edit history loss, но backup помогает откатить.
+- **Prisma transactions** — multi-step операции не атомарные. Partial-fail возможен, но реально редко.
+- **Scheduled off-site backup в S3 / Yandex Object Storage** — нужен external account + secrets, отдельный план.
+- **Monitoring / alerting** — нужны external services (Sentry, UptimeRobot, Render notification webhook).
 
 ---
 

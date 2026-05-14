@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { promises as fs, statSync } from 'node:fs';
+import { statSync, existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
+import archiver from 'archiver';
 import { prisma } from '../db.js';
 import { authMiddleware, getRole, getUser, normalizeRole, requireRole } from '../auth.js';
 import { generateInviteToken, signToken } from '../authCrypto.js';
 import { recordAudit } from '../lib/audit.js';
+import { env } from '../env.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -333,29 +335,53 @@ adminRoutes.post('/restore/:type/:id', async (req, res) => {
   }
 });
 
-// POST /api/admin/backup — стримит SQLite файл целиком как octet-stream.
-// SUPER_ADMIN only — backup содержит passwordHashes всех пользователей.
+// Sprint 30 + 31 — POST /api/admin/backup. SUPER_ADMIN only.
+// Sprint 30 стримил только prod.db. Sprint 31 — полный backup как tar.gz:
+//   • prod.db (вся БД)
+//   • uploads/ (все загруженные файлы пользователей)
+//   • snapshots/ (pre-deploy snapshot history — для cross-deploy восстановления)
+// БЕЗ uploads backup половина платформы (презентации, финмодели) теряется
+// если disk корраптится. Один файл `.tar.gz` = atomic off-site backup.
 adminRoutes.post('/backup', requireRole(['SUPER_ADMIN']), async (req, res) => {
-  // DATABASE_URL формата "file:/var/data/prod.db" — вытаскиваем абсолютный путь.
   const dbUrl = process.env.DATABASE_URL ?? 'file:./prod.db';
-  const filePath = dbUrl.replace(/^file:/, '');
-  const abs = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+  const dbPathRaw = dbUrl.replace(/^file:/, '');
+  const dbAbs = path.isAbsolute(dbPathRaw) ? dbPathRaw : path.resolve(dbPathRaw);
+  const uploadsAbs = path.resolve(env.UPLOADS_DIR);
+  const snapshotsAbs = path.join(path.dirname(dbAbs), 'snapshots');
 
-  try {
-    const stat = statSync(abs);
-    await recordAudit(req, {
-      action: 'system.backup_download',
-      targetType: 'Database',
-      targetId: null,
-      payload: { sizeBytes: stat.size, path: abs },
-    });
-    const buf = await fs.readFile(abs);
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="zapusk-${ts}.db"`);
-    res.setHeader('Content-Length', buf.length);
-    res.send(buf);
-  } catch (err) {
-    res.status(500).json({ error: 'backup_failed', message: err instanceof Error ? err.message : 'unknown' });
+  if (!existsSync(dbAbs)) {
+    return res.status(500).json({ error: 'backup_failed', message: `db file not found at ${dbAbs}` });
   }
+
+  const dbSize = statSync(dbAbs).size;
+  const uploadsExists = existsSync(uploadsAbs);
+  const snapshotsExists = existsSync(snapshotsAbs);
+
+  await recordAudit(req, {
+    action: 'system.backup_download',
+    targetType: 'Database',
+    targetId: null,
+    payload: { dbSizeBytes: dbSize, includesUploads: uploadsExists, includesSnapshots: snapshotsExists },
+  });
+
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  res.setHeader('Content-Type', 'application/gzip');
+  res.setHeader('Content-Disposition', `attachment; filename="zapusk-backup-${ts}.tar.gz"`);
+
+  const archive = archiver('tar', { gzip: true, gzipOptions: { level: 6 } });
+  archive.on('error', (err) => {
+    console.error('[backup] archiver error:', err);
+    if (!res.headersSent) res.status(500).end();
+  });
+  archive.pipe(res);
+
+  // Layout in archive:
+  //   /db/prod.db
+  //   /uploads/...
+  //   /snapshots/prod-YYYY-MM-DDTHH-MM-SS.db (если pre-deploy snapshots есть)
+  archive.append(createReadStream(dbAbs), { name: 'db/prod.db' });
+  if (uploadsExists) archive.directory(uploadsAbs, 'uploads');
+  if (snapshotsExists) archive.directory(snapshotsAbs, 'snapshots');
+
+  await archive.finalize();
 });
