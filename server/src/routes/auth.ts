@@ -167,6 +167,13 @@ authRoutes.post('/demo', async (req, res) => {
   // 'client' из старых скриптов автоматически становились 'ADMIN'/'MANAGER'/
   // 'FOUNDER'. Email слаг тоже унифицируем через lowercase role-имени.
   const role = normalizeRole(rawRole);
+  // Sprint 25 hotfix — закрываем privilege escalation через /demo endpoint.
+  // SUPER_ADMIN создаётся ТОЛЬКО через bootstrap seed (env-driven), не через
+  // публичный demo flow. Иначе на demo-инстансе атакующий мог бы получить
+  // owner-токен одним POST'ом.
+  if (role === 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'super_admin_via_demo_forbidden' });
+  }
   const emailSlug = role.toLowerCase().replace('_', '-');
   const email = (customEmail ?? `demo-${emailSlug}@zapusk.tech`).toLowerCase();
   const name = customName ?? defaultDemoName(role);
