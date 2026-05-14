@@ -34,6 +34,7 @@ import { AIDiscoverabilityScore } from '../components/ui/AIDiscoverabilityScore'
 import { InvestmentJourney } from '../components/project/InvestmentJourney';
 import { TrackPicker } from '../components/project/TrackPicker';
 import { ActivityHistory } from '../components/project/ActivityHistory';
+import { listMeetings } from '../lib/salesSessions';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -46,20 +47,27 @@ export default function ProjectCockpit() {
   const [reviews, setReviews] = useState<ArtefactReview[]>([]);
   // Sprint 21: путь привлечения инвестиций. jobs нужны для расчёта статусов
   // пунктов; trackPickerOpen открывается автоматически если трек не выбран.
+  // Sprint 28: meetingsCount + leadsLaunched питают честный stage status.
   const [jobs, setJobs] = useState<PackagingJob[]>([]);
+  const [meetingsCount, setMeetingsCount] = useState(0);
+  const [leadsLaunched, setLeadsLaunched] = useState(false);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [savingTrack, setSavingTrack] = useState(false);
 
   async function load() {
     if (!id) return;
-    const [p, rs, j] = await Promise.all([
+    const [p, rs, j, meetings, aiLeads] = await Promise.all([
       api.get<{ project: Project }>(`/api/projects/${id}`),
       api.get<{ reviews: ArtefactReview[] }>(`/api/reviews/project/${id}`),
       api.get<{ jobs: PackagingJob[] }>(`/api/packaging-jobs/project/${id}`).catch(() => ({ jobs: [] })),
+      listMeetings({ projectId: id }).catch(() => ({ sessions: [] })),
+      api.get<{ mode?: string }>(`/api/ai-leads?projectId=${encodeURIComponent(id)}`).catch(() => ({ mode: undefined })),
     ]);
     setProject(p.project);
     setReviews(rs.reviews);
     setJobs(j.jobs);
+    setMeetingsCount(meetings.sessions?.length ?? 0);
+    setLeadsLaunched(aiLeads.mode === 'live');
     // Sprint 21: если фаундер ещё не выбрал формат привлечения — открываем
     // TrackPicker автоматически. Один раз, только при первом загрузке проекта.
     if (!p.project.investmentTrack && !trackPickerOpen) {
@@ -284,7 +292,19 @@ export default function ProjectCockpit() {
 
       {transformation && <TransformationShowcase item={transformation} />}
 
-      {/* PROGRESS STEPS */}
+      {/* Sprint 28 — главный блок: «Путь привлечения инвестиций» сразу после
+          HERO. Бриф (этап 1) виден сверху, остальные этапы — заблокированы,
+          пока бриф не готов. Никаких fake completed states. */}
+      <div className="mb-6">
+        <InvestmentJourney
+          project={project}
+          jobs={jobs}
+          options={{ meetingsCount, leadsLaunched }}
+          onChooseTrack={() => setTrackPickerOpen(true)}
+        />
+      </div>
+
+      {/* PROGRESS STEPS — старый сводный прогресс материалов. */}
       <Card padded className="mb-6">
         <CardHeader
           title="Прогресс материалов"
@@ -303,9 +323,8 @@ export default function ProjectCockpit() {
         </div>
       </Card>
 
-      {/* Sprint 14: «Материалы» и «Бизнес на салфетке» подняты выше Project
-          Journey — фаундер должен сначала видеть что загрузить и что собрала
-          система, и только потом «путь по платформе». */}
+      {/* Sprint 14: «Материалы» и «Бизнес на салфетке» — фаундер видит, что
+          загрузил и что собрала система. */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         {/* MATERIALS */}
         <Card padded className="lg:col-span-1">
@@ -380,18 +399,10 @@ export default function ProjectCockpit() {
         <RecentMeetings projectId={id} limit={3} />
       </div>
 
-      {/* Sprint 21 — главный новый блок: «Путь привлечения инвестиций».
-          Заменяет «AI generated materials + Discoverability» как primary view.
-          Старые блоки сохраняются ниже как technical-детали для команды. */}
-      <div className="mb-6">
-        <InvestmentJourney
-          project={project}
-          jobs={jobs}
-          onChooseTrack={() => setTrackPickerOpen(true)}
-        />
-      </div>
+      {/* Sprint 28 — InvestmentJourney перенесён выше под HERO. Здесь —
+          история и technical-блоки команды ZAPUSK AI (упаковка, AEO). */}
 
-      {/* История проекта — лента событий, синтезированная из файлов/брифа/job'ов. */}
+      {/* История проекта — лента событий из реальных данных (файлы / бриф / job'ы). */}
       <div className="mb-6">
         <ActivityHistory project={project} jobs={jobs} />
       </div>

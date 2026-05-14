@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Activity, AlertCircle, CheckCircle2, ChevronDown, Clock3, Compass, Lock,
-  Sparkles, Wand2, UserRound, Briefcase, Megaphone,
+  Sparkles, Wand2, UserRound, Briefcase, Megaphone, ClipboardCheck, Radio,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Card, CardHeader } from '../ui/Card';
@@ -11,39 +11,40 @@ import { ProgressBar } from '../ui/ProgressBar';
 import {
   buildInvestmentJourney, computeJourneyMetrics, whatTeamMustDo, whatsHappeningNow,
   STATUS_LABEL, STATUS_TONE, HANDOVER_LABEL, HANDOVER_TONE,
-  type Stage, type StageItem, type TrackBuild,
+  type Stage, type StageItem, type StageId, type TrackBuild, type JourneyOptions,
 } from '../../lib/investmentTrack';
 import type { PackagingJob, Project } from '../../lib/api';
 
-// Sprint 21 — главный блок проекта. «Путь привлечения инвестиций».
+// Sprint 21 + Sprint 28 — главный блок проекта. «Путь привлечения инвестиций».
 //
-// Заголовок: общая готовность проекта + KPI (в работе / ждём от команды /
-// плановая дата). Каждый этап — раскрывающаяся карточка со списком пунктов.
-// У каждого пункта свой handover-бейдж (кто делает / проверяет) и статус.
-//
-// Дополнительно справа от основной колонки рендерятся:
-//   • «Что требуется от команды проекта»
-//   • «Что происходит сейчас»
+// Sprint 28 добавил:
+//   • Brand-new project hero — «Путь только начинается, заполните бриф».
+//   • Stage-level статус badge (готово / в работе / заблокировано / …).
+//   • Locked UI для закрытых этапов: вместо items — «Откроется после …».
+//   • Per-stage CTA hint (показывает основной next-step этапа).
 //
 // Это не CRM и не админка — это операционная система привлечения инвестиций.
 
 interface Props {
   project: Project;
   jobs: PackagingJob[];
+  /** Sprint 28: количество встреч и флаг запуска AI-лидов — для честных статусов. */
+  options?: JourneyOptions;
   /** Если фаундер ещё не выбрал трек — родитель открывает TrackPicker. */
   onChooseTrack?: () => void;
 }
 
-const STAGE_ICON: Record<string, LucideIcon> = {
+const STAGE_ICON: Record<StageId, LucideIcon> = {
+  brief: Sparkles,
+  packaging: Megaphone,
   legal: Briefcase,
-  packaging: Sparkles,
-  investor_prep: UserRound,
-  investor_gen: Megaphone,
-  placement: CheckCircle2,
+  ai_leads: Radio,
+  meetings: UserRound,
+  placement: ClipboardCheck,
 };
 
-export function InvestmentJourney({ project, jobs, onChooseTrack }: Props) {
-  const build = useMemo(() => buildInvestmentJourney(project, jobs), [project, jobs]);
+export function InvestmentJourney({ project, jobs, options, onChooseTrack }: Props) {
+  const build = useMemo(() => buildInvestmentJourney(project, jobs, options), [project, jobs, options]);
   const metrics = useMemo(() => computeJourneyMetrics(build), [build]);
   const required = useMemo(() => whatTeamMustDo(build), [build]);
   const happening = useMemo(() => whatsHappeningNow(build), [build]);
@@ -55,6 +56,7 @@ export function InvestmentJourney({ project, jobs, onChooseTrack }: Props) {
       {/* Левая колонка — заголовок + этапы */}
       <div className="space-y-4">
         <JourneyHeader build={build} metrics={metrics} trackChosen={trackChosen} onChooseTrack={onChooseTrack} />
+        {build.isBrandNew && <BrandNewHero />}
         {build.stages.map((stage) => (
           <StageCard key={stage.id} stage={stage} />
         ))}
@@ -119,6 +121,33 @@ function JourneyHeader({
   );
 }
 
+// Sprint 28 — empty hero для brand-new project. Показывает понятный
+// первый шаг «Заполнить бриф», без fake progress.
+function BrandNewHero() {
+  return (
+    <Card padded accent="ai" className="overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(35,214,176,0.12),transparent_30%)]" />
+      <div className="relative flex flex-col md:flex-row md:items-center gap-4">
+        <div className="w-12 h-12 rounded-lg bg-grad-ai/15 border border-ai/30 text-ai-glow flex items-center justify-center shrink-0">
+          <Sparkles size={20} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
+            Путь привлечения инвестиций только начинается
+          </div>
+          <h3 className="text-base font-semibold text-primary leading-snug">
+            Первый шаг — заполнить бриф проекта
+          </h3>
+          <p className="text-xs text-secondary mt-1 leading-relaxed max-w-2xl">
+            Без брифа AI не сможет собрать упаковку, юрист — выбрать структуру сделки, менеджер — запустить AI-лиды.
+            Заполните бриф или загрузите презентацию — система соберёт первый черновик автоматически.
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function Kpi({ label, value, tone }: { label: string; value: number; tone: 'ai' | 'warning' | 'success' }) {
   const cls = tone === 'ai' ? 'border-ai/30 bg-ai/8 text-ai-glow'
     : tone === 'warning' ? 'border-warning/30 bg-warning/8 text-warning'
@@ -132,44 +161,81 @@ function Kpi({ label, value, tone }: { label: string; value: number; tone: 'ai' 
 }
 
 function StageCard({ stage }: { stage: Stage }) {
-  const [open, setOpen] = useState(true);
+  // Sprint 28 — closed stages по умолчанию collapsed; open stages — expanded.
+  const [open, setOpen] = useState(stage.unlocked);
   const Icon = STAGE_ICON[stage.id] ?? Sparkles;
   const done = stage.items.filter((i) => i.status === 'готово').length;
   const total = stage.items.length;
   const stagePct = total === 0 ? 0 : Math.round((done / total) * 100);
 
   return (
-    <Card padded>
+    <Card padded className={!stage.unlocked ? 'opacity-80' : undefined}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-start gap-3 text-left"
       >
-        <div className="w-10 h-10 rounded-md border border-line bg-elevated text-secondary flex items-center justify-center shrink-0">
-          <Icon size={16} />
+        <div className={`w-10 h-10 rounded-md border flex items-center justify-center shrink-0 ${stageIconClass(stage)}`}>
+          {stage.unlocked ? <Icon size={16} /> : <Lock size={14} />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <h3 className="text-base font-semibold text-primary">{stage.title}</h3>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted font-num">{done} из {total}</span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <StatusBadge tone={STATUS_TONE[stage.status]} dot>{STATUS_LABEL[stage.status]}</StatusBadge>
+              {stage.unlocked && total > 0 && (
+                <span className="text-[11px] text-muted font-num">{done} из {total}</span>
+              )}
               <ChevronDown size={14} className={`text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
             </div>
           </div>
-          <p className="text-xs text-muted mt-0.5 leading-snug">{stage.subtitle}</p>
-          <div className="mt-2">
-            <ProgressBar value={stagePct} />
-          </div>
+          <p className="text-xs text-muted mt-0.5 leading-snug">
+            {!stage.unlocked && stage.lockHint ? stage.lockHint : stage.subtitle}
+          </p>
+          {stage.unlocked && (
+            <div className="mt-2">
+              <ProgressBar value={stagePct} />
+            </div>
+          )}
         </div>
       </button>
 
-      {open && (
-        <ul className="mt-4 space-y-2 pl-1">
-          {stage.items.map((item) => <StageItemRow key={item.id} item={item} />)}
-        </ul>
+      {open && stage.unlocked && (
+        <>
+          <ul className="mt-4 space-y-2 pl-1">
+            {stage.items.map((item) => <StageItemRow key={item.id} item={item} />)}
+          </ul>
+          {stage.primaryCta && (
+            <div className="mt-3 flex justify-end">
+              <Button size="sm" variant="secondary">{stage.primaryCta.label}</Button>
+            </div>
+          )}
+        </>
+      )}
+      {open && !stage.unlocked && (
+        <div className="mt-4 rounded-md border border-line bg-canvas/40 px-3 py-3 flex items-start gap-2">
+          <Lock size={14} className="text-muted mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <div className="text-xs text-secondary leading-snug">
+              {stage.lockHint ?? 'Этап откроется автоматически на следующем шаге пути.'}
+            </div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mt-2">
+              Что появится здесь: {stage.items.map((i) => i.title).slice(0, 3).join(' · ')}
+              {stage.items.length > 3 ? '…' : ''}
+            </div>
+          </div>
+        </div>
       )}
     </Card>
   );
+}
+
+function stageIconClass(stage: Stage): string {
+  if (!stage.unlocked) return 'border-line bg-elevated text-muted';
+  if (stage.status === 'готово') return 'border-success/30 bg-success/10 text-success';
+  if (stage.status === 'в_работе' || stage.status === 'на_проверке') return 'border-ai/30 bg-ai/10 text-ai-glow';
+  if (stage.status === 'ожидает_информацию') return 'border-warning/30 bg-warning/10 text-warning';
+  return 'border-line bg-elevated text-secondary';
 }
 
 function StageItemRow({ item }: { item: StageItem }) {
@@ -210,7 +276,7 @@ function WhatRequiredBlock({ items }: { items: StageItem[] }) {
   return (
     <Card padded className="border-warning/30">
       <CardHeader
-        title="Что требуется от вас"
+        title="Что нужно от вас"
         subtitle="Без этого следующие этапы не запускаются"
       />
       {items.length === 0 ? (
@@ -239,11 +305,11 @@ function WhatsHappeningBlock({ items }: { items: StageItem[] }) {
   return (
     <Card padded accent="ai">
       <CardHeader
-        title="Что происходит сейчас"
+        title="Что сейчас делает команда ZAPUSK AI"
         subtitle="Активные этапы — AI собирает, специалисты проверяют"
       />
       {items.length === 0 ? (
-        <p className="text-xs text-muted">Активных этапов пока нет. Выберите формат привлечения, чтобы запустить процесс.</p>
+        <p className="text-xs text-muted">Активных этапов пока нет. Заполните бриф, чтобы запустить следующий шаг.</p>
       ) : (
         <ul className="space-y-2">
           {items.map((item) => (

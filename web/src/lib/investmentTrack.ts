@@ -1,13 +1,16 @@
 import type { Project, InvestmentTrack, PackagingJob } from './api';
 
-// Sprint 21 — «Путь привлечения инвестиций».
+// Sprint 21 + Sprint 28 — «Путь привлечения инвестиций».
 //
-// Каждый проект выбирает один из 6 форматов привлечения инвестиций. Под
-// формат система строит набор этапов (юр. упаковка, маркетинговая упаковка,
-// подготовка к инвесторам, генерация инвесторов, размещение и сделка). Для
-// каждого этапа — список пунктов (Stage Items) с двумя источниками статуса:
-//   • статус из реальных данных проекта (файлы, бриф, packagingJob'ы)
-//   • человеческий handover-флаг (AI собрал черновик / специалист проверяет)
+// Sprint 21 заложил архитектуру: builder выводит статус каждого пункта из
+// реальных данных проекта (brief, files, packaging jobs). Sprint 28 добавил
+// stage-level gating и убрал hardcoded defaults:
+//   • новый проект больше не показывает «юридическая упаковка в работе»
+//     до выбора трека и готовности упаковки;
+//   • каждый этап имеет собственный статус (готово / в работе / заблокировано);
+//   • этапы 2..6 закрыты, пока не готов предыдущий, и items в закрытых этапах
+//     получают `заблокировано`;
+//   • brand-new project помечается явно — UI рендерит empty-hero.
 //
 // Это не CRM и не админка — это «операционная система привлечения инвестиций»,
 // которую видит фаундер.
@@ -37,18 +40,36 @@ export interface StageItem {
 }
 
 export interface Stage {
-  id: string;
+  id: StageId;
   title: string;
   /** Зачем нужен этап — 1 строка под заголовком. */
   subtitle: string;
   items: StageItem[];
+  /** Sprint 28: агрегатный статус этапа (вычисляется из items + gating). */
+  status: ItemStatus;
+  /** Sprint 28: false = этап заблокирован, его items получают `заблокировано`. */
+  unlocked: boolean;
+  /** Sprint 28: подсказка про разблокировку (показываем когда unlocked=false). */
+  lockHint?: string;
+  /** Sprint 28: короткое CTA по этапу (рендерится на карточке стадии). */
+  primaryCta?: { label: string };
 }
+
+export type StageId =
+  | 'brief'
+  | 'packaging'
+  | 'legal'
+  | 'ai_leads'
+  | 'meetings'
+  | 'placement';
 
 export interface TrackBuild {
   track: InvestmentTrack;
   trackLabel: string;
   trackHint: string;
   stages: Stage[];
+  /** Sprint 28: brand-new проект — нет брифа, файлов и job'ов. UI показывает empty-hero. */
+  isBrandNew: boolean;
 }
 
 // ─── Лейблы треков ────────────────────────────────────────────────────────
@@ -77,7 +98,7 @@ export function trackHint(track: InvestmentTrack | null): string {
 export const STATUS_LABEL: Record<ItemStatus, string> = {
   'не_начато': 'Не начато',
   'в_работе': 'В работе',
-  'ожидает_информацию': 'Ждём данные',
+  'ожидает_информацию': 'Ожидаем данные',
   'на_проверке': 'На проверке',
   'готово': 'Готово',
   'заблокировано': 'Заблокировано',
@@ -114,26 +135,67 @@ export const HANDOVER_TONE: Record<Handover, 'ai' | 'success' | 'zapusk' | 'warn
 
 // ─── Builder ──────────────────────────────────────────────────────────────
 
+export interface JourneyOptions {
+  /** Sprint 28: количество встреч с инвесторами по проекту (из listMeetings). */
+  meetingsCount?: number;
+  /** Sprint 28: запущена ли AI-лидогенерация (из /api/ai-leads.mode === 'live'). */
+  leadsLaunched?: boolean;
+}
+
 /**
- * Собирает путь привлечения инвестиций для проекта.
- * Учитывает выбранный трек + актуальное состояние проекта (файлы, бриф, job'ы).
+ * Собирает путь привлечения инвестиций для проекта. Sprint 28:
+ *  1. Каждый этап получает items со статусами из реального state.
+ *  2. Stage-level статус выводится из items + gating-правил.
+ *  3. Закрытые stages пробрасывают `заблокировано` всем items.
+ *  4. Track `packaging_only` показывает только этапы 1-2.
  */
-export function buildInvestmentJourney(project: Project, jobs: PackagingJob[] = []): TrackBuild {
+export function buildInvestmentJourney(
+  project: Project,
+  jobs: PackagingJob[] = [],
+  options: JourneyOptions = {},
+): TrackBuild {
   const track = project.investmentTrack ?? 'packaging_only';
-  const ctx = deriveContext(project, jobs);
+  const ctx = deriveContext(project, jobs, options);
 
+  // Сначала собираем «сырые» этапы — items со статусами по data, без gating.
   const stages: Stage[] = [];
-  // Юр. упаковка зависит от трека. Для «только_упаковка» полностью скрываем.
-  const legal = buildLegalStage(track, ctx);
-  if (legal) stages.push(legal);
-
+  stages.push(buildBriefStage(ctx));
   stages.push(buildPackagingStage(ctx));
-  stages.push(buildInvestorPrepStage(ctx));
 
-  // Генерация инвесторов и размещение — только если трек подразумевает реальное привлечение.
   if (track !== 'packaging_only') {
-    stages.push(buildInvestorGenStage(ctx));
+    const legal = buildLegalStage(track, ctx);
+    if (legal) stages.push(legal);
+    stages.push(buildAILeadsStage(ctx));
+    stages.push(buildMeetingsStage(ctx));
     stages.push(buildPlacementStage(track, ctx));
+  }
+
+  // Sprint 28: gating. Каждый этап знает, что должно быть готово перед ним.
+  // Если предыдущий этап не done — текущий = заблокировано, items.status тоже.
+  const briefDone = isStageDone(stages.find((s) => s.id === 'brief'));
+  const packagingDone = isStageDone(stages.find((s) => s.id === 'packaging'));
+  const legalDone = isStageDone(stages.find((s) => s.id === 'legal'));
+  const aiLeadsHasResults = ctx.hasMeetings || ctx.hasLeadsRunning;
+
+  for (const stage of stages) {
+    if (stage.id === 'brief') continue;
+    if (stage.id === 'packaging' && !briefDone) {
+      lockStage(stage, 'Откроется после готовности брифа');
+    } else if (stage.id === 'legal' && !packagingDone) {
+      lockStage(stage, 'Откроется после готовности маркетинговой упаковки');
+    } else if (stage.id === 'ai_leads' && !packagingDone) {
+      lockStage(stage, 'Откроется после готовности маркетинговой упаковки');
+    } else if (stage.id === 'meetings' && !aiLeadsHasResults && !ctx.hasLeadsRunning) {
+      lockStage(stage, 'Откроется после первых AI-лидов');
+    } else if (stage.id === 'placement' && !(legalDone && (aiLeadsHasResults || ctx.hasMeetings))) {
+      lockStage(stage, 'Откроется после юридической упаковки и первых инвесторов');
+    }
+  }
+
+  // Финальный проход — вычислить stage.status из items.
+  for (const stage of stages) {
+    stage.status = computeStageStatus(stage);
+    stage.primaryCta = primaryCtaFor(stage, ctx);
   }
 
   return {
@@ -141,23 +203,131 @@ export function buildInvestmentJourney(project: Project, jobs: PackagingJob[] = 
     trackLabel: trackLabel(track),
     trackHint: trackHint(track),
     stages,
+    isBrandNew: ctx.isBrandNew,
   };
 }
 
 // ─── Stage builders ───────────────────────────────────────────────────────
 
-function buildLegalStage(track: InvestmentTrack, ctx: Context): Stage | null {
+function buildBriefStage(ctx: Context): Stage {
+  // Sprint 28: бриф — этап 1, всегда активен. Статус items зависит от brief'а.
+  const positioningStatus: ItemStatus = !ctx.hasBrief
+    ? 'ожидает_информацию'
+    : ctx.hasBriefMissing
+      ? 'в_работе'
+      : 'готово';
+
+  return {
+    id: 'brief',
+    title: 'Бриф проекта',
+    subtitle: 'Экономика, команда, инвестиционный запрос — основа всей упаковки',
+    status: 'не_начато', // перезаписывается в финальном проходе
+    unlocked: true,
+    items: [
+      {
+        id: 'project_data',
+        title: 'Базовые данные проекта',
+        hint: 'Название, отрасль, стадия, размер раунда и доля.',
+        by: 'фаундер',
+        status: ctx.hasBasicProjectData ? 'готово' : 'ожидает_информацию',
+      },
+      {
+        id: 'positioning',
+        title: 'Позиционирование и бизнес на салфетке',
+        hint: 'AI собирает на основе материалов и базовых данных.',
+        by: 'AI',
+        status: positioningStatus,
+      },
+      {
+        id: 'missing_questions',
+        title: 'Закрыть открытые вопросы брифа',
+        hint: 'Уточнить юнит-экономику, команду и риски в интервью.',
+        by: 'фаундер',
+        status: !ctx.hasBrief
+          ? 'не_начато'
+          : ctx.hasBriefMissing
+            ? 'ожидает_информацию'
+            : 'готово',
+      },
+      {
+        id: 'founder_interview',
+        title: 'Интервью с основателем',
+        hint: 'Зафиксировать историю, цифры, мотивацию.',
+        by: 'менеджер',
+        status: ctx.hasInterview ? 'готово' : ctx.hasBrief ? 'не_начато' : 'не_начато',
+      },
+    ],
+  };
+}
+
+function buildPackagingStage(ctx: Context): Stage {
+  return {
+    id: 'packaging',
+    title: 'Маркетинговая упаковка',
+    subtitle: 'Презентация, посадочная, финмодель и one-pager под инвестора',
+    status: 'не_начато',
+    unlocked: true,
+    items: [
+      {
+        id: 'pitch_deck',
+        title: 'Инвестиционная презентация',
+        hint: 'Деки в формате PDF и веб-страницы.',
+        by: 'AI',
+        status: jobStatus(ctx, ['pitch_deck', 'pitch_structure']),
+      },
+      {
+        id: 'financial_model',
+        title: 'Финансовая модель',
+        hint: 'AI-черновик → проверяет финансовый аналитик.',
+        by: 'аналитик',
+        status: jobStatus(ctx, ['financial_model', 'calculator']),
+      },
+      {
+        id: 'landing',
+        title: 'Посадочная страница',
+        hint: 'Лендинг с investor blocks и AI Discoverability.',
+        by: 'команда_упаковки',
+        status: jobStatus(ctx, ['landing']),
+      },
+      {
+        id: 'one_pager',
+        title: 'Ванпейджер',
+        hint: 'Одностраничник для рассылки инвестору.',
+        by: 'команда_упаковки',
+        status: jobStatus(ctx, ['one_pager']),
+      },
+      {
+        id: 'investor_faq',
+        title: 'Investor FAQ',
+        hint: 'Готовые ответы на 12-15 ключевых вопросов.',
+        by: 'AI',
+        status: jobStatus(ctx, ['faq']),
+      },
+      {
+        id: 'ai_discoverability',
+        title: 'AI Discoverability',
+        hint: 'Видимость материалов проекта в AI search engines.',
+        by: 'AI',
+        status: jobStatus(ctx, ['ai_visibility_report']),
+      },
+    ],
+  };
+}
+
+function buildLegalStage(track: InvestmentTrack, _ctx: Context): Stage | null {
   if (track === 'packaging_only') return null;
 
+  // Sprint 28: legal_structure больше НЕ дефолтится в «в_работе». Без явных
+  // условий — `не_начато`. Stage-gating сделает её `заблокировано`, пока
+  // packaging не готово.
   const items: StageItem[] = [];
 
-  // Общие для всех инвестиционных треков
   items.push({
     id: 'legal_structure',
     title: 'Структура сделки',
     hint: 'Юрист готовит описание формата привлечения и распределения долей.',
     by: 'юрист',
-    status: ctx.hasInvestmentTerms ? 'на_проверке' : 'в_работе',
+    status: 'не_начато',
   });
 
   if (track === 'shareholding' || track === 'pre_ipo') {
@@ -202,114 +372,65 @@ function buildLegalStage(track: InvestmentTrack, ctx: Context): Stage | null {
     id: 'legal',
     title: 'Юридическая упаковка',
     subtitle: 'Структура сделки и документы под выбранный формат привлечения',
+    status: 'не_начато',
+    unlocked: true,
     items,
   };
 }
 
-function buildPackagingStage(ctx: Context): Stage {
+function buildAILeadsStage(ctx: Context): Stage {
   return {
-    id: 'packaging',
-    title: 'Маркетинговая упаковка',
-    subtitle: 'Материалы, которые увидят инвесторы',
+    id: 'ai_leads',
+    title: 'AI-лиды',
+    subtitle: 'AI приводит квалифицированных инвесторов по вашему профилю',
+    status: 'не_начато',
+    unlocked: true,
     items: [
       {
-        id: 'positioning',
-        title: 'Позиционирование проекта',
-        hint: 'Бриф + бизнес на салфетке — основа всей упаковки.',
+        id: 'ai_leads_launch',
+        title: 'Запуск AI-каналов',
+        hint: 'AI звонит и квалифицирует инвесторов из базы.',
         by: 'AI',
-        status: !ctx.hasBrief ? 'ожидает_информацию'
-          : ctx.hasBriefMissing ? 'в_работе'
-          : 'готово',
+        status: ctx.hasLeadsRunning ? 'в_работе' : 'не_начато',
       },
-      {
-        id: 'pitch_deck',
-        title: 'Инвестиционная презентация',
-        hint: 'Деки в формате PDF и веб-страницы.',
-        by: 'AI',
-        status: jobStatus(ctx, ['pitch_deck', 'pitch_structure'], 'команда_упаковки'),
-      },
-      {
-        id: 'financial_model',
-        title: 'Финансовая модель',
-        hint: 'AI-черновик → проверяет финансовый аналитик.',
-        by: 'аналитик',
-        status: jobStatus(ctx, ['financial_model', 'calculator'], 'аналитик'),
-      },
-      {
-        id: 'landing',
-        title: 'Посадочная страница',
-        hint: 'Лендинг с investor blocks и AI Discoverability.',
-        by: 'команда_упаковки',
-        status: jobStatus(ctx, ['landing'], 'команда_упаковки'),
-      },
-      {
-        id: 'one_pager',
-        title: 'Ванпейджер',
-        hint: 'Одностраничник для рассылки инвестору.',
-        by: 'команда_упаковки',
-        status: jobStatus(ctx, ['one_pager'], 'команда_упаковки'),
-      },
-      {
-        id: 'investor_faq',
-        title: 'Investor FAQ',
-        hint: 'Готовые ответы на 12-15 ключевых вопросов.',
-        by: 'AI',
-        status: jobStatus(ctx, ['faq'], 'менеджер'),
-      },
-    ],
-  };
-}
-
-function buildInvestorPrepStage(ctx: Context): Stage {
-  return {
-    id: 'investor_prep',
-    title: 'Подготовка к инвесторам',
-    subtitle: 'Готовим основателя и материалы к разговору с инвесторами',
-    items: [
-      {
-        id: 'founder_interview',
-        title: 'Интервью с основателем',
-        hint: 'Зафиксировать историю, цифры, мотивацию.',
-        by: 'менеджер',
-        status: ctx.hasInterview ? 'готово' : 'ожидает_информацию',
-      },
-      {
-        id: 'sales_prep',
-        title: 'AI-подготовка к встречам',
-        hint: 'Live co-pilot по SPIN + эмоциональный слой.',
-        by: 'AI',
-        status: jobStatus(ctx, ['sales_assistant'], 'менеджер'),
-      },
-      {
-        id: 'objections',
-        title: 'Работа с возражениями инвесторов',
-        hint: 'AI разбор переговоров после каждой встречи.',
-        by: 'AI',
-        status: ctx.hasMeetings ? 'в_работе' : 'не_начато',
-      },
-      {
-        id: 'ai_discoverability',
-        title: 'AI Discoverability',
-        hint: 'Видимость материалов проекта в AI search engines.',
-        by: 'AI',
-        status: jobStatus(ctx, ['ai_visibility_report'], 'команда_упаковки'),
-      },
-    ],
-  };
-}
-
-function buildInvestorGenStage(ctx: Context): Stage {
-  return {
-    id: 'investor_gen',
-    title: 'Работа с инвесторами',
-    subtitle: 'Привлекаем поток инвесторов и квалифицируем интерес',
-    items: [
-      { id: 'ai_leads', title: 'AI-лиды', hint: 'AI звонит и квалифицирует инвесторов из базы.', by: 'AI', status: ctx.hasLeadsRunning ? 'в_работе' : 'не_начато' },
       { id: 'pr', title: 'PR и статьи', hint: 'Публикации в профильных медиа.', by: 'PR_специалист', status: 'не_начато' },
       { id: 'bloggers', title: 'Работа с блогерами', hint: 'Эфиры и обзоры у тематических авторов.', by: 'PR_специалист', status: 'не_начато' },
       { id: 'streams', title: 'Прямые эфиры', hint: 'Эфир по базе инвесторов с фаундером.', by: 'менеджер', status: 'не_начато' },
       { id: 'investor_clubs', title: 'Инвестклубы', hint: 'Презентации проекта в закрытых клубах инвесторов.', by: 'менеджер', status: 'не_начато' },
       { id: 'investor_base', title: 'Работа с базой инвесторов', hint: 'Холодные касания и follow-up по тёплым контактам.', by: 'менеджер', status: 'не_начато' },
+    ],
+  };
+}
+
+function buildMeetingsStage(ctx: Context): Stage {
+  return {
+    id: 'meetings',
+    title: 'Встречи с инвесторами',
+    subtitle: 'Подготовка, проведение и разбор каждой встречи',
+    status: 'не_начато',
+    unlocked: true,
+    items: [
+      {
+        id: 'sales_prep',
+        title: 'AI-подготовка к встречам',
+        hint: 'Live co-pilot по SPIN + эмоциональный слой.',
+        by: 'AI',
+        status: jobStatus(ctx, ['sales_assistant']),
+      },
+      {
+        id: 'meetings_run',
+        title: 'Проведение встреч',
+        hint: 'Созвоны с инвесторами по проекту.',
+        by: 'фаундер',
+        status: ctx.hasMeetings ? 'в_работе' : 'не_начато',
+      },
+      {
+        id: 'objections',
+        title: 'AI-разбор переговоров',
+        hint: 'Транскрипт, score, рекомендации после каждого звонка.',
+        by: 'AI',
+        status: ctx.hasMeetings ? 'в_работе' : 'не_начато',
+      },
     ],
   };
 }
@@ -339,6 +460,8 @@ function buildPlacementStage(track: InvestmentTrack, _ctx: Context): Stage {
     id: 'placement',
     title: 'Размещение и сделка',
     subtitle: 'Сопровождаем сделку до перевода средств и фиксации инвесторов',
+    status: 'не_начато',
+    unlocked: true,
     items,
   };
 }
@@ -346,27 +469,39 @@ function buildPlacementStage(track: InvestmentTrack, _ctx: Context): Stage {
 // ─── Контекст из project state ────────────────────────────────────────────
 
 interface Context {
+  isBrandNew: boolean;
+  hasBasicProjectData: boolean;
   hasBrief: boolean;
   hasBriefMissing: boolean;
   hasInterview: boolean;
-  hasInvestmentTerms: boolean;
   hasMeetings: boolean;
   hasLeadsRunning: boolean;
   jobs: PackagingJob[];
 }
 
-function deriveContext(project: Project, jobs: PackagingJob[]): Context {
+function deriveContext(project: Project, jobs: PackagingJob[], options: JourneyOptions): Context {
   const brief = project.brief ?? null;
   const missing = brief?.missingData ? safeArray(brief.missingData) : [];
   const missingByCat = brief?.missingByCategory ? safeRecord(brief.missingByCategory) : {};
   const totalMissing = Object.values(missingByCat).flatMap((v) => Array.isArray(v) ? v : []).length || missing.length;
+
+  // Sprint 28: hasBasicProjectData — заполнены ли базовые поля проекта.
+  // Без этого AI не может даже черновик брифа собрать.
+  const hasBasicProjectData = Boolean(
+    project.industry && project.stage && (project.raiseAmount || project.minCheck),
+  );
+
+  const filesCount = project.files?.length ?? 0;
+  const jobsCount = jobs.length;
+
   return {
+    isBrandNew: !brief && filesCount === 0 && jobsCount === 0,
+    hasBasicProjectData,
     hasBrief: Boolean(brief),
     hasBriefMissing: totalMissing > 0,
     hasInterview: Boolean(brief?.interviewAnswers && brief.interviewAnswers.length > 4),
-    hasInvestmentTerms: false, // TODO: подключить project.investorTerms когда схема будет полная
-    hasMeetings: false, // TODO: SalesSession lookup; для MVP — false (это просто не_начато)
-    hasLeadsRunning: false, // TODO: signal с AI Leads dashboard
+    hasMeetings: (options.meetingsCount ?? 0) > 0,
+    hasLeadsRunning: options.leadsLaunched ?? false,
     jobs,
   };
 }
@@ -379,8 +514,8 @@ function safeRecord(raw: string): Record<string, unknown> {
   try { const v = JSON.parse(raw); return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {}; } catch { return {}; }
 }
 
-/** Маппинг succeeded packaging job'ов в человеческий статус пункта. */
-function jobStatus(ctx: Context, outputTypes: string[], _reviewer: Handover): ItemStatus {
+/** Маппинг packaging job'ов в человеческий статус пункта. */
+function jobStatus(ctx: Context, outputTypes: string[]): ItemStatus {
   const relevant = ctx.jobs.filter((j) => outputTypes.includes(j.outputType));
   if (relevant.length === 0) return 'не_начато';
   // Сначала ищем «готово» — succeeded с completedBy (закрыто специалистом).
@@ -394,6 +529,55 @@ function jobStatus(ctx: Context, outputTypes: string[], _reviewer: Handover): It
   if (success) return 'на_проверке';
   // mock/failed — в работе.
   return 'в_работе';
+}
+
+// ─── Stage status & gating helpers ────────────────────────────────────────
+
+function lockStage(stage: Stage, hint: string) {
+  stage.unlocked = false;
+  stage.lockHint = hint;
+  for (const item of stage.items) item.status = 'заблокировано';
+}
+
+function isStageDone(stage: Stage | undefined): boolean {
+  if (!stage) return false;
+  if (!stage.unlocked) return false;
+  // Stage готов, когда все items готовы (или на проверке — близко к готово).
+  return stage.items.every((i) => i.status === 'готово' || i.status === 'на_проверке');
+}
+
+function computeStageStatus(stage: Stage): ItemStatus {
+  if (!stage.unlocked) return 'заблокировано';
+  const items = stage.items;
+  if (items.length === 0) return 'не_начато';
+  if (items.every((i) => i.status === 'готово')) return 'готово';
+  if (items.some((i) => i.status === 'в_работе' || i.status === 'на_проверке')) {
+    // Если хотя бы один на проверке, но всё остальное готово — стадия "на проверке".
+    if (items.every((i) => i.status === 'готово' || i.status === 'на_проверке')) return 'на_проверке';
+    return 'в_работе';
+  }
+  if (items.some((i) => i.status === 'ожидает_информацию')) return 'ожидает_информацию';
+  return 'не_начато';
+}
+
+function primaryCtaFor(stage: Stage, ctx: Context): { label: string } | undefined {
+  if (!stage.unlocked) return undefined;
+  switch (stage.id) {
+    case 'brief':
+      if (!ctx.hasBrief) return { label: 'Заполнить бриф' };
+      if (ctx.hasBriefMissing) return { label: 'Продолжить бриф' };
+      return { label: 'Открыть бриф' };
+    case 'packaging':
+      return stage.status === 'готово' ? { label: 'Посмотреть материалы' } : { label: 'Сформировать упаковку' };
+    case 'legal':
+      return stage.status === 'не_начато' ? { label: 'Выбрать формат' } : { label: 'Подготовить юр. структуру' };
+    case 'ai_leads':
+      return ctx.hasLeadsRunning ? { label: 'Посмотреть лиды' } : { label: 'Запустить AI-лиды' };
+    case 'meetings':
+      return ctx.hasMeetings ? { label: 'Разобрать переговоры' } : { label: 'Провести встречу' };
+    case 'placement':
+      return stage.status === 'готово' ? { label: 'Открыть размещение' } : { label: 'Подготовить размещение' };
+  }
 }
 
 // ─── Высокоуровневые метрики ──────────────────────────────────────────────
@@ -414,8 +598,8 @@ export function computeJourneyMetrics(build: TrackBuild): JourneyMetrics {
   let inProgress = 0;
   let needsAction = 0;
 
-  // Вес статусов в processed формат: «готово» = 1, «на_проверке» = 0.85,
-  // «в_работе» = 0.45, «ожидает_информацию» = 0.2, «не_начато»/«заблокировано» = 0.
+  // Вес статусов: «готово» = 1, «на_проверке» = 0.85, «в_работе» = 0.45,
+  // «ожидает_информацию» = 0.2, «не_начато» / «заблокировано» = 0.
   let weighted = 0;
   for (const item of items) {
     switch (item.status) {
@@ -436,7 +620,6 @@ export function computeJourneyMetrics(build: TrackBuild): JourneyMetrics {
         weighted += 0.2;
         break;
       default:
-        // не_начато / заблокировано: 0
         break;
     }
   }

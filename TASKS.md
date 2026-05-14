@@ -355,7 +355,88 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 27 kill fake completed state shipped)_
+_(empty — Sprint 28 dynamic project journey shipped)_
+
+---
+
+## Sprint 28 update — 2026-05-14 — Динамический путь проекта в Project Cockpit
+
+Theme: **Путь проекта считается из реальных данных, а не из hardcoded «done/in_progress».** До Sprint 28 `buildInvestmentJourney()` (Sprint 21) уже выводил статусы пунктов из brief/files/jobs, но имел два дефекта: (1) `legal_structure` всегда дефолтился в `'в_работе'` независимо от того, выбран ли трек и готова ли упаковка — отсюда «юридическая упаковка в работе» на пустом проекте; (2) не было stage-level gating — этапы 2..6 никогда не помечались `заблокировано`. Sprint 28 закрыл оба.
+
+### Изменения
+
+**`web/src/lib/investmentTrack.ts`** — переписан:
+- Reorder этапов под Sprint 28 spec: `brief → packaging → legal → ai_leads → meetings → placement` (6 этапов, было 5 с другими группировками).
+- `Stage` получил поля `status: ItemStatus`, `unlocked: boolean`, `lockHint?: string`, `primaryCta?: { label }`. Stage-level статус вычисляется из items + gating-правил.
+- **Gating-правила** (Sprint 28):
+  - `packaging` → locked, если brief не done
+  - `legal` → locked, если packaging не done
+  - `ai_leads` → locked, если packaging не done
+  - `meetings` → locked, если нет лидов
+  - `placement` → locked, если legal не done или нет встреч
+- При locked stage все его items получают `статус: 'заблокировано'` (через `lockStage()` helper).
+- Из `legal_structure` убран default `'в_работе'` — теперь `'не_начато'` (плюс gating переведёт в `'заблокировано'`).
+- `JourneyOptions { meetingsCount, leadsLaunched }` — внешние сигналы из API, передаются в builder.
+- `TrackBuild.isBrandNew: boolean` — true, если нет brief / files / jobs. UI рендерит empty-hero.
+- `primaryCtaFor(stage, ctx)` — короткий CTA-лейбл по spec: «Заполнить бриф / Продолжить бриф / Открыть бриф / Сформировать упаковку / Посмотреть материалы / Выбрать формат / Подготовить юр. структуру / Запустить AI-лиды / Посмотреть лиды / Провести встречу / Разобрать переговоры / Подготовить размещение / Открыть размещение».
+
+**`web/src/components/project/InvestmentJourney.tsx`**:
+- StageCard теперь рендерит `<StatusBadge>` для stage.status в шапке (Готово / В работе / Заблокировано / …).
+- Для locked stages — компактный rendered «Откроется после X» + preview списком первых 3 items, без раскрытия.
+- Stage CTA hint рендерится снизу карточки при `stage.primaryCta`.
+- Stage icons расширены под 6 этапов: Sparkles / Megaphone / Briefcase / Radio / UserRound / ClipboardCheck.
+- Закрытые stages получают `opacity-80` + `Lock` иконку.
+- Сайдбар-блоки переименованы: «Что нужно от вас» / «Что сейчас делает команда ZAPUSK AI» (по Sprint 28 spec).
+- **`BrandNewHero`** — карточка для `build.isBrandNew === true`: «Путь привлечения инвестиций только начинается / Первый шаг — заполнить бриф проекта».
+
+**`web/src/pages/ProjectCockpit.tsx`**:
+- `<InvestmentJourney>` перенесён **выше**, сразу после HERO (Sprint 28 spec: name → readiness → journey → команда → материалы).
+- `load()` дёргает `listMeetings({projectId})` + `/api/ai-leads?projectId=X` параллельно и передаёт `meetingsCount` + `leadsLaunched` в Journey builder.
+- Дубликат журнала ниже удалён.
+
+### Как теперь считаются статусы
+
+| Этап | Готово, если | В работе / На проверке, если | Заблокировано, если |
+|---|---|---|---|
+| Бриф | brief существует И нет critical missing | brief есть, но есть открытые вопросы | — никогда |
+| Маркетинговая упаковка | все 6 материалов succeeded+completedBy | хотя бы один job в awaiting_manager / running | brief не готов |
+| Юридическая упаковка | все items закрыты (manager flag) | track выбран И packaging готова | packaging не готова |
+| AI-лиды | mode='live' на /api/ai-leads | leadsLaunched=true | packaging не готова |
+| Встречи | meetingsCount > 0 + все sales prep done | хотя бы одна встреча есть | нет лидов |
+| Размещение | вручную закрыто менеджером | в подготовке | legal не готова ИЛИ нет встреч |
+
+### Используемые данные
+
+- `Project` (industry / stage / raiseAmount / minCheck → hasBasicProjectData)
+- `Project.brief` (existence → hasBrief, `missingData` + `missingByCategory` → hasBriefMissing, `interviewAnswers.length>4` → hasInterview)
+- `PackagingJob[]` (status + outputType + completedBy → item status per template)
+- `SalesSession[]` через `listMeetings({projectId})` → meetingsCount
+- `/api/ai-leads?projectId=X` (Sprint 27 `mode`) → leadsLaunched
+
+### Как выглядит новый проект
+
+1. HERO: название + 0% готовности
+2. **InvestmentJourney**: `isBrandNew=true` → BrandNewHero «Путь только начинается / Заполнить бриф»
+3. Stage Brief: статус «Ожидаем данные», CTA «Заполнить бриф»
+4. Stage Packaging / Legal / AI-leads / Meetings / Placement: **Заблокировано** с lockHint
+5. ActivityHistory: empty state «История появится после первых действий»
+6. PersonalManagerMiniCard, RecentMeetings (empty), AIPackagingHistory (empty)
+
+### Как выглядит demo проект
+
+Demo cabinet (`/demo`) **не использует** `buildInvestmentJourney` — он рендерит `DEFAULT_PROJECT_JOURNEY` из старого `lib/projectJourney.ts`. Эта структура осталась только для demo showcase. Production проект больше не имеет к ней отношения.
+
+### Verification
+
+- [x] `cd server && npx tsc --noEmit` — clean
+- [x] `cd web && npx tsc --noEmit` — clean
+- [x] `npm run build` — OK (527.02 kB / 148.56 kB gzip, +6 kB к Sprint 27)
+- [x] Smoke сценариев:
+  - Новый проект без brief: brief=Ожидаем данные, packaging+ = Заблокировано ✓
+  - Загружен файл, brief нет: brief=Ожидаем данные, items.project_data=Готово если базовые поля заполнены ✓
+  - Бриф сгенерирован с missingData: brief=В работе, packaging стадия unlocked, items=Не начато ✓
+  - Packaging job awaiting_manager: соответствующий item=На проверке, остальные packaging items=Не начато ✓
+  - Demo project: использует старый DEFAULT_PROJECT_JOURNEY, не затронут изменением ✓
 
 ---
 
