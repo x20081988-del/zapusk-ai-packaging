@@ -266,8 +266,12 @@ export async function ingestConversation(input: IngestInput) {
 }
 
 export async function listAnalyses(filters: { projectId?: string } = {}) {
+  // Sprint 30: исключаем soft-deleted analyses.
   return prisma.conversationAnalysis.findMany({
-    where: filters.projectId ? { projectId: filters.projectId } : {},
+    where: {
+      archivedAt: null,
+      ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    },
     orderBy: { createdAt: 'desc' },
     take: 50,
     include: { project: { select: { id: true, name: true } } },

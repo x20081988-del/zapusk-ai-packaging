@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { storage } from '../services/storage.js';
+import { recordAudit } from '../lib/audit.js';
 
 export const filesRoutes = Router();
 filesRoutes.use(authMiddleware);
@@ -83,20 +84,33 @@ filesRoutes.get('/:projectId', async (req, res) => {
     return res.status(404).json({ error: 'project_not_found' });
   }
   const files = await prisma.uploadedFile.findMany({
-    where: { projectId: req.params.projectId },
+    where: { projectId: req.params.projectId, archivedAt: null },
     orderBy: { createdAt: 'desc' },
   });
   res.json({ files });
 });
 
+// Sprint 30 — soft-delete. Файл помечается archivedAt; физический файл на
+// диске НЕ удаляется до hard-cleanup через 30 дней (out of scope).
+// Admin может восстановить через /api/admin/restore/file/:id.
 filesRoutes.delete('/:projectId/:fileId', async (req, res) => {
   const user = getUser(req);
   if (!(await assertOwnership(user.id, req.params.projectId))) {
     return res.status(404).json({ error: 'project_not_found' });
   }
-  const f = await prisma.uploadedFile.findFirst({ where: { id: req.params.fileId, projectId: req.params.projectId } });
+  const f = await prisma.uploadedFile.findFirst({
+    where: { id: req.params.fileId, projectId: req.params.projectId, archivedAt: null },
+  });
   if (!f) return res.status(404).json({ error: 'file_not_found' });
-  if (f.path) await storage.remove(f.path);
-  await prisma.uploadedFile.delete({ where: { id: f.id } });
-  res.json({ ok: true });
+  await prisma.uploadedFile.update({
+    where: { id: f.id },
+    data: { archivedAt: new Date() },
+  });
+  await recordAudit(req, {
+    action: 'file.archive',
+    targetType: 'UploadedFile',
+    targetId: f.id,
+    payload: { originalName: f.originalName, projectId: f.projectId, category: f.category },
+  });
+  res.json({ ok: true, archivedAt: new Date().toISOString() });
 });

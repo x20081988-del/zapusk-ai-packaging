@@ -50,6 +50,9 @@ export default function ProjectUpload() {
 
   async function remove(fid: string) {
     if (!id) return;
+    // Sprint 30: confirm перед archive. Файл уходит в корзину на 30 дней,
+    // admin может восстановить через /admin/audit.
+    if (!window.confirm('Убрать файл из материалов проекта? Его можно восстановить через админа в течение 30 дней.')) return;
     await api.delete(`/api/files/${id}/${fid}`);
     load();
   }

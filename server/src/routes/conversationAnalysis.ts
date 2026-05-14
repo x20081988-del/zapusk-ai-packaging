@@ -3,6 +3,7 @@ import multer from 'multer';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
+import { recordAudit } from '../lib/audit.js';
 import {
   ingestConversation,
   listAnalyses,
@@ -88,11 +89,21 @@ conversationAnalysisRoutes.get('/:id', async (req, res) => {
   res.json({ analysis: row });
 });
 
+// Sprint 30 — soft-delete + audit.
 conversationAnalysisRoutes.delete('/:id', async (req, res) => {
   const existing = await prisma.conversationAnalysis.findUnique({ where: { id: req.params.id } });
-  if (!existing) return res.status(404).json({ error: 'not_found' });
-  await prisma.conversationAnalysis.delete({ where: { id: req.params.id } });
-  res.json({ ok: true });
+  if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
+  await prisma.conversationAnalysis.update({
+    where: { id: req.params.id },
+    data: { archivedAt: new Date() },
+  });
+  await recordAudit(req, {
+    action: 'conversation_analysis.archive',
+    targetType: 'ConversationAnalysis',
+    targetId: existing.id,
+    payload: { projectId: existing.projectId, investorName: existing.investorName },
+  });
+  res.json({ ok: true, archivedAt: new Date().toISOString() });
 });
 
 function optionalString(raw: unknown): string | null {

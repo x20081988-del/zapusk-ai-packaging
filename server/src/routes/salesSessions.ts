@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware } from '../auth.js';
+import { recordAudit } from '../lib/audit.js';
 import {
   completeSession,
   persistSession,
@@ -54,10 +55,17 @@ salesSessionsRoutes.get('/:id', async (req, res) => {
   res.json({ session });
 });
 
+// Sprint 30 — soft-delete + audit. demoGuard на app level продолжает блокировать
+// destructive ops в demo workspace.
 salesSessionsRoutes.delete('/:id', async (req, res) => {
-  // Soft-guarded by demoGuard at app level — destructive ops blocked in demo.
   const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
-  if (!existing) return res.status(404).json({ error: 'not_found' });
-  await prisma.salesSession.delete({ where: { id: req.params.id } });
-  res.json({ ok: true });
+  if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
+  await prisma.salesSession.update({ where: { id: req.params.id }, data: { archivedAt: new Date() } });
+  await recordAudit(req, {
+    action: 'sales_session.archive',
+    targetType: 'SalesSession',
+    targetId: existing.id,
+    payload: { projectId: existing.projectId, investorName: existing.investorName },
+  });
+  res.json({ ok: true, archivedAt: new Date().toISOString() });
 });

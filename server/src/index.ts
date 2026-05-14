@@ -59,6 +59,21 @@ app.get('/health', (_req, res) => {
   const deepgramConfigured = Boolean(env.DEEPGRAM_API_KEY && env.DEEPGRAM_API_KEY.length > 10);
   const lovableConfigured = Boolean(env.LOVABLE_API_KEY && env.LOVABLE_API_KEY.length > 6 && env.LOVABLE_API_BASE_URL);
 
+  // Sprint 30 — disk usage статистика. fs.statfsSync доступен с Node 18.15+,
+  // на Render Node 22 — ок. Если path не существует (локальный dev без mount)
+  // — возвращаем null, не валим health.
+  let disk: { mountPath: string; freeBytes: number; totalBytes: number; usedPercent: number } | null = null;
+  try {
+    const mountPath = path.dirname(path.resolve((process.env.DATABASE_URL ?? 'file:./prod.db').replace(/^file:/, '')));
+    const stats = fs.statfsSync(mountPath);
+    const totalBytes = Number(stats.blocks) * Number(stats.bsize);
+    const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+    const usedPercent = totalBytes > 0 ? Math.round(((totalBytes - freeBytes) / totalBytes) * 100) : 0;
+    disk = { mountPath, freeBytes, totalBytes, usedPercent };
+  } catch {
+    disk = null;
+  }
+
   res.json({
     ok: true,
     ts: Date.now(),
@@ -66,6 +81,7 @@ app.get('/health', (_req, res) => {
     env: env.NODE_ENV,
     spaReady: Boolean(webDistPath),
     spaPath: webDistPath,
+    disk,
     // Legacy ai block — оставляем для обратной совместимости c существующими
     // диагностическими скриптами (см. Sprint 11.1 hotfix).
     ai: {

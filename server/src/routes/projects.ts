@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { storage } from '../services/storage.js';
+import { recordAudit } from '../lib/audit.js';
 
 export const projectsRoutes = Router();
 projectsRoutes.use(authMiddleware);
@@ -40,15 +41,20 @@ projectsRoutes.get('/', async (req, res) => {
   //   • admin — видит всё для аудита
   const isDemo = user.workspaceStatus === 'demo';
   const isAdmin = user.role === 'admin';
+  // Sprint 30: filter out archived projects from regular GET. Admin restore
+  // pulls via /api/admin/audit + /api/admin/restore.
   const where = isAdmin
-    ? {}
+    ? { archivedAt: null }
     : isDemo
-      ? { isDemo: true }
-      : { userId: user.id, isDemo: false };
+      ? { isDemo: true, archivedAt: null }
+      : { userId: user.id, isDemo: false, archivedAt: null };
   const projects = await prisma.project.findMany({
     where,
     orderBy: { updatedAt: 'desc' },
-    include: { files: { select: { id: true } }, brief: { select: { version: true, updatedAt: true } } },
+    include: {
+      files: { where: { archivedAt: null }, select: { id: true } },
+      brief: { select: { version: true, updatedAt: true } },
+    },
   });
   res.json({ projects });
 });
@@ -104,16 +110,17 @@ projectsRoutes.get('/:id', async (req, res) => {
 
   // Sprint 24: demo users могут читать только isDemo проекты, active — только
   // свои own. Admin видит всё.
+  // Sprint 30: архивные проекты скрыты от GET. Restore — через admin endpoint.
   const where = isAdmin
-    ? { id: req.params.id }
+    ? { id: req.params.id, archivedAt: null }
     : isDemo
-      ? { id: req.params.id, isDemo: true }
-      : { id: req.params.id, userId: user.id };
+      ? { id: req.params.id, isDemo: true, archivedAt: null }
+      : { id: req.params.id, userId: user.id, archivedAt: null };
 
   const project = await prisma.project.findFirst({
     where,
     include: {
-      files: true,
+      files: { where: { archivedAt: null } },
       brief: true,
       investorTerms: true,
       generatedPrompts: { orderBy: [{ kind: 'asc' }, { version: 'desc' }] },
@@ -142,10 +149,25 @@ projectsRoutes.patch('/:id', async (req, res) => {
   res.json({ project: updated });
 });
 
+// Sprint 30 — soft-delete. Проект помечается archivedAt вместо физического
+// удаления. Admin может восстановить через POST /api/admin/restore/project/:id.
+// Через 30 дней (ARCHIVE_RETENTION_DAYS) cleanup job сделает физический delete
+// (cleanup пока не реализован — out of scope).
 projectsRoutes.delete('/:id', async (req, res) => {
   const user = getUser(req);
-  const owned = await prisma.project.findFirst({ where: { id: req.params.id, userId: user.id } });
+  const owned = await prisma.project.findFirst({
+    where: { id: req.params.id, userId: user.id, archivedAt: null },
+  });
   if (!owned) return res.status(404).json({ error: 'not_found' });
-  await prisma.project.delete({ where: { id: req.params.id } });
-  res.json({ ok: true });
+  await prisma.project.update({
+    where: { id: req.params.id },
+    data: { archivedAt: new Date() },
+  });
+  await recordAudit(req, {
+    action: 'project.archive',
+    targetType: 'Project',
+    targetId: owned.id,
+    payload: { name: owned.name, userId: owned.userId, isDemo: owned.isDemo },
+  });
+  res.json({ ok: true, archivedAt: new Date().toISOString() });
 });

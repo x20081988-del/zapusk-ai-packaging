@@ -117,6 +117,8 @@ export default function ProjectCockpit() {
 
   async function removeFile(fileId: string) {
     if (!id) return;
+    // Sprint 30: confirm перед archive (soft-delete).
+    if (!window.confirm('Убрать файл из материалов? Файл уйдёт в корзину на 30 дней — админ сможет восстановить.')) return;
     await api.delete(`/api/files/${id}/${fileId}`);
     load();
   }

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
+import { recordAudit } from '../lib/audit.js';
 
 export const reviewsRoutes = Router();
 reviewsRoutes.use(authMiddleware);
@@ -71,17 +72,24 @@ reviewsRoutes.get('/project/:projectId', async (req, res) => {
   const user = getUser(req);
   if (!(await ownsProject(user.id, req.params.projectId))) return res.status(404).json({ error: 'project_not_found' });
   const reviews = await prisma.artefactReview.findMany({
-    where: { projectId: req.params.projectId },
+    where: { projectId: req.params.projectId, archivedAt: null },
     orderBy: { updatedAt: 'desc' },
   });
   res.json({ reviews });
 });
 
+// Sprint 30 — soft-delete + audit.
 reviewsRoutes.delete('/:id', async (req, res) => {
   const user = getUser(req);
   const review = await prisma.artefactReview.findUnique({ where: { id: req.params.id } });
-  if (!review) return res.status(404).json({ error: 'not_found' });
+  if (!review || review.archivedAt) return res.status(404).json({ error: 'not_found' });
   if (!(await ownsProject(user.id, review.projectId))) return res.status(404).json({ error: 'project_not_found' });
-  await prisma.artefactReview.delete({ where: { id: review.id } });
-  res.json({ ok: true });
+  await prisma.artefactReview.update({ where: { id: review.id }, data: { archivedAt: new Date() } });
+  await recordAudit(req, {
+    action: 'review.archive',
+    targetType: 'ArtefactReview',
+    targetId: review.id,
+    payload: { projectId: review.projectId, artefactKey: review.artefactKey, score: review.score },
+  });
+  res.json({ ok: true, archivedAt: new Date().toISOString() });
 });

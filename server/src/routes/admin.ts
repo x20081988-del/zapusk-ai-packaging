@@ -1,8 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { promises as fs, statSync } from 'node:fs';
+import path from 'node:path';
 import { prisma } from '../db.js';
 import { authMiddleware, getRole, getUser, normalizeRole, requireRole } from '../auth.js';
 import { generateInviteToken, signToken } from '../authCrypto.js';
+import { recordAudit } from '../lib/audit.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -42,6 +45,12 @@ adminRoutes.post('/invites', async (req, res) => {
       note: note ?? null,
     },
   });
+  await recordAudit(req, {
+    action: 'invite.create',
+    targetType: 'InviteToken',
+    targetId: invite.id,
+    payload: { email: invite.email, role: invite.role, workspaceStatus: invite.workspaceStatus },
+  });
   res.status(201).json({ invite });
 });
 
@@ -61,6 +70,12 @@ adminRoutes.post('/invites/:id/revoke', async (req, res) => {
   const updated = await prisma.inviteToken.update({
     where: { id: req.params.id },
     data: { revokedAt: new Date() },
+  });
+  await recordAudit(req, {
+    action: 'invite.revoke',
+    targetType: 'InviteToken',
+    targetId: existing.id,
+    payload: { email: existing.email },
   });
   res.json({ invite: updated });
 });
@@ -97,6 +112,16 @@ adminRoutes.patch('/users/:id/status', async (req, res) => {
       ...(parsed.data.role ? { role: normalizeRole(parsed.data.role) } : {}),
     },
   });
+  await recordAudit(req, {
+    action: 'user.status_change',
+    targetType: 'User',
+    targetId: updated.id,
+    payload: {
+      email: existing.email,
+      from: { workspaceStatus: existing.workspaceStatus, role: existing.role },
+      to: { workspaceStatus: updated.workspaceStatus, role: updated.role },
+    },
+  });
   res.json({ user: updated });
 });
 
@@ -127,6 +152,13 @@ adminRoutes.post('/impersonate/:userId', async (req, res) => {
   });
 
   console.log(`[impersonate] ${me.email} (${myRole}) → ${target.email} (${targetRole})`);
+
+  await recordAudit(req, {
+    action: 'user.impersonate',
+    targetType: 'User',
+    targetId: target.id,
+    payload: { targetEmail: target.email, targetRole, ttlSec: 3600 },
+  });
 
   res.json({
     user: {
@@ -188,4 +220,142 @@ adminRoutes.get('/users', async (_req, res) => {
     include: { _count: { select: { projects: true } } },
   });
   res.json({ users });
+});
+
+// ─── Sprint 30 — audit / archive / restore / backup ──────────────────────
+
+// GET /api/admin/audit — последние events. Поддерживает фильтры (action /
+// targetType / actorEmail) для admin UI. Limit 200 events per page.
+const auditQuery = z.object({
+  action: z.string().optional(),
+  targetType: z.string().optional(),
+  actorEmail: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(500).default(200),
+});
+
+adminRoutes.get('/audit', async (req, res) => {
+  const parsed = auditQuery.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'invalid_query' });
+  const { action, targetType, actorEmail, limit } = parsed.data;
+  const events = await prisma.auditEvent.findMany({
+    where: {
+      ...(action ? { action } : {}),
+      ...(targetType ? { targetType } : {}),
+      ...(actorEmail ? { actorEmail } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+  });
+  res.json({ events });
+});
+
+// GET /api/admin/archived/:type — список soft-deleted записей определённого
+// типа, чтобы admin мог их видеть и при необходимости восстановить.
+const ARCHIVE_TYPES = ['project', 'file', 'review', 'sales_session', 'conversation_analysis'] as const;
+type ArchiveType = (typeof ARCHIVE_TYPES)[number];
+
+adminRoutes.get('/archived/:type', async (req, res) => {
+  const type = req.params.type as ArchiveType;
+  if (!ARCHIVE_TYPES.includes(type)) return res.status(400).json({ error: 'invalid_type' });
+
+  const where = { archivedAt: { not: null } };
+  let items: unknown;
+  switch (type) {
+    case 'project':
+      items = await prisma.project.findMany({
+        where, orderBy: { archivedAt: 'desc' }, take: 200,
+        include: { user: { select: { email: true, name: true } } },
+      });
+      break;
+    case 'file':
+      items = await prisma.uploadedFile.findMany({
+        where, orderBy: { archivedAt: 'desc' }, take: 200,
+        include: { project: { select: { id: true, name: true, userId: true } } },
+      });
+      break;
+    case 'review':
+      items = await prisma.artefactReview.findMany({
+        where, orderBy: { archivedAt: 'desc' }, take: 200,
+      });
+      break;
+    case 'sales_session':
+      items = await prisma.salesSession.findMany({
+        where, orderBy: { archivedAt: 'desc' }, take: 200,
+      });
+      break;
+    case 'conversation_analysis':
+      items = await prisma.conversationAnalysis.findMany({
+        where, orderBy: { archivedAt: 'desc' }, take: 200,
+      });
+      break;
+  }
+  res.json({ items });
+});
+
+// POST /api/admin/restore/:type/:id — снимает archivedAt, запись возвращается
+// в обычные GET-запросы. Логируется в audit.
+adminRoutes.post('/restore/:type/:id', async (req, res) => {
+  const type = req.params.type as ArchiveType;
+  if (!ARCHIVE_TYPES.includes(type)) return res.status(400).json({ error: 'invalid_type' });
+  const id = req.params.id;
+
+  try {
+    let restored: { id: string } | null = null;
+    switch (type) {
+      case 'project':
+        restored = await prisma.project.update({ where: { id }, data: { archivedAt: null } });
+        break;
+      case 'file':
+        restored = await prisma.uploadedFile.update({ where: { id }, data: { archivedAt: null } });
+        break;
+      case 'review':
+        restored = await prisma.artefactReview.update({ where: { id }, data: { archivedAt: null } });
+        break;
+      case 'sales_session':
+        restored = await prisma.salesSession.update({ where: { id }, data: { archivedAt: null } });
+        break;
+      case 'conversation_analysis':
+        restored = await prisma.conversationAnalysis.update({ where: { id }, data: { archivedAt: null } });
+        break;
+    }
+    await recordAudit(req, {
+      action: `${type}.restore`,
+      targetType: type === 'project' ? 'Project'
+        : type === 'file' ? 'UploadedFile'
+        : type === 'review' ? 'ArtefactReview'
+        : type === 'sales_session' ? 'SalesSession'
+        : 'ConversationAnalysis',
+      targetId: restored?.id,
+    });
+    res.json({ ok: true, item: restored });
+  } catch (err) {
+    res.status(404).json({ error: 'not_found', message: err instanceof Error ? err.message : 'unknown' });
+  }
+});
+
+// POST /api/admin/backup — стримит SQLite файл целиком как octet-stream.
+// SUPER_ADMIN only — backup содержит passwordHashes всех пользователей.
+adminRoutes.post('/backup', requireRole(['SUPER_ADMIN']), async (req, res) => {
+  // DATABASE_URL формата "file:/var/data/prod.db" — вытаскиваем абсолютный путь.
+  const dbUrl = process.env.DATABASE_URL ?? 'file:./prod.db';
+  const filePath = dbUrl.replace(/^file:/, '');
+  const abs = path.isAbsolute(filePath) ? filePath : path.resolve(filePath);
+
+  try {
+    const stat = statSync(abs);
+    await recordAudit(req, {
+      action: 'system.backup_download',
+      targetType: 'Database',
+      targetId: null,
+      payload: { sizeBytes: stat.size, path: abs },
+    });
+    const buf = await fs.readFile(abs);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="zapusk-${ts}.db"`);
+    res.setHeader('Content-Length', buf.length);
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: 'backup_failed', message: err instanceof Error ? err.message : 'unknown' });
+  }
 });

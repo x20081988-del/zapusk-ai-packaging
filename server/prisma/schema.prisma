@@ -85,6 +85,10 @@ model Project {
   // пользователям с workspaceStatus='demo'. Сами по себе demo-проекты
   // хранятся под dev/admin user'ом, но обычные клиенты их не видят.
   isDemo           Boolean   @default(false)
+  // Sprint 30: soft-delete. archivedAt=null = живой; archivedAt=Date = в корзине.
+  // GET endpoints фильтруют archivedAt; admin может восстановить через
+  // /api/admin/restore/project/:id.
+  archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -112,6 +116,8 @@ model UploadedFile {
   category     String   // pitch / financial / description / image / logo / reference / other
   path         String   // local relative path under UPLOADS_DIR
   url          String?  // for external resources (google docs / notion / website)
+  // Sprint 30: soft-delete — физический файл удаляется через 30 дней после archivedAt.
+  archivedAt   DateTime?
   createdAt    DateTime @default(now())
 }
 
@@ -265,6 +271,8 @@ model ArtefactReview {
   needsRework  Boolean @default(false)   // "нужно доработать"
   reviewer     String  // user email — MVP doesn't have roles yet
 
+  // Sprint 30: soft-delete.
+  archivedAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -330,6 +338,8 @@ model SalesSession {
   aiModel         String?
   fellBackToMock  Boolean   @default(false)
 
+  // Sprint 30: soft-delete.
+  archivedAt      DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -369,11 +379,34 @@ model ConversationAnalysis {
   aiModel               String?
   fellBackToMock        Boolean  @default(false)
 
+  // Sprint 30: soft-delete.
+  archivedAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
   @@index([projectId])
   @@index([createdAt])
+}
+
+// Sprint 30 — audit trail для destructive operations и admin actions.
+// Каждый delete / archive / restore / impersonate / invite revoke /
+// workspaceStatus change пишет одну строку. Read-only для всех, кроме
+// SUPER_ADMIN / ADMIN. Хранится бессрочно (важная forensic data).
+model AuditEvent {
+  id          String   @id @default(cuid())
+  actorId     String?  // userId источника действия (null = system / seed)
+  actorEmail  String?  // дублируем email для читаемости, даже если user удалён
+  actorRole   String?  // снапшот роли в момент действия
+  action      String   // 'project.archive' / 'file.archive' / 'review.archive' / ...
+  targetType  String   // 'Project' / 'UploadedFile' / 'User' / 'InviteToken' / ...
+  targetId    String?
+  payload     String?  // JSON: до/после, дополнительный контекст
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([action])
 }
 
 model ReferenceMaterial {

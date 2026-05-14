@@ -355,7 +355,91 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 29 user data protection shipped; требуется upgrade Render plan для активации persistent disk)_
+_(empty — Sprint 30 soft-delete + audit + backup shipped)_
+
+---
+
+## Sprint 30 update — 2026-05-14 — Защита от потери данных: soft-delete, audit, backup
+
+Theme: **Ни одно действие пользователя не должно стирать данные безвозвратно.** Sprint 29 закрыл ephemeral filesystem (data на persistent disk); Sprint 30 закрывает ещё 6 уровней риска: case-level destructive routes, отсутствие audit trail, отсутствие UI confirms, отсутствие off-site backup, отсутствие disk monitoring.
+
+### Schema (migration `20260514140340_sprint30_soft_delete_audit`)
+
+- `Project.archivedAt: DateTime?` — soft-delete
+- `UploadedFile.archivedAt: DateTime?` — soft-delete (физический файл остаётся ещё 30 дней)
+- `ArtefactReview.archivedAt: DateTime?` — soft-delete
+- `SalesSession.archivedAt: DateTime?` — soft-delete
+- `ConversationAnalysis.archivedAt: DateTime?` — soft-delete
+- **`AuditEvent`** — НОВАЯ таблица: `id, actorId, actorEmail, actorRole, action, targetType, targetId, payload (JSON), createdAt`. Бессрочное хранение — forensic data.
+
+### Backend
+
+- **`server/src/lib/audit.ts`** — НОВЫЙ. Helper `recordAudit(req, { action, targetType, targetId, payload })` пишет одну строку. Failure не валит mutation (warn в console + продолжаем).
+- **6 destructive routes** заменены на soft-delete + audit:
+  - `DELETE /api/projects/:id` → `archivedAt = now`, audit `project.archive`
+  - `DELETE /api/files/:projectId/:fileId` → `archivedAt = now`, audit `file.archive`
+  - `DELETE /api/reviews/:id` → `archivedAt = now`, audit `review.archive`
+  - `DELETE /api/sales-sessions/:id` → `archivedAt = now`, audit `sales_session.archive`
+  - `DELETE /api/conversation-analysis/:id` → `archivedAt = now`, audit `conversation_analysis.archive`
+  - Templates DELETE остался physical (system-config, не user data)
+- **GET filters** исключают `archivedAt: null`:
+  - `/api/projects` (list + детальный) — фильтр на проект и его files
+  - `/api/files/:projectId` — только живые
+  - `/api/reviews/project/:projectId` — только живые
+  - `salesSessionService.listSessions` — только живые
+  - `conversationAnalysisService.listAnalyses` — только живые
+- **Audit logging** для admin actions:
+  - `invite.create` / `invite.revoke` (раньше не логировались)
+  - `user.status_change` — с before/after снапшотом
+  - `user.impersonate` — с targetEmail и TTL
+  - `system.backup_download` — с sizeBytes
+- **Новые admin endpoints** (`server/src/routes/admin.ts`):
+  - `GET /api/admin/audit?action=X&targetType=Y&actorEmail=Z&limit=N` — последние 200 events
+  - `GET /api/admin/archived/:type` — soft-deleted items (project | file | review | sales_session | conversation_analysis)
+  - `POST /api/admin/restore/:type/:id` — снимает `archivedAt`, логирует restore
+  - `POST /api/admin/backup` (SUPER_ADMIN only) — стримит SQLite файл как `attachment`, логирует download
+- **`/health` disk usage**: `fs.statfsSync(mountPath)` → `{ mountPath, freeBytes, totalBytes, usedPercent }`. Если path не существует — `disk: null`, health не валится.
+
+### Frontend
+
+- **`web/src/pages/AdminAudit.tsx`** — НОВЫЙ. Маршрут `/admin/audit` с тремя вкладками:
+  1. **Журнал действий** — таймлайн последних 200 events с tone-цветом по action, payload preview
+  2. **Архив** — sub-табы по типу (Проекты / Файлы / Ревью / Встречи / AI-разборы), кнопка «Восстановить» на каждой строке
+  3. **Резервная копия** — SUPER_ADMIN видит кнопку «Скачать backup .db», ADMIN видит блок-плашку с объяснением
+- **`web/src/components/layout/Sidebar.tsx`** — для SUPER_ADMIN и ADMIN добавлен пункт «Журнал и архив» (Archive icon) рядом с другими admin tools.
+- **`web/src/App.tsx`** — route `/admin/audit` под `RequireRole(['SUPER_ADMIN', 'ADMIN'])`.
+- **UI confirmations** на destructive file operations:
+  - `ProjectUpload.removeFile` — «Убрать файл? Можно восстановить через админа в течение 30 дней»
+  - `ProjectCockpit.removeFile` — то же сообщение
+  - (Templates / Manager / Revoke invite / Move-to-demo уже имели confirms)
+
+### Verification
+
+- [x] Prisma migration сгенерирована + применена локально
+- [x] Prisma client пересобран (`auditEvent` доступен)
+- [x] `cd server && npx tsc --noEmit` — clean
+- [x] `cd web && npx tsc --noEmit` — clean
+- [x] `npm run build` — OK (536.79 kB / 151.49 kB gzip, +8 kB к Sprint 29)
+- [x] Smoke (pending — после deploy): создать проект → DELETE → проверить `archivedAt`, увидеть в `/admin/audit`, восстановить через `/admin/archived/project`
+
+### Что закрыто Sprint 30 (риск-матрица)
+
+| Угроза | До Sprint 30 | После Sprint 30 |
+|---|---|---|
+| Случайный delete стирает данные навсегда | да | soft-delete с 30-дневной корзиной |
+| Нет следа кто/что/когда удалил | нет audit log | `AuditEvent` с бессрочным хранением |
+| Только один экземпляр БД (один disk) | да | + off-site `POST /api/admin/backup` |
+| Disk заполнится молча | да, без alerting | `/health.disk` показывает usedPercent |
+| Admin не может восстановить пользовательский delete | нет | `POST /api/admin/restore/:type/:id` |
+| Confirm на file delete отсутствует | да | window.confirm на 2 местах |
+
+### Что осталось вне scope (Sprint 31+)
+
+- Scheduled hard-delete после 30 дней `archivedAt` (cleanup job)
+- Nightly auto-backup в внешнее storage (S3 / Yandex Object Storage)
+- 2FA для SUPER_ADMIN
+- GDPR delete request flow
+- Confirm modal для project delete на UI (project DELETE endpoint существует, но в UI кнопки нет — низкий риск)
 
 ---
 

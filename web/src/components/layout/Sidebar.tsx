@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
-  Mail, TrendingUp, Repeat, X,
+  Mail, TrendingUp, Repeat, X, Archive,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
@@ -28,6 +28,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
       { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
       { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
     ]},
   ],
@@ -41,6 +42,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
       { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
     ]},
   ],
   MANAGER: [

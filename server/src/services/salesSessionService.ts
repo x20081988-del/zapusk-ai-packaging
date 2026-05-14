@@ -252,8 +252,10 @@ export async function persistSession(
 }
 
 export async function listSessions(filters: { projectId?: string; leadId?: string } = {}) {
+  // Sprint 30: исключаем soft-deleted сессии.
   return prisma.salesSession.findMany({
     where: {
+      archivedAt: null,
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
       ...(filters.leadId ? { leadId: filters.leadId } : {}),
     },
