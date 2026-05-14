@@ -27,6 +27,21 @@ export const env = {
   // fallback (см. authCrypto.authSecret()).
   JWT_SECRET: process.env.JWT_SECRET ?? '',
 
+  // Sprint 25 — bootstrap accounts. Пароли НЕ хардкодятся в репо.
+  // Если env-переменная пустая — seed создаёт disabled account (без
+  // passwordHash) с warn в console; реальный логин невозможен пока
+  // владелец не задаст пароль в Render env.
+  BOOTSTRAP_OWNER_PASSWORD: process.env.BOOTSTRAP_OWNER_PASSWORD ?? '',
+  BOOTSTRAP_ADMIN_PASSWORD: process.env.BOOTSTRAP_ADMIN_PASSWORD ?? '',
+  BOOTSTRAP_MANAGER_PASSWORD: process.env.BOOTSTRAP_MANAGER_PASSWORD ?? '',
+  BOOTSTRAP_DEMO_PASSWORD: process.env.BOOTSTRAP_DEMO_PASSWORD ?? '',
+  // Кастомизируемые email'ы для bootstrap-аккаунтов (на случай white-label).
+  BOOTSTRAP_OWNER_EMAIL: process.env.BOOTSTRAP_OWNER_EMAIL ?? 'grigory@zapusk.tech',
+  BOOTSTRAP_ADMIN_EMAIL: process.env.BOOTSTRAP_ADMIN_EMAIL ?? 'admin@zapusk.tech',
+  BOOTSTRAP_MANAGER_EMAIL: process.env.BOOTSTRAP_MANAGER_EMAIL ?? 'manager@zapusk.tech',
+  BOOTSTRAP_DEMO_FOUNDER_EMAIL: process.env.BOOTSTRAP_DEMO_FOUNDER_EMAIL ?? 'demo-founder@zapusk.tech',
+  BOOTSTRAP_DEMO_INVESTOR_EMAIL: process.env.BOOTSTRAP_DEMO_INVESTOR_EMAIL ?? 'demo-investor@zapusk.tech',
+
   AI_PROVIDER: (process.env.AI_PROVIDER ?? 'mock') as 'anthropic' | 'openai' | 'mock',
   AI_LOG_USAGE: truthy(process.env.AI_LOG_USAGE),
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',

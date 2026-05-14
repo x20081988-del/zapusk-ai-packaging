@@ -1,9 +1,9 @@
 const KEY = 'zapusk.auth';
 
-// Sprint 22: invite-only architecture. Role и workspaceStatus orthogonal.
-// role — что человек делает (admin/sales/client/demo/viewer/manager).
+// Sprint 25 — нормальная RBAC. role и workspaceStatus orthogonal.
+// role — что человек делает (SUPER_ADMIN/ADMIN/MANAGER/FOUNDER/INVESTOR).
 // workspaceStatus — в каком состоянии его аккаунт (lead → ... → active).
-export type UserRole = 'client' | 'manager' | 'admin' | 'sales' | 'demo' | 'viewer';
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FOUNDER' | 'INVESTOR';
 export type WorkspaceStatus =
   | 'lead'
   | 'demo'
@@ -23,12 +23,33 @@ export interface AuthState {
   userId?: string | null;
   /** Sprint 22: воронка доступа. */
   workspaceStatus?: WorkspaceStatus | null;
+  /** Sprint 25: если admin зашёл «как X», тут — email/role реального оператора. */
+  impersonatedBy?: { email: string; role: UserRole } | null;
 }
 
-const ROLES: UserRole[] = ['client', 'manager', 'admin', 'sales', 'demo', 'viewer'];
+const ROLES: UserRole[] = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'FOUNDER', 'INVESTOR'];
+
+// Sprint 25 — back-compat для localStorage записей до миграции на RBAC.
+const LEGACY_FRONT_MAP: Record<string, UserRole> = {
+  admin: 'ADMIN',
+  manager: 'MANAGER',
+  client: 'FOUNDER',
+  founder: 'FOUNDER',
+  sales: 'MANAGER',
+  demo: 'FOUNDER',
+  viewer: 'FOUNDER',
+  investor: 'INVESTOR',
+};
 
 export function normalizeRole(role: unknown): UserRole {
-  return ROLES.includes(role as UserRole) ? role as UserRole : 'client';
+  const raw = String(role ?? '').trim();
+  if (!raw) return 'FOUNDER';
+  if (ROLES.includes(raw as UserRole)) return raw as UserRole;
+  const lower = raw.toLowerCase();
+  if (LEGACY_FRONT_MAP[lower]) return LEGACY_FRONT_MAP[lower];
+  const upper = raw.toUpperCase();
+  if (ROLES.includes(upper as UserRole)) return upper as UserRole;
+  return 'FOUNDER';
 }
 
 const WORKSPACE_STATUSES: WorkspaceStatus[] = ['lead', 'demo', 'approved', 'awaiting_payment', 'active', 'paused', 'archived'];
@@ -60,6 +81,9 @@ export function getAuth(): AuthState | null {
       token: parsed.token ?? null,
       userId: parsed.userId ?? null,
       workspaceStatus: parsed.workspaceStatus ? normalizeWorkspaceStatus(parsed.workspaceStatus) : null,
+      impersonatedBy: parsed.impersonatedBy
+        ? { email: parsed.impersonatedBy.email, role: normalizeRole(parsed.impersonatedBy.role) }
+        : null,
     };
   } catch {
     return null;
@@ -75,13 +99,18 @@ export function clearAuth() {
 }
 
 export function defaultRouteForRole(role: UserRole): string {
-  if (role === 'admin') return '/admin';
-  if (role === 'manager') return '/manager';
+  if (role === 'SUPER_ADMIN' || role === 'ADMIN') return '/admin';
+  if (role === 'MANAGER') return '/manager';
+  if (role === 'INVESTOR') return '/opportunities';
   return '/dashboard';
 }
 
 export function roleLabel(role: UserRole): string {
-  if (role === 'admin') return 'Админ';
-  if (role === 'manager') return 'Менеджер';
-  return 'Клиент';
+  switch (role) {
+    case 'SUPER_ADMIN': return 'Владелец платформы';
+    case 'ADMIN': return 'Админ';
+    case 'MANAGER': return 'Менеджер';
+    case 'INVESTOR': return 'Инвестор';
+    default: return 'Фаундер';
+  }
 }

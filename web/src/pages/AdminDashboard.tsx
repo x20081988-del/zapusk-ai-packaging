@@ -11,6 +11,8 @@ import { Input, Select } from '../components/ui/Input';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { api } from '../lib/api';
+import { impersonateUser } from '../components/layout/ImpersonationBanner';
+import { getAuth } from '../lib/auth';
 import { formatDate, formatMoney } from '../lib/format';
 
 interface AdminProjectRow {
@@ -200,8 +202,30 @@ const STATUS_TONE_ADMIN: Record<string, 'neutral' | 'ai' | 'warning' | 'success'
 function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boolean }) {
   const [list, setList] = useState<AdminUserRow[]>(users);
   const [updating, setUpdating] = useState<string | null>(null);
+  const me = getAuth();
 
   useEffect(() => { setList(users); }, [users]);
+
+  // Sprint 25 — impersonate: SUPER_ADMIN может войти как кто угодно, ADMIN
+  // может войти как кто угодно кроме SUPER_ADMIN. И не в собственный аккаунт.
+  function canImpersonate(target: AdminUserRow): boolean {
+    if (!me) return false;
+    if (me.userId === target.id) return false;
+    const targetRole = (target.role ?? 'FOUNDER').toUpperCase();
+    if (targetRole === 'SUPER_ADMIN' && me.role !== 'SUPER_ADMIN') return false;
+    return me.role === 'SUPER_ADMIN' || me.role === 'ADMIN';
+  }
+
+  async function doImpersonate(userId: string) {
+    setUpdating(userId);
+    try {
+      await impersonateUser(userId);
+      // impersonateUser сделает window.location.assign — это перезагрузит SPA.
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Не удалось войти как пользователь');
+      setUpdating(null);
+    }
+  }
 
   // Sprint 24 — быстрая активация рабочего кабинета. Меняет workspaceStatus
   // на 'active'. Demo проекты у пользователя пропадают, появляется пустой
@@ -270,7 +294,7 @@ function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boole
                   <td className="py-3 pr-4 font-num">{u._count.projects}</td>
                   <td className="py-3 pr-4 text-xs text-muted">{formatDate(u.createdAt)}</td>
                   <td className="py-3 pr-4">
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 flex-wrap">
                       {status !== 'active' && (
                         <Button
                           size="sm"
@@ -289,6 +313,19 @@ function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boole
                           onClick={() => moveToDemo(u.id)}
                         >
                           В демо
+                        </Button>
+                      )}
+                      {/* Sprint 25 — impersonate, доступен SUPER_ADMIN/ADMIN.
+                          SUPER_ADMIN target пропускаем (защита от случайного
+                          захода в чужой owner-аккаунт). */}
+                      {canImpersonate(u) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={updating === u.id}
+                          onClick={() => doImpersonate(u.id)}
+                        >
+                          Войти как
                         </Button>
                       )}
                     </div>
@@ -365,19 +402,19 @@ const WORKSPACE_OPTIONS = [
   { value: 'awaiting_payment', label: 'Awaiting payment' },
   { value: 'lead', label: 'Lead — нет доступа до approval' },
 ];
+// Sprint 25 — новые RBAC роли. SUPER_ADMIN скрываем из обычных invite'ов
+// (создание owner аккаунта — через bootstrap seed, не через invite).
 const ROLE_OPTIONS = [
-  { value: 'client', label: 'Client' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'admin', label: 'Admin' },
-  { value: 'sales', label: 'Sales' },
-  { value: 'demo', label: 'Demo' },
-  { value: 'viewer', label: 'Viewer' },
+  { value: 'FOUNDER', label: 'FOUNDER · фаундер' },
+  { value: 'MANAGER', label: 'MANAGER · менеджер ZAPUSK AI' },
+  { value: 'ADMIN', label: 'ADMIN · администратор' },
+  { value: 'INVESTOR', label: 'INVESTOR · инвестор' },
 ];
 
 function InvitesPanel({ compact }: { compact?: boolean }) {
   const [invites, setInvites] = useState<InviteRow[] | null>(null);
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState('client');
+  const [role, setRole] = useState('FOUNDER');
   const [workspaceStatus, setWorkspaceStatus] = useState('active');
   const [expiresInDays, setExpiresInDays] = useState('30');
   const [note, setNote] = useState('');

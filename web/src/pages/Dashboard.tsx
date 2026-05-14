@@ -17,7 +17,7 @@ import { getAuth } from '../lib/auth';
 export default function Dashboard() {
   const auth = getAuth();
   const [projects, setProjects] = useState<Project[] | null>(null);
-  const role = auth?.role ?? 'client';
+  const role = auth?.role ?? 'FOUNDER';
   // Sprint 24: demo workspace = отдельная демо-витрина. Backend уже фильтрует
   // /api/projects по isDemo для demo пользователей; фронт меняет тексты и
   // скрывает «Новый проект» CTA.
@@ -27,7 +27,7 @@ export default function Dashboard() {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
   }, []);
 
-  const visibleProjects = projects?.filter((p) => role !== 'client' || !isLegacyDemoProject(p)) ?? null;
+  const visibleProjects = projects?.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)) ?? null;
   const total = visibleProjects?.length ?? 0;
   const ready = visibleProjects?.filter((p) => p.status === 'ready').length ?? 0;
   const inWork = visibleProjects?.filter((p) => p.status === 'packaging').length ?? 0;

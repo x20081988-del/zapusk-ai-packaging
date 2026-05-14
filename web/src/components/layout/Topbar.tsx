@@ -35,7 +35,7 @@ export function Topbar({ title, action, onOpenMenu }: TopbarProps) {
           {action}
           <ThemeToggle />
           {auth && (
-            <StatusBadge tone={auth.role === 'admin' ? 'danger' : auth.role === 'manager' ? 'ai' : 'success'} dot>
+            <StatusBadge tone={auth.role === 'SUPER_ADMIN' ? 'danger' : auth.role === 'ADMIN' ? 'danger' : auth.role === 'MANAGER' ? 'ai' : auth.role === 'INVESTOR' ? 'zapusk' : 'success'} dot>
               {roleLabel(auth.role)}
             </StatusBadge>
           )}

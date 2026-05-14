@@ -355,7 +355,100 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 24 Demo workspace → боевой кабинет shipped)_
+_(empty — Sprint 25 Bootstrap accounts + RBAC shipped)_
+
+---
+
+## Sprint 25 update — 2026-05-14 — Bootstrap аккаунты и нормальная RBAC
+
+Theme: **Платформа перестаёт быть «демо с костылями» и становится полноценной B2B investment OS.** Нормальная ролевая система (SUPER_ADMIN / ADMIN / MANAGER / FOUNDER / INVESTOR), bootstrap accounts из env, impersonation для admin'ов, demo isolation сохраняется.
+
+### Schema (migration `role_rbac_upgrade`)
+
+- `User.role` теперь имеет 5 фиксированных значений: `SUPER_ADMIN` / `ADMIN` / `MANAGER` / `FOUNDER` / `INVESTOR`. SQLite не поддерживает enum'ы — храним String, валидация в zod-схемах и `normalizeRole()`.
+- Migration mapping: `admin → ADMIN`, `client → FOUNDER`, `manager → MANAGER`, `sales → MANAGER`, `demo / viewer / прочее → FOUNDER`.
+- Default для новых users: `FOUNDER` (раньше был 'client').
+
+### Bootstrap accounts (env-driven через seed)
+
+| Email | Role | Workspace | Env var |
+|---|---|---|---|
+| `grigory@zapusk.tech` | SUPER_ADMIN | active | `BOOTSTRAP_OWNER_PASSWORD` |
+| `admin@zapusk.tech` | ADMIN | active | `BOOTSTRAP_ADMIN_PASSWORD` |
+| `manager@zapusk.tech` | MANAGER | active | `BOOTSTRAP_MANAGER_PASSWORD` |
+| `demo-founder@zapusk.tech` | FOUNDER | demo | `BOOTSTRAP_DEMO_PASSWORD` |
+| `demo-investor@zapusk.tech` | INVESTOR | demo | `BOOTSTRAP_DEMO_PASSWORD` |
+
+Email'ы override'ятся через `BOOTSTRAP_*_EMAIL` env vars (white-label поддержка). Если env пустая → seed создаёт disabled account (без passwordHash) + warn в console. Никаких паролей в репозитории.
+
+### Backend
+
+- **`server/src/env.ts`** — `BOOTSTRAP_OWNER_PASSWORD / ADMIN / MANAGER / DEMO` + 5 `BOOTSTRAP_*_EMAIL` переменных. + `JWT_SECRET`.
+- **`server/src/seed.ts`** — `upsertBootstrap()` helper. Идемпотентно создаёт/обновляет 5 bootstrap-аккаунтов на каждом запуске seed. Меняет роль + workspaceStatus + password (если пароль из env установлен).
+- **`server/src/auth.ts`**:
+  - `UserRole` type union → 5 значений
+  - `normalizeRole()` — мапит legacy 'admin'/'client'/'manager' → новые UPPER_CASE значения
+  - `requireRole()` — принимает any string, нормализует, SUPER_ADMIN автоматически проходит везде где ADMIN
+  - `requireSuperAdmin()` — explicit guard для super-only ops
+  - `authMiddleware` пробрасывает `impersonatedBy` из JWT в `req.impersonatedBy`
+- **`server/src/authCrypto.ts`** — `TokenPayload.impersonatedBy?: { sub, email, role }` + `generateInviteToken()`. Impersonation token имеет TTL 1 час (вместо обычных 7 дней).
+- **`server/src/routes/auth.ts`**:
+  - `/signup` создаёт user с role из invite (через `normalizeRole`)
+  - `/demo` принимает любые role-строки и нормализует (back-compat для legacy скриптов)
+  - `/me` возвращает `impersonatedBy` если есть
+- **`server/src/routes/admin.ts`**:
+  - `POST /api/admin/impersonate/:userId` — SUPER_ADMIN или ADMIN. ADMIN не может impersonate SUPER_ADMIN. Не impersonate себя. Возвращает Bearer с impersonatedBy claim.
+  - `PATCH /api/admin/users/:id/status` — ADMIN не может менять SUPER_ADMIN. SUPER_ADMIN только super может выдавать.
+
+### Frontend
+
+- **`web/src/lib/auth.ts`** — `UserRole` type union обновлён до 5 значений, `normalizeRole()` мапит legacy localStorage записи в новые, `roleLabel()` русифицирован («Владелец платформы / Админ / Менеджер / Фаундер / Инвестор»), `defaultRouteForRole()` — INVESTOR → `/opportunities`. `AuthState.impersonatedBy` сохраняется в localStorage.
+- **`web/src/pages/Login.tsx`** — переписан, убран demo-блок полностью (Sprint 23 скрывал под `?demo=1`, теперь нет). Только email/password.
+- **`web/src/components/layout/Sidebar.tsx`** — NAV под 5 ролей:
+  - **SUPER_ADMIN**: Admin / Invites / Users / All projects / Templates / Leads / Materials / AI-разбор / Meetings / **System settings**
+  - **ADMIN**: то же без System settings
+  - **MANAGER**: Manager dashboard / Projects / Leads / AI-разбор / Meetings / Calendar / Tasks / Clients
+  - **FOUNDER**: Dashboard / New project / Demo / AI leads / AI assistant / AI-разбор / Meetings / Personal manager
+  - **INVESTOR**: Opportunities / Portfolio / Secondary / Profile
+- **`web/src/components/layout/ImpersonationBanner.tsx`** — НОВЫЙ. Красная плашка сверху для impersonation сессий. Показывает «Вы вошли как X · Реальный оператор: Y · Сессия действует 1 час». Кнопка «Вернуться в свой аккаунт» → `clearAuth()` + редирект на `/login`.
+- **`web/src/components/layout/AppLayout.tsx`** — `<ImpersonationBanner />` + `<WorkspaceBanner />` сверху main контента.
+- **`web/src/pages/InvestorPortfolio.tsx`** — НОВЫЙ stub-компонент. 4 маршрута (`/opportunities`, `/portfolio`, `/secondary`, `/profile`) рендерят одну страницу с EmptyState «Раздел в подготовке · Связаться с менеджером». Реальный investor UX — отдельный sprint.
+- **`web/src/App.tsx`** — investor routes добавлены, все role guards переведены на новые имена (`'admin'` → `['SUPER_ADMIN', 'ADMIN']`, etc).
+- **`web/src/pages/AdminDashboard.tsx`**:
+  - UsersTable получила колонку «Действия» с кнопкой **«Войти как»** (impersonate). SUPER_ADMIN видит всех, ADMIN — кроме SUPER_ADMIN. Не показывает кнопку для самого себя.
+  - InvitesPanel ROLE_OPTIONS обновлены на 4 роли (SUPER_ADMIN скрыт — owner-аккаунты только через bootstrap).
+- **`web/src/components/layout/Topbar.tsx`** + 3 страницы (`ConversationAnalysis`, `SalesAssistant`, `Dashboard`, `AILeads`) — все сравнения `role === 'admin'` / `'manager'` / `'client'` переведены на новые `SUPER_ADMIN` / `ADMIN` / `MANAGER` / `FOUNDER`.
+
+### Verification
+
+- [x] Migration `role_rbac_upgrade` применена + value-mapping UPDATE-ы (admin→ADMIN, client→FOUNDER, manager→MANAGER, etc)
+- [x] Seed создал 5 bootstrap accounts (с проверкой паролей из env)
+- [x] Local end-to-end smoke (8/8 сценариев):
+  - SUPER_ADMIN, ADMIN, MANAGER, FOUNDER, INVESTOR — все логинятся email+password
+  - Demo founder видит 3 demo проекта (Sprint 24)
+  - SUPER_ADMIN impersonate → FOUNDER, получает Bearer с impersonatedBy claim
+  - /me возвращает workspaceStatus + impersonatedBy
+  - /api/projects под impersonation видит demo проекты (правильно для FOUNDER+demo)
+  - ADMIN пытается impersonate SUPER_ADMIN → 403 cannot_impersonate_super_admin
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — OK (496.18 kB / 141.26 kB gzip, +6 kB к Sprint 24)
+
+### Production rollout
+
+После redeploy commit'а:
+1. `prisma migrate deploy` применяет migration → существующие prod users получают `role = 'ADMIN' / 'FOUNDER' / 'MANAGER'` автоматически (legacy 'admin'/'client'/'manager' → новые UPPER_CASE)
+2. `db:seed:prod` — создаёт 5 bootstrap accounts. Без env пароли → disabled (warn в логах)
+3. Команда добавляет в Render Environment: `BOOTSTRAP_OWNER_PASSWORD`, `BOOTSTRAP_ADMIN_PASSWORD`, `BOOTSTRAP_MANAGER_PASSWORD`, `BOOTSTRAP_DEMO_PASSWORD`
+4. После save → Render redeploy → seed повторно запускается → пароли хешируются и сохраняются в БД
+5. Логин: `grigory@zapusk.tech` + пароль из BOOTSTRAP_OWNER_PASSWORD
+
+### Что осталось
+
+- **Полный INVESTOR UX**: реальные страницы /opportunities, /portfolio, /secondary с реальными данными (Sprint 26?)
+- **Audit log для impersonate**: persisted история «admin X зашёл как user Y»
+- **System settings page** для SUPER_ADMIN (currently route exists, но контента нет)
+- **2FA для SUPER_ADMIN**: критично для real production tenant
 
 ---
 

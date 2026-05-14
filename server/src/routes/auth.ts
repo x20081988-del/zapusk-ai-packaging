@@ -55,13 +55,16 @@ authRoutes.post('/signup', async (req, res) => {
     return res.status(409).json({ error: 'email_taken' });
   }
 
+  // Sprint 25: invite.role хранится в новой шкале (SUPER_ADMIN/ADMIN/...).
+  // normalizeRole() гарантирует, что даже если что-то старое пролезло —
+  // мы получим валидное новое значение.
   const passwordHash = await hashPassword(password);
   const user = await prisma.user.create({
     data: {
       email,
       name,
       passwordHash,
-      role: invite.role,
+      role: normalizeRole(invite.role),
       workspaceStatus: invite.workspaceStatus,
       lastLoginAt: new Date(),
     },
@@ -144,8 +147,10 @@ authRoutes.post('/login', async (req, res) => {
 // Sprint 19: demo endpoint для quick-логина под ролью без пароля.
 // Используется кнопками «Войти как клиент / менеджер / админ» на /login.
 // На реальном production тенанте можно отключить через DISABLE_DEMO_LOGIN=true.
+// Sprint 25 — demo endpoint остаётся для legacy скриптов и dev-tooling.
+// Принимает и старые и новые имена ролей.
 const demoSchema = z.object({
-  role: z.enum(['client', 'manager', 'admin']),
+  role: z.string(),
   /** Опциональный кастомный email (по умолчанию demo-{role}@zapusk.tech). */
   email: z.string().email().optional(),
   name: z.string().min(1).optional(),
@@ -157,9 +162,13 @@ authRoutes.post('/demo', async (req, res) => {
   }
   const parsed = demoSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'validation_failed' });
-  const { role, email: customEmail, name: customName } = parsed.data;
-
-  const email = (customEmail ?? `demo-${role}@zapusk.tech`).toLowerCase();
+  const { role: rawRole, email: customEmail, name: customName } = parsed.data;
+  // Sprint 25 — пропускаем role через normalizeRole, чтобы 'admin'/'manager'/
+  // 'client' из старых скриптов автоматически становились 'ADMIN'/'MANAGER'/
+  // 'FOUNDER'. Email слаг тоже унифицируем через lowercase role-имени.
+  const role = normalizeRole(rawRole);
+  const emailSlug = role.toLowerCase().replace('_', '-');
+  const email = (customEmail ?? `demo-${emailSlug}@zapusk.tech`).toLowerCase();
   const name = customName ?? defaultDemoName(role);
 
   // Upsert: demo-аккаунты переиспользуются между сессиями. role обновляется
@@ -180,24 +189,35 @@ authRoutes.post('/demo', async (req, res) => {
   });
 });
 
-function defaultDemoName(role: 'client' | 'manager' | 'admin'): string {
-  if (role === 'admin') return 'Demo Admin';
-  if (role === 'manager') return 'Demo Manager';
-  return 'Demo Founder';
+function defaultDemoName(role: 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FOUNDER' | 'INVESTOR'): string {
+  switch (role) {
+    case 'SUPER_ADMIN': return 'Demo Super-admin';
+    case 'ADMIN': return 'Demo Admin';
+    case 'MANAGER': return 'Demo Manager';
+    case 'INVESTOR': return 'Demo Investor';
+    default: return 'Demo Founder';
+  }
 }
 
 // /me — текущий профиль (по Bearer или header back-compat).
 // Sprint 22: возвращаем workspaceStatus — фронт реагирует (показать
 // «awaiting payment» баннер, спрятать write UI для 'demo' и т.д.).
+// Sprint 25: + impersonatedBy claim для красной плашки «вы вошли как X».
 authRoutes.get('/me', authMiddleware, async (req, res) => {
-  const user = (req as typeof req & { user: { id: string; email: string; name: string | null; role?: string; workspaceStatus?: string } }).user;
+  const r = req as typeof req & {
+    user: { id: string; email: string; name: string | null; role?: string; workspaceStatus?: string };
+    impersonatedBy?: { sub: string; email: string; role: string };
+  };
   res.json({
     user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: normalizeRole(user.role),
-      workspaceStatus: user.workspaceStatus ?? 'active',
+      id: r.user.id,
+      email: r.user.email,
+      name: r.user.name,
+      role: normalizeRole(r.user.role),
+      workspaceStatus: r.user.workspaceStatus ?? 'active',
     },
+    impersonatedBy: r.impersonatedBy
+      ? { email: r.impersonatedBy.email, role: r.impersonatedBy.role }
+      : null,
   });
 });

@@ -1,22 +1,17 @@
 import { useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Sparkles, UserRound, ShieldCheck, Handshake } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { defaultRouteForRole, setAuth, type UserRole, type WorkspaceStatus } from '../lib/auth';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Logo } from '../components/ui/Logo';
 
-// Sprint 23 — служебный вход.
+// Sprint 25 — служебный вход для подключённых пользователей платформы.
 //
-// /login видят только подключённые пользователи (клиенты после approval,
-// менеджеры, команда платформы). Никаких social-кнопок, никакой ссылки
-// «Создать аккаунт». Внешний пользователь → CTA «Запросить демо» → /signup
-// (ApplyForAccessPage).
-//
-// /login?demo=1 — служебный URL для команды: внизу появляется блок «Демо-
-// доступ для команды» с 3 кнопками (client/manager/admin). Без параметра
-// эти кнопки скрыты — обычный посетитель их не видит.
+// Никаких demo-кнопок, ?demo=1 escape-hatch, social mock'ов. Owner / admin /
+// manager / fonder / investor — все логинятся через обычный email/password.
+// Bootstrap accounts (Sprint 25) поднимают типовые аккаунты через
+// BOOTSTRAP_*_PASSWORD env-переменные на старте.
 
 interface AuthResponse {
   user: { id: string; email: string; name: string | null; role: UserRole; workspaceStatus?: WorkspaceStatus };
@@ -24,13 +19,9 @@ interface AuthResponse {
 }
 
 export default function Login() {
-  const [params] = useSearchParams();
-  const showDemo = params.get('demo') === '1';
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [demoLoading, setDemoLoading] = useState<UserRole | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -40,37 +31,21 @@ export default function Login() {
     setErr(null);
     try {
       const res = await api.post<AuthResponse>('/api/auth/login', { email: email.trim(), password });
-      finishLogin(res);
+      setAuth({
+        email: res.user.email,
+        name: res.user.name ?? res.user.email,
+        role: res.user.role,
+        token: res.token,
+        userId: res.user.id,
+        workspaceStatus: res.user.workspaceStatus ?? null,
+        impersonatedBy: null,
+      });
+      navigate(defaultRouteForRole(res.user.role));
     } catch (e) {
       setErr(translateAuthError(e));
     } finally {
       setLoading(false);
     }
-  }
-
-  async function loginAsDemo(role: UserRole) {
-    setDemoLoading(role);
-    setErr(null);
-    try {
-      const res = await api.post<AuthResponse>('/api/auth/demo', { role });
-      finishLogin(res);
-    } catch (e) {
-      setErr(translateAuthError(e));
-    } finally {
-      setDemoLoading(null);
-    }
-  }
-
-  function finishLogin(res: AuthResponse) {
-    setAuth({
-      email: res.user.email,
-      name: res.user.name ?? res.user.email,
-      role: res.user.role,
-      token: res.token,
-      userId: res.user.id,
-      workspaceStatus: res.user.workspaceStatus ?? null,
-    });
-    navigate(defaultRouteForRole(res.user.role));
   }
 
   return (
@@ -117,9 +92,6 @@ export default function Login() {
             </Button>
           </form>
 
-          {/* Sprint 23: CTA для внешнего пользователя без аккаунта. НЕ ведёт
-              на публичную регистрацию — ведёт на /signup (ApplyForAccessPage),
-              где предлагается оставить заявку на демо. */}
           <div className="mt-5 text-center text-sm text-secondary">
             Нет доступа?{' '}
             <Link to="/signup" className="text-zapusk-400 hover:text-zapusk-300 font-semibold">
@@ -127,68 +99,7 @@ export default function Login() {
             </Link>
           </div>
         </div>
-
-        {/* Sprint 23: «Демо-доступ для команды» — теперь только под ?demo=1.
-            Внешний посетитель этих кнопок не видит. Команда ходит по
-            /login?demo=1 → один клик и попадает в нужную роль. */}
-        {showDemo && (
-          <DemoAccess loading={demoLoading} onPick={loginAsDemo} />
-        )}
       </div>
-    </div>
-  );
-}
-
-function DemoAccess({
-  loading, onPick,
-}: { loading: UserRole | null; onPick: (role: UserRole) => void }) {
-  return (
-    <div className="mt-6 rounded-lg border border-hairline bg-canvas/45 p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <Sparkles size={13} className="text-zapusk-400" />
-        <span className="text-[10px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold">
-          Демо-доступ для команды
-        </span>
-      </div>
-      <div className="grid grid-cols-3 gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="w-full"
-          iconLeft={<UserRound size={12} />}
-          loading={loading === 'client'}
-          onClick={() => onPick('client')}
-        >
-          Клиент
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="w-full"
-          iconLeft={<Handshake size={12} />}
-          loading={loading === 'manager'}
-          onClick={() => onPick('manager')}
-        >
-          Менеджер
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="w-full"
-          iconLeft={<ShieldCheck size={12} />}
-          loading={loading === 'admin'}
-          onClick={() => onPick('admin')}
-        >
-          Админ
-        </Button>
-      </div>
-      <p className="text-[10px] text-muted mt-2 leading-snug">
-        Служебный режим для команды и презентаций. Доступен по прямой ссылке
-        /login?demo=1 и отключается через `DISABLE_DEMO_LOGIN` на customer tenant.
-      </p>
     </div>
   );
 }
@@ -201,6 +112,5 @@ function translateAuthError(err: unknown): string {
   if (msg.includes('409') || msg.includes('email_taken')) return 'Этот email уже занят.';
   if (msg.includes('validation_failed')) return 'Проверьте заполнение формы.';
   if (msg.includes('400')) return 'Запрос отклонён. Проверьте поля.';
-  if (msg.includes('demo_login_disabled')) return 'Демо-вход на этом инстансе отключён.';
   return 'Не удалось войти. Попробуйте ещё раз.';
 }

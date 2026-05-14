@@ -3,9 +3,27 @@ import { prisma } from './db.js';
 import { env } from './env.js';
 import { verifyToken } from './authCrypto.js';
 
-export type UserRole = 'client' | 'manager' | 'admin';
+// Sprint 25 — нормальная RBAC. SUPER_ADMIN — владелец платформы, видит всё,
+// может impersonate. ADMIN — обычный админ Zapusk. MANAGER — менеджер
+// проектов. FOUNDER — клиент-фаундер (бывший 'client'). INVESTOR —
+// инвестор с отдельным UX (Opportunities / Portfolio / Secondary).
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FOUNDER' | 'INVESTOR';
 
-const ROLES: UserRole[] = ['client', 'manager', 'admin'];
+const ROLES: UserRole[] = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'FOUNDER', 'INVESTOR'];
+
+// Sprint 25 — back-compat alias: pre-Sprint-25 значения роли остаются для
+// логирования и обратной совместимости (например, x-user-role header в legacy
+// скриптах). normalizeRole() сам приводит их к новой шкале.
+const LEGACY_ROLE_MAP: Record<string, UserRole> = {
+  admin: 'ADMIN',
+  manager: 'MANAGER',
+  client: 'FOUNDER',
+  founder: 'FOUNDER',
+  sales: 'MANAGER',
+  demo: 'FOUNDER',
+  viewer: 'FOUNDER',
+  investor: 'INVESTOR',
+};
 
 // Sprint 19: auth middleware теперь поддерживает два источника:
 //   1. Authorization: Bearer <jwt>  — основной способ (signup / login через
@@ -26,8 +44,21 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     if (claims) {
       const user = await prisma.user.findUnique({ where: { id: claims.sub } });
       if (user) {
-        (req as Request & { user: typeof user; role: UserRole }).user = user;
-        (req as Request & { user: typeof user; role: UserRole }).role = normalizeRole(user.role);
+        const enrichedReq = req as Request & {
+          user: typeof user;
+          role: UserRole;
+          impersonatedBy?: { sub: string; email: string; role: UserRole };
+        };
+        enrichedReq.user = user;
+        enrichedReq.role = normalizeRole(user.role);
+        // Sprint 25 — пробрасываем impersonation claim, если он есть.
+        if (claims.impersonatedBy) {
+          enrichedReq.impersonatedBy = {
+            sub: claims.impersonatedBy.sub,
+            email: claims.impersonatedBy.email,
+            role: normalizeRole(claims.impersonatedBy.role),
+          };
+        }
         return next();
       }
     }
@@ -85,15 +116,42 @@ export function getRole(req: Request): UserRole {
 }
 
 export function normalizeRole(role: unknown): UserRole {
-  const r = String(role ?? '').toLowerCase();
-  return ROLES.includes(r as UserRole) ? (r as UserRole) : 'client';
+  const raw = String(role ?? '').trim();
+  if (!raw) return 'FOUNDER';
+  // Sprint 25: новый формат — UPPER_CASE. Если совпало — используем.
+  if (ROLES.includes(raw as UserRole)) return raw as UserRole;
+  // Old lowercase значения → mapping.
+  const lower = raw.toLowerCase();
+  if (LEGACY_ROLE_MAP[lower]) return LEGACY_ROLE_MAP[lower];
+  // Также поддержка smartcast вроде 'admin' → 'ADMIN'.
+  const upper = raw.toUpperCase();
+  if (ROLES.includes(upper as UserRole)) return upper as UserRole;
+  return 'FOUNDER';
 }
 
-export function requireRole(roles: UserRole[]) {
+export function requireRole(roles: Array<UserRole | string>) {
+  // Sprint 25: нормализуем входные роли. Старый код мог писать
+  // requireRole(['admin']) — теперь это эквивалент requireRole(['ADMIN']).
+  // SUPER_ADMIN автоматически проходит везде, где требуется ADMIN.
+  const normalized = new Set<UserRole>(roles.map((r) => normalizeRole(r)));
+  // SUPER_ADMIN inherits ADMIN access by design.
+  if (normalized.has('ADMIN')) normalized.add('SUPER_ADMIN');
   return (req: Request, res: Response, next: NextFunction) => {
     const role = getRole(req);
-    if (!roles.includes(role)) {
-      return res.status(403).json({ error: 'forbidden', requiredRole: roles, role });
+    if (!normalized.has(role)) {
+      return res.status(403).json({ error: 'forbidden', requiredRole: Array.from(normalized), role });
+    }
+    next();
+  };
+}
+
+// Sprint 25 — explicit guard для super-admin-only операций. Используется на
+// impersonate, system settings, любых destructive admin ops.
+export function requireSuperAdmin() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const role = getRole(req);
+    if (role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'forbidden', requiredRole: ['SUPER_ADMIN'], role });
     }
     next();
   };

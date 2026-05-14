@@ -4,6 +4,7 @@ import { DEMO_PROJECTS, type DemoProject } from './services/demoSeeds.js';
 import { env } from './env.js';
 import { generateAllPrompts } from './services/promptBuilders.js';
 import { resolveOrchestration } from './services/aiProviders.js';
+import { hashPassword } from './authCrypto.js';
 
 async function main() {
   console.log('[seed] upserting prompt templates...');
@@ -40,21 +41,63 @@ async function main() {
   }
 
   console.log('[seed] upserting dev user...');
-  // Sprint 22: dev/demo user всегда workspaceStatus='active' — это команда
-  // ZAPUSK AI, у них полный доступ. Поднимаем существующих users в active,
-  // чтобы pre-Sprint-22 аккаунты не оказались заблокированы.
+  // Sprint 22+25: dev user — ADMIN с workspaceStatus='active' (команда ZAPUSK AI).
   const user = await prisma.user.upsert({
     where: { email: env.DEV_USER_EMAIL.toLowerCase() },
-    update: { workspaceStatus: 'active' },
-    create: { email: env.DEV_USER_EMAIL.toLowerCase(), name: env.DEV_USER_NAME, workspaceStatus: 'active', role: 'admin' },
+    update: { workspaceStatus: 'active', role: 'ADMIN' },
+    create: { email: env.DEV_USER_EMAIL.toLowerCase(), name: env.DEV_USER_NAME, workspaceStatus: 'active', role: 'ADMIN' },
   });
 
   // Sprint 22: backfill — все существующие пользователи получают active, если
-  // ещё в дефолтном 'lead' (это pre-Sprint-22 record'ы). Новых пользователей
-  // мы будем создавать только через invite.
+  // ещё в дефолтном 'lead' (pre-Sprint-22). Новых создаём только через invite.
   await prisma.user.updateMany({
     where: { workspaceStatus: 'lead' },
     data: { workspaceStatus: 'active' },
+  });
+
+  // Sprint 25 — bootstrap accounts. Создаём 5 типовых пользователей платформы
+  // (владелец, админ, менеджер, демо-фаундер, демо-инвестор). Пароли берём
+  // из env: если empty → disabled account без passwordHash + warn в console.
+  console.log('[seed] bootstrap accounts...');
+  await upsertBootstrap({
+    email: env.BOOTSTRAP_OWNER_EMAIL,
+    name: 'Григорий · владелец платформы',
+    role: 'SUPER_ADMIN',
+    workspaceStatus: 'active',
+    password: env.BOOTSTRAP_OWNER_PASSWORD,
+    envVarName: 'BOOTSTRAP_OWNER_PASSWORD',
+  });
+  await upsertBootstrap({
+    email: env.BOOTSTRAP_ADMIN_EMAIL,
+    name: 'ZAPUSK AI Admin',
+    role: 'ADMIN',
+    workspaceStatus: 'active',
+    password: env.BOOTSTRAP_ADMIN_PASSWORD,
+    envVarName: 'BOOTSTRAP_ADMIN_PASSWORD',
+  });
+  await upsertBootstrap({
+    email: env.BOOTSTRAP_MANAGER_EMAIL,
+    name: 'Менеджер ZAPUSK AI',
+    role: 'MANAGER',
+    workspaceStatus: 'active',
+    password: env.BOOTSTRAP_MANAGER_PASSWORD,
+    envVarName: 'BOOTSTRAP_MANAGER_PASSWORD',
+  });
+  await upsertBootstrap({
+    email: env.BOOTSTRAP_DEMO_FOUNDER_EMAIL,
+    name: 'Демо-фаундер',
+    role: 'FOUNDER',
+    workspaceStatus: 'demo',
+    password: env.BOOTSTRAP_DEMO_PASSWORD,
+    envVarName: 'BOOTSTRAP_DEMO_PASSWORD (demo-founder)',
+  });
+  await upsertBootstrap({
+    email: env.BOOTSTRAP_DEMO_INVESTOR_EMAIL,
+    name: 'Демо-инвестор',
+    role: 'INVESTOR',
+    workspaceStatus: 'demo',
+    password: env.BOOTSTRAP_DEMO_PASSWORD,
+    envVarName: 'BOOTSTRAP_DEMO_PASSWORD (demo-investor)',
   });
 
   console.log('[seed] seeding sample financial model template...');
@@ -282,6 +325,40 @@ async function seedDemoArchetype(userId: string, d: DemoProject) {
   } catch (err) {
     console.warn(`[seed] prompts for ${d.name} skipped:`, err instanceof Error ? err.message : err);
   }
+}
+
+// Sprint 25 — helper для bootstrap-аккаунтов.
+// • upsert по email
+// • если password пустой → не выставляем passwordHash (disabled аккаунт),
+//   логин невозможен до момента, пока владелец не пропишет env-переменную
+// • роль и workspaceStatus всегда восстанавливаются из bootstrap-конфига
+//   (можно «починить» испорченный аккаунт следующим запуском seed)
+async function upsertBootstrap(opts: {
+  email: string;
+  name: string;
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FOUNDER' | 'INVESTOR';
+  workspaceStatus: 'active' | 'demo';
+  password: string;
+  envVarName: string;
+}): Promise<void> {
+  const email = opts.email.toLowerCase();
+  if (!opts.password) {
+    console.warn(`[seed] ${opts.envVarName} not set — bootstrap account ${email} created without password (login disabled).`);
+    await prisma.user.upsert({
+      where: { email },
+      update: { role: opts.role, workspaceStatus: opts.workspaceStatus, name: opts.name },
+      create: { email, name: opts.name, role: opts.role, workspaceStatus: opts.workspaceStatus },
+    });
+    return;
+  }
+
+  const passwordHash = await hashPassword(opts.password);
+  await prisma.user.upsert({
+    where: { email },
+    update: { role: opts.role, workspaceStatus: opts.workspaceStatus, name: opts.name, passwordHash },
+    create: { email, name: opts.name, role: opts.role, workspaceStatus: opts.workspaceStatus, passwordHash },
+  });
+  console.log(`[seed] bootstrap ${email} (${opts.role}) — password set from ${opts.envVarName}`);
 }
 
 main()

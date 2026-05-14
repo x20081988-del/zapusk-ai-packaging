@@ -469,7 +469,7 @@ export default function SalesAssistant() {
   );
   const hasFinalTranscript = transcript.some((t) => t.final);
   const visibleProjects = useMemo(
-    () => projects.filter((p) => role !== 'client' || !isLegacyDemoProject(p)),
+    () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
     [role, projects],
   );
 
@@ -503,7 +503,7 @@ export default function SalesAssistant() {
   const isMock = card?.fellBackToMock || card?.source === 'mock';
   const providerLabel = isMock
     ? 'Демо-режим'
-    : role === 'admin' || role === 'manager'
+    : role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER'
       ? (card?.provider === 'openai' ? 'OpenAI' : card?.provider ?? 'AI')
       : 'AI live';
 

@@ -17,10 +17,13 @@ model User {
   // Sprint 19: real auth fields. passwordHash хранится как «scrypt:salt:hash»
   // (hex), nullable для back-compat (demo / passwordless seed users).
   passwordHash String?
-  // Sprint 19 + Sprint 22: role + workspace status.
-  // role — что пользователь может делать (admin/sales/client/demo/viewer).
-  // workspaceStatus — где он находится в воронке доступа.
-  role      String   @default("client")  // admin / sales / client / demo / viewer / manager (back-compat)
+  // Sprint 25 — нормальная ролевая система B2B investment OS.
+  // SQLite не поддерживает Prisma enum, поэтому держим String с фиксированным
+  // списком значений. Валидация — в backend zod-схемах и normalizeRole().
+  // Значения: SUPER_ADMIN / ADMIN / MANAGER / FOUNDER / INVESTOR.
+  // Миграция Sprint 25 переименовала старые: admin→ADMIN, client→FOUNDER,
+  // manager→MANAGER, demo→FOUNDER, sales→MANAGER, viewer→FOUNDER.
+  role      String   @default("FOUNDER")
   // Sprint 22: invite-only architecture.
   // Воронка: lead → demo → approved → awaiting_payment → active → (paused/archived).
   // По умолчанию — 'lead' (никаких прав до approval).

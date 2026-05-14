@@ -68,20 +68,29 @@ function scryptAsync(password: string, salt: Buffer): Promise<Buffer> {
 
 // ─── JWT (HS256) ────────────────────────────────────────────────────────────
 
+// Sprint 25 — расширена роль до RBAC enum + impersonation claim.
 export interface TokenPayload {
   sub: string;       // userId
   email: string;
-  role: 'client' | 'manager' | 'admin';
+  role: 'SUPER_ADMIN' | 'ADMIN' | 'MANAGER' | 'FOUNDER' | 'INVESTOR';
   /** Эпоха в секундах. */
   exp: number;
   iat: number;
+  /** Sprint 25 — impersonation. Если кто-то из admin'ов «вошёл как X»,
+   *  в токене лежит ссылка на реального оператора. Используется для UI
+   *  баннера «Вы вошли как пользователь X» и audit-логов. */
+  impersonatedBy?: { sub: string; email: string; role: TokenPayload['role'] };
 }
 
 const TOKEN_TTL_SEC = 7 * 24 * 60 * 60; // 7 дней
+const IMPERSONATION_TTL_SEC = 60 * 60;  // Sprint 25: 1 час для impersonation
 
 export function signToken(claims: Omit<TokenPayload, 'exp' | 'iat'>): string {
   const now = Math.floor(Date.now() / 1000);
-  const payload: TokenPayload = { ...claims, iat: now, exp: now + TOKEN_TTL_SEC };
+  // Sprint 25: impersonation токен живёт 1 час (короче обычного 7-дневного),
+  // чтобы admin не оставил себя «как пользователь X» надолго случайно.
+  const ttl = claims.impersonatedBy ? IMPERSONATION_TTL_SEC : TOKEN_TTL_SEC;
+  const payload: TokenPayload = { ...claims, iat: now, exp: now + ttl };
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = b64url(JSON.stringify(payload));
   const data = `${header}.${body}`;

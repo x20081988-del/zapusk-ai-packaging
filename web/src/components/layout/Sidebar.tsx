@@ -4,54 +4,70 @@ import {
   LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
-  Mail, X,
+  Mail, TrendingUp, Repeat, X,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
 
 interface NavItem { to: string; icon: typeof LayoutDashboard; label: string }
 
-// Sprint 22: добавили роли sales / demo / viewer. У них пока нет специфичной
-// навигации — fallback на client view (read-only слой обеспечивает middleware).
+// Sprint 25 — нормальная RBAC. Каждая роль видит свой набор пунктов.
+// SUPER_ADMIN наследует ADMIN + видит system настройки. ADMIN видит платформу.
+// MANAGER ведёт проекты и сделки. FOUNDER — кабинет проекта. INVESTOR —
+// возможности и портфель.
 const NAV: Partial<Record<UserRole, NavItem[]>> = {
-  client: [
-    { to: '/dashboard',        icon: LayoutDashboard, label: 'Рабочий стол' },
-    { to: '/projects/new',     icon: FolderPlus,      label: 'Новый проект' },
-    { to: '/demo',             icon: Presentation,    label: 'Демо-кабинет' },
-    { to: '/ai-leads',         icon: Radio,           label: 'AI-лиды' },
-    { to: '/sales-assistant',  icon: Headphones,      label: 'AI-ассистент' },
-    { to: '/conversation-analysis', icon: Brain,     label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,  label: 'Встречи' },
-    { to: '/personal-manager', icon: MessageCircle,   label: 'Персональный менеджер' },
-  ],
-  manager: [
-    { to: '/manager',          icon: LayoutDashboard, label: 'Рабочий стол менеджера' },
-    { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
-    { to: '/manager/leads',    icon: Radio,           label: 'Новые лиды' },
-    { to: '/conversation-analysis', icon: Brain,     label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,  label: 'Встречи' },
-    { to: '/manager/meetings', icon: CalendarDays,    label: 'Календарь' },
-    { to: '/manager/tasks',    icon: ClipboardList,   label: 'Задачи' },
-    { to: '/manager/clients',  icon: Users,           label: 'Клиенты' },
-  ],
-  admin: [
-    { to: '/admin',            icon: ShieldCheck,     label: 'Админ-панель' },
-    { to: '/admin/invites',    icon: Mail,            label: 'Приглашения' },
+  SUPER_ADMIN: [
+    { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
+    { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
+    { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
     { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
-    { to: '/admin/users',      icon: Users,           label: 'Пользователи' },
-    { to: '/templates',        icon: FileCode2,       label: 'Шаблоны' },
-    { to: '/admin/leads',      icon: Radio,           label: 'Лиды' },
-    { to: '/conversation-analysis', icon: Brain,     label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,  label: 'Встречи' },
-    { to: '/admin/materials',  icon: PackageCheck,    label: 'Материалы' },
-    { to: '/admin/settings',   icon: Settings,        label: 'Настройки' },
+    { to: '/templates',        icon: FileCode2,         label: 'Шаблоны' },
+    { to: '/admin/leads',      icon: Radio,             label: 'Лиды' },
+    { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
+    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+    { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
+  ],
+  ADMIN: [
+    { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
+    { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
+    { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
+    { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
+    { to: '/admin/leads',      icon: Radio,             label: 'Лиды' },
+    { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
+    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+  ],
+  MANAGER: [
+    { to: '/manager',          icon: LayoutDashboard,   label: 'Рабочий стол менеджера' },
+    { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
+    { to: '/manager/leads',    icon: Radio,             label: 'Новые лиды' },
+    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+    { to: '/manager/meetings', icon: CalendarDays,      label: 'Календарь' },
+    { to: '/manager/tasks',    icon: ClipboardList,     label: 'Задачи' },
+    { to: '/manager/clients',  icon: Users,             label: 'Клиенты' },
+  ],
+  FOUNDER: [
+    { to: '/dashboard',        icon: LayoutDashboard,   label: 'Рабочий стол' },
+    { to: '/projects/new',     icon: FolderPlus,        label: 'Новый проект' },
+    { to: '/demo',             icon: Presentation,      label: 'Демо-кабинет' },
+    { to: '/ai-leads',         icon: Radio,             label: 'AI-лиды' },
+    { to: '/sales-assistant',  icon: Headphones,        label: 'AI-ассистент' },
+    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+    { to: '/personal-manager', icon: MessageCircle,     label: 'Персональный менеджер' },
+  ],
+  INVESTOR: [
+    { to: '/opportunities',    icon: TrendingUp,        label: 'Инвест-возможности' },
+    { to: '/portfolio',        icon: BriefcaseBusiness, label: 'Портфель' },
+    { to: '/secondary',        icon: Repeat,            label: 'Вторичный рынок' },
+    { to: '/profile',          icon: UserRound,         label: 'Профиль' },
   ],
 };
 
 interface SidebarProps {
-  /** Sprint 14: mobile-drawer mode. When set, sidebar renders as a slide-over
-   *  panel controlled by the parent (burger button in Topbar). Desktop usage
-   *  (default) doesn't pass these and remains unchanged. */
+  /** Sprint 14: mobile-drawer mode. */
   mobile?: boolean;
   open?: boolean;
   onClose?: () => void;
@@ -59,12 +75,10 @@ interface SidebarProps {
 
 export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   const auth = getAuth();
-  const role = auth?.role ?? 'client';
-  // Если для роли нет навигации (sales/demo/viewer/legacy) — показываем
-  // клиентский список. Серверный middleware всё равно ограничивает запись.
-  const baseNav = NAV[role] ?? NAV.client ?? [];
-  // Sprint 24: в demo-режиме скрываем пункт «Новый проект» — фаундер не
-  // создаёт реальные проекты в показательной витрине.
+  const role = auth?.role ?? 'FOUNDER';
+  const baseNav = NAV[role] ?? NAV.FOUNDER ?? [];
+  // Sprint 24: в demo-режиме скрываем «Новый проект» — фаундер не создаёт
+  // реальные проекты в показательной витрине.
   const isDemoMode = auth?.workspaceStatus === 'demo';
   const visibleNav = isDemoMode
     ? baseNav.filter((item) => item.to !== '/projects/new')
@@ -123,19 +137,27 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
 
       <div className="mx-3 mb-4 p-4 rounded-lg border border-line bg-grad-ink relative overflow-hidden">
         <div className="absolute -top-8 -right-8 w-24 h-24 bg-zapusk/20 rounded-full blur-2xl" />
-        {role === 'client' ? <UserRound size={16} className="text-zapusk-400 mb-2" /> : role === 'manager' ? <Handshake size={16} className="text-zapusk-400 mb-2" /> : <KanbanSquare size={16} className="text-zapusk-400 mb-2" />}
+        {role === 'FOUNDER' ? <UserRound size={16} className="text-zapusk-400 mb-2" />
+          : role === 'MANAGER' ? <Handshake size={16} className="text-zapusk-400 mb-2" />
+          : role === 'INVESTOR' ? <TrendingUp size={16} className="text-zapusk-400 mb-2" />
+          : <KanbanSquare size={16} className="text-zapusk-400 mb-2" />}
         <div className="text-[13px] font-semibold text-primary leading-tight">
-          {role === 'client' ? 'Ваш менеджер' : role === 'manager' ? 'Команда сопровождения' : 'ZAPUSK AI Admin'}
+          {role === 'FOUNDER' ? 'Ваш менеджер'
+            : role === 'MANAGER' ? 'Команда сопровождения'
+            : role === 'INVESTOR' ? 'Поддержка инвестора'
+            : 'ZAPUSK AI Admin'}
         </div>
         <div className="text-[11px] text-muted mt-1 leading-snug">
-          {role === 'client' ? 'Екатерина · упаковка и лиды' : role === 'manager' ? 'Фокус на проектах и следующих шагах.' : 'Роли, проекты, шаблоны и статусы.'}
+          {role === 'FOUNDER' ? 'Екатерина · упаковка и лиды'
+            : role === 'MANAGER' ? 'Фокус на проектах и следующих шагах.'
+            : role === 'INVESTOR' ? 'Помощь с инвестициями через ZAPUSK AI.'
+            : 'Роли, проекты, шаблоны и статусы.'}
         </div>
       </div>
     </>
   );
 
   if (mobile) {
-    // Slide-over drawer for mobile. Backdrop click closes it; ESC handled in parent.
     return (
       <div
         className={clsx(

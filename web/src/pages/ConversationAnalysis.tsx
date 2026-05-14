@@ -407,7 +407,7 @@ function ResultBlocks({ card }: { card: ConversationAnalysisCard }) {
 // manager получают полную диагностику для саппорта.
 function MockModeNotice() {
   const role = getAuth()?.role ?? 'client';
-  const isOps = role === 'admin' || role === 'manager';
+  const isOps = role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER';
   return (
     <Card padded className="border-warning/40 bg-warning/8">
       <div className="flex items-start gap-2 text-warning text-xs">

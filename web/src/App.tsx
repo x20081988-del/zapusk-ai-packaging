@@ -22,6 +22,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import ManagerDashboard from './pages/ManagerDashboard';
 import DemoCabinet from './pages/DemoCabinet';
 import PersonalManager from './pages/PersonalManager';
+import InvestorPortfolio from './pages/InvestorPortfolio';
 
 export default function App() {
   const auth = getAuth();
@@ -45,7 +46,12 @@ export default function App() {
       <Route path="/projects/:id/prompts" element={<RequireAuth><ProjectPrompts /></RequireAuth>} />
       <Route path="/projects/:id/documents" element={<RequireAuth><ProjectDocuments /></RequireAuth>} />
       <Route path="/projects/:id/review" element={<RequireAuth><ProjectReview /></RequireAuth>} />
-      <Route path="/templates" element={<RequireRole roles={['admin']}><Templates /></RequireRole>} />
+      <Route path="/templates" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><Templates /></RequireRole>} />
+      {/* Sprint 25 — INVESTOR routes (stub) */}
+      <Route path="/opportunities" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
+      <Route path="/portfolio" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
+      <Route path="/secondary" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
+      <Route path="/profile" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
       <Route path="/guide" element={<RequireAuth><Guide /></RequireAuth>} />
       <Route path="/demo" element={<RequireAuth><DemoCabinet /></RequireAuth>} />
       <Route path="/personal-manager" element={<RequireAuth><PersonalManager /></RequireAuth>} />
@@ -53,15 +59,15 @@ export default function App() {
       <Route path="/sales-assistant" element={<RequireAuth><SalesAssistant /></RequireAuth>} />
       <Route path="/meetings" element={<RequireAuth><Meetings /></RequireAuth>} />
       <Route path="/conversation-analysis" element={<RequireAuth><ConversationAnalysis /></RequireAuth>} />
-      <Route path="/manager" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
-      <Route path="/manager/:view" element={<RequireRole roles={['manager', 'admin']}><ManagerDashboard /></RequireRole>} />
-      <Route path="/admin" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
-      <Route path="/admin/users" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
-      <Route path="/admin/leads" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
-      <Route path="/admin/materials" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
-      <Route path="/admin/settings" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
-      <Route path="/admin/projects" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
-      <Route path="/admin/invites" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
+      <Route path="/manager" element={<RequireRole roles={['MANAGER', 'ADMIN', 'SUPER_ADMIN']}><ManagerDashboard /></RequireRole>} />
+      <Route path="/manager/:view" element={<RequireRole roles={['MANAGER', 'ADMIN', 'SUPER_ADMIN']}><ManagerDashboard /></RequireRole>} />
+      <Route path="/admin" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/users" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/leads" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/materials" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/settings" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/projects" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/invites" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><AdminDashboard /></RequireRole>} />
       <Route path="*" element={<Navigate to={home} replace />} />
     </Routes>
   );

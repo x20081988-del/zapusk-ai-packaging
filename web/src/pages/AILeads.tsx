@@ -149,7 +149,7 @@ export default function AILeads() {
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => {
-      const visible = r.projects.filter((p) => role !== 'client' || !isLegacyDemoProject(p));
+      const visible = r.projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p));
       setProjects(visible);
       if (!selectedProjectId && visible[0]?.id) setSelectedProjectId(visible[0].id);
     });

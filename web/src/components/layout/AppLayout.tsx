@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { WorkspaceBanner } from './WorkspaceBanner';
+import { ImpersonationBanner } from './ImpersonationBanner';
 import { getAuth } from '../../lib/auth';
 
 interface Props {
@@ -41,8 +42,9 @@ export function AppLayout({ title, action, children }: Props) {
       <Sidebar mobile open={drawerOpen} onClose={() => setDrawerOpen(false)} />
       <div className="flex-1 min-w-0 flex flex-col">
         <Topbar title={title} action={action} onOpenMenu={() => setDrawerOpen(true)} />
-        {/* Sprint 22: workspace banner для не-active статусов. Рендерится между
-            Topbar и контентом — заметно, но не блокирует UX. */}
+        {/* Sprint 25: красная плашка impersonation сверху всех остальных. */}
+        <ImpersonationBanner />
+        {/* Sprint 22: workspace banner для не-active статусов. */}
         <WorkspaceBanner />
         <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
           <div className="max-w-content mx-auto animate-rise">

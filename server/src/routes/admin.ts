@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { authMiddleware, getUser, normalizeRole, requireRole } from '../auth.js';
-import { generateInviteToken } from '../authCrypto.js';
+import { authMiddleware, getRole, getUser, normalizeRole, requireRole } from '../auth.js';
+import { generateInviteToken, signToken } from '../authCrypto.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -14,11 +14,13 @@ adminRoutes.use(requireRole(['admin']));
 // account через /api/auth/signup с inviteToken → invite single-use-помечается.
 
 const WORKSPACE_STATUS = z.enum(['lead', 'demo', 'approved', 'awaiting_payment', 'active', 'paused', 'archived']);
-const ROLE = z.enum(['admin', 'sales', 'client', 'demo', 'viewer', 'manager']);
+// Sprint 25 — новые RBAC роли. Старые значения (admin/client/manager) больше
+// не принимаются на input; UI должен использовать UPPER_CASE.
+const ROLE = z.enum(['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'FOUNDER', 'INVESTOR']);
 
 const inviteSchema = z.object({
   email: z.string().trim().toLowerCase().email().optional(),
-  role: ROLE.default('client'),
+  role: ROLE.default('FOUNDER'),
   workspaceStatus: WORKSPACE_STATUS.default('active'),
   expiresInDays: z.number().int().positive().max(365).optional(),
   note: z.string().trim().max(500).optional(),
@@ -76,6 +78,18 @@ adminRoutes.patch('/users/:id/status', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'validation_failed' });
   const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
   if (!existing) return res.status(404).json({ error: 'not_found' });
+
+  // Sprint 25 — ADMIN не может трогать SUPER_ADMIN. Только SUPER_ADMIN.
+  const requesterRole = getRole(req);
+  const targetRole = normalizeRole(existing.role);
+  if (targetRole === 'SUPER_ADMIN' && requesterRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'cannot_modify_super_admin' });
+  }
+  // И повышать кого-то до SUPER_ADMIN тоже только SUPER_ADMIN.
+  if (parsed.data.role === 'SUPER_ADMIN' && requesterRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'cannot_grant_super_admin' });
+  }
+
   const updated = await prisma.user.update({
     where: { id: req.params.id },
     data: {
@@ -84,6 +98,47 @@ adminRoutes.patch('/users/:id/status', async (req, res) => {
     },
   });
   res.json({ user: updated });
+});
+
+// Sprint 25 — Impersonation. SUPER_ADMIN или ADMIN могут «войти как» любой
+// другой пользователь (но не как SUPER_ADMIN — только super-admin может
+// impersonate super-admin'а).
+// Возвращает новый Bearer token с claim'ом impersonatedBy = реальный оператор.
+// TTL короче обычного (1 час), чтобы admin не оставил себя «как X» надолго.
+adminRoutes.post('/impersonate/:userId', async (req, res) => {
+  const me = getUser(req);
+  const myRole = getRole(req);
+  const target = await prisma.user.findUnique({ where: { id: req.params.userId } });
+  if (!target) return res.status(404).json({ error: 'user_not_found' });
+
+  const targetRole = normalizeRole(target.role);
+  if (targetRole === 'SUPER_ADMIN' && myRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'cannot_impersonate_super_admin' });
+  }
+  if (target.id === me.id) {
+    return res.status(400).json({ error: 'cannot_impersonate_self' });
+  }
+
+  const token = signToken({
+    sub: target.id,
+    email: target.email,
+    role: targetRole,
+    impersonatedBy: { sub: me.id, email: me.email, role: myRole },
+  });
+
+  console.log(`[impersonate] ${me.email} (${myRole}) → ${target.email} (${targetRole})`);
+
+  res.json({
+    user: {
+      id: target.id,
+      email: target.email,
+      name: target.name,
+      role: targetRole,
+      workspaceStatus: target.workspaceStatus,
+    },
+    token,
+    impersonatedBy: { id: me.id, email: me.email },
+  });
 });
 
 adminRoutes.get('/dashboard', async (_req, res) => {
