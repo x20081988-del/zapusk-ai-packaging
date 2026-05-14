@@ -13,10 +13,15 @@ export const authRoutes = Router();
 // • роль нового пользователя всегда 'client'. Admin/manager — только через
 //   seed (DEMO_USERS) или ручной апдейт БД.
 
+// Sprint 22 — invite-only architecture. Signup без inviteToken'а закрыт.
+// Платформа B2B / investment-infrastructure: доступ выдаётся через
+// admin/sales после demo + approval + payment.
 const signupSchema = z.object({
   name: z.string().trim().min(1, 'Имя обязательно').max(120),
   email: z.string().trim().toLowerCase().email('Некорректный email'),
   password: z.string().min(8, 'Минимум 8 символов').max(256),
+  // Sprint 22: обязательный поле. Без валидного invite — 403.
+  inviteToken: z.string().trim().min(16, 'Нужен код приглашения'),
 });
 
 authRoutes.post('/signup', async (req, res) => {
@@ -24,10 +29,27 @@ authRoutes.post('/signup', async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: 'validation_failed', issues: parsed.error.flatten().fieldErrors });
   }
-  const { name, email, password } = parsed.data;
+  const { name, email, password, inviteToken } = parsed.data;
 
-  // Уникальность через try/catch: DB-level constraint надёжнее race-condition'а
-  // между findFirst и create.
+  // Sprint 22: проверяем invite — единственный путь регистрации.
+  const invite = await prisma.inviteToken.findUnique({ where: { token: inviteToken } });
+  if (!invite) {
+    return res.status(403).json({ error: 'invite_invalid' });
+  }
+  if (invite.revokedAt) {
+    return res.status(403).json({ error: 'invite_revoked' });
+  }
+  if (invite.usedAt) {
+    return res.status(403).json({ error: 'invite_used' });
+  }
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    return res.status(403).json({ error: 'invite_expired' });
+  }
+  // Если invite привязан к email — он должен совпасть.
+  if (invite.email && invite.email.toLowerCase() !== email) {
+    return res.status(403).json({ error: 'invite_email_mismatch' });
+  }
+
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
     return res.status(409).json({ error: 'email_taken' });
@@ -39,15 +61,44 @@ authRoutes.post('/signup', async (req, res) => {
       email,
       name,
       passwordHash,
-      role: 'client',
+      role: invite.role,
+      workspaceStatus: invite.workspaceStatus,
       lastLoginAt: new Date(),
     },
   });
 
-  const token = signToken({ sub: user.id, email: user.email, role: 'client' });
+  // Помечаем invite использованным — single-use гарантированно.
+  await prisma.inviteToken.update({
+    where: { id: invite.id },
+    data: { usedAt: new Date(), usedByUserId: user.id },
+  });
+
+  const role = normalizeRole(user.role);
+  const token = signToken({ sub: user.id, email: user.email, role });
   res.status(201).json({
-    user: { id: user.id, email: user.email, name: user.name, role: 'client' },
+    user: { id: user.id, email: user.email, name: user.name, role, workspaceStatus: user.workspaceStatus },
     token,
+  });
+});
+
+// Sprint 22 — read-only invite check endpoint. Фронт открывает /signup?invite=X
+// и сразу зовёт это, чтобы показать (а) валиден ли invite, (б) для какого
+// email он выпущен (предзаполнить форму). Без auth.
+authRoutes.get('/invite/:token', async (req, res) => {
+  const invite = await prisma.inviteToken.findUnique({ where: { token: req.params.token } });
+  if (!invite || invite.revokedAt || invite.usedAt) {
+    return res.status(404).json({ error: 'invite_not_available' });
+  }
+  if (invite.expiresAt && invite.expiresAt < new Date()) {
+    return res.status(410).json({ error: 'invite_expired' });
+  }
+  res.json({
+    invite: {
+      email: invite.email,
+      role: invite.role,
+      workspaceStatus: invite.workspaceStatus,
+      note: invite.note,
+    },
   });
 });
 
@@ -70,11 +121,22 @@ authRoutes.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'invalid_credentials' });
   }
 
+  // Sprint 22: блокируем login для archived/paused workspace'ов на этом
+  // же шаге — пользователь видит понятный код ошибки, не доходит до
+  // middleware-stage с 403. lead / awaiting_payment / demo / approved / active
+  // допускаются — фронт сам решит что показать.
+  if (user.workspaceStatus === 'archived') {
+    return res.status(403).json({ error: 'workspace_archived' });
+  }
+  if (user.workspaceStatus === 'paused') {
+    return res.status(403).json({ error: 'workspace_paused' });
+  }
+
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
   const role = normalizeRole(user.role);
   const token = signToken({ sub: user.id, email: user.email, role });
   res.json({
-    user: { id: user.id, email: user.email, name: user.name, role },
+    user: { id: user.id, email: user.email, name: user.name, role, workspaceStatus: user.workspaceStatus },
     token,
   });
 });
@@ -102,15 +164,17 @@ authRoutes.post('/demo', async (req, res) => {
 
   // Upsert: demo-аккаунты переиспользуются между сессиями. role обновляется
   // при каждом входе — это сознательное MVP-поведение для demo-кабинета.
+  // Sprint 22: team demo accounts получают workspaceStatus='active' — это
+  // внутренний инструмент, не выдача доступа клиенту.
   const user = await prisma.user.upsert({
     where: { email },
-    update: { role, name, lastLoginAt: new Date() },
-    create: { email, name, role, lastLoginAt: new Date() },
+    update: { role, name, workspaceStatus: 'active', lastLoginAt: new Date() },
+    create: { email, name, role, workspaceStatus: 'active', lastLoginAt: new Date() },
   });
 
   const token = signToken({ sub: user.id, email: user.email, role });
   res.json({
-    user: { id: user.id, email: user.email, name: user.name, role },
+    user: { id: user.id, email: user.email, name: user.name, role, workspaceStatus: user.workspaceStatus },
     token,
     demo: true,
   });
@@ -123,9 +187,17 @@ function defaultDemoName(role: 'client' | 'manager' | 'admin'): string {
 }
 
 // /me — текущий профиль (по Bearer или header back-compat).
+// Sprint 22: возвращаем workspaceStatus — фронт реагирует (показать
+// «awaiting payment» баннер, спрятать write UI для 'demo' и т.д.).
 authRoutes.get('/me', authMiddleware, async (req, res) => {
-  const user = (req as typeof req & { user: { id: string; email: string; name: string | null; role?: string } }).user;
+  const user = (req as typeof req & { user: { id: string; email: string; name: string | null; role?: string; workspaceStatus?: string } }).user;
   res.json({
-    user: { id: user.id, email: user.email, name: user.name, role: normalizeRole(user.role) },
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: normalizeRole(user.role),
+      workspaceStatus: user.workspaceStatus ?? 'active',
+    },
   });
 });

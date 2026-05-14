@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env, isProd } from './env.js';
 import { demoGuard } from './middleware/demoGuard.js';
+import { authedAndActive } from './middleware/workspaceAccess.js';
 import { authRoutes } from './routes/auth.js';
 import { projectsRoutes } from './routes/projects.js';
 import { filesRoutes } from './routes/files.js';
@@ -86,6 +87,13 @@ app.get('/health', (_req, res) => {
 app.use('/uploads', express.static(path.resolve(env.UPLOADS_DIR)));
 
 app.use('/api/auth', authRoutes);
+
+// Sprint 22 — invite-only architecture. Любой /api endpoint кроме /api/auth/*
+// требует аутентификации И активного workspace. /api/auth/* зарегистрирован
+// выше и отвечает первым — этот middleware его не задевает (порядок матчинга
+// Express'а).
+app.use('/api', authedAndActive);
+
 app.use('/api/projects', projectsRoutes);
 app.use('/api/files', filesRoutes);
 app.use('/api/brief', briefRoutes);

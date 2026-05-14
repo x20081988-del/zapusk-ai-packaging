@@ -4,14 +4,16 @@ import {
   LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
-  X,
+  Mail, X,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
 
 interface NavItem { to: string; icon: typeof LayoutDashboard; label: string }
 
-const NAV: Record<UserRole, NavItem[]> = {
+// Sprint 22: добавили роли sales / demo / viewer. У них пока нет специфичной
+// навигации — fallback на client view (read-only слой обеспечивает middleware).
+const NAV: Partial<Record<UserRole, NavItem[]>> = {
   client: [
     { to: '/dashboard',        icon: LayoutDashboard, label: 'Рабочий стол' },
     { to: '/projects/new',     icon: FolderPlus,      label: 'Новый проект' },
@@ -34,6 +36,7 @@ const NAV: Record<UserRole, NavItem[]> = {
   ],
   admin: [
     { to: '/admin',            icon: ShieldCheck,     label: 'Админ-панель' },
+    { to: '/admin/invites',    icon: Mail,            label: 'Приглашения' },
     { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
     { to: '/admin/users',      icon: Users,           label: 'Пользователи' },
     { to: '/templates',        icon: FileCode2,       label: 'Шаблоны' },
@@ -56,7 +59,9 @@ interface SidebarProps {
 
 export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   const role = getAuth()?.role ?? 'client';
-  const visibleNav = NAV[role];
+  // Если для роли нет навигации (sales/demo/viewer/legacy) — показываем
+  // клиентский список. Серверный middleware всё равно ограничивает запись.
+  const visibleNav = NAV[role] ?? NAV.client ?? [];
 
   const sidebarBody = (
     <>

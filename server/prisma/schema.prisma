@@ -17,12 +17,41 @@ model User {
   // Sprint 19: real auth fields. passwordHash хранится как «scrypt:salt:hash»
   // (hex), nullable для back-compat (demo / passwordless seed users).
   passwordHash String?
-  // Sprint 19: role теперь persistent. До спринта role жила только в header'е
-  // x-user-role (любой клиент мог себя назначить admin'ом). Теперь — на User.
-  role      String   @default("client")  // client / manager / admin
+  // Sprint 19 + Sprint 22: role + workspace status.
+  // role — что пользователь может делать (admin/sales/client/demo/viewer).
+  // workspaceStatus — где он находится в воронке доступа.
+  role      String   @default("client")  // admin / sales / client / demo / viewer / manager (back-compat)
+  // Sprint 22: invite-only architecture.
+  // Воронка: lead → demo → approved → awaiting_payment → active → (paused/archived).
+  // По умолчанию — 'lead' (никаких прав до approval).
+  workspaceStatus String @default("lead")
   lastLoginAt DateTime?
   createdAt DateTime @default(now())
   projects  Project[]
+  invitesCreated InviteToken[] @relation("InviteCreatedBy")
+}
+
+// Sprint 22 — Invite-only architecture. Никаких public signup'ов:
+// admin/sales создаёт invite token → отправляет ссылку человеку → человек
+// открывает /signup?invite=<token> → создаёт аккаунт с target role +
+// workspaceStatus из invite'а.
+model InviteToken {
+  id          String   @id @default(cuid())
+  token       String   @unique  // random hex (32 bytes)
+  email       String?  // если задан — invite строго под этот email; иначе универсальный
+  role        String   @default("client")
+  workspaceStatus String @default("active")  // что получит созданный user
+  createdById String
+  createdBy   User     @relation("InviteCreatedBy", fields: [createdById], references: [id])
+  usedAt      DateTime?
+  usedByUserId String?
+  expiresAt   DateTime?  // null = бессрочный
+  note        String?    // комментарий админа (имя проекта / источник)
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([email])
+  @@index([usedAt])
 }
 
 model Project {

@@ -40,10 +40,21 @@ async function main() {
   }
 
   console.log('[seed] upserting dev user...');
+  // Sprint 22: dev/demo user всегда workspaceStatus='active' — это команда
+  // ZAPUSK AI, у них полный доступ. Поднимаем существующих users в active,
+  // чтобы pre-Sprint-22 аккаунты не оказались заблокированы.
   const user = await prisma.user.upsert({
     where: { email: env.DEV_USER_EMAIL.toLowerCase() },
-    update: {},
-    create: { email: env.DEV_USER_EMAIL.toLowerCase(), name: env.DEV_USER_NAME },
+    update: { workspaceStatus: 'active' },
+    create: { email: env.DEV_USER_EMAIL.toLowerCase(), name: env.DEV_USER_NAME, workspaceStatus: 'active', role: 'admin' },
+  });
+
+  // Sprint 22: backfill — все существующие пользователи получают active, если
+  // ещё в дефолтном 'lead' (это pre-Sprint-22 record'ы). Новых пользователей
+  // мы будем создавать только через invite.
+  await prisma.user.updateMany({
+    where: { workspaceStatus: 'lead' },
+    data: { workspaceStatus: 'active' },
   });
 
   console.log('[seed] seeding sample financial model template...');

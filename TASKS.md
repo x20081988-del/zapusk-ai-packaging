@@ -355,7 +355,90 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 21 «Путь привлечения инвестиций» shipped)_
+_(empty — Sprint 22 Invite-only access architecture shipped)_
+
+---
+
+## Sprint 22 update — 2026-05-14 — Invite-only архитектура доступа
+
+Theme: **Превратили open AI tool в private B2B investment-infrastructure platform.** До спринта любой мог зарегистрироваться через `/signup` — это противоречило позиционированию (платная, B2B, investment-инфраструктура). Теперь доступ выдаётся только через invite (admin создаёт ссылку → клиент активирует аккаунт). Workspace проходит воронку: lead → demo → approved → awaiting_payment → active. Demo / approved / awaiting_payment работают в readonly режиме.
+
+Priorities делегированы: 1) disable public signup ✅, 2) invite system ✅, 3) workspace states ✅, 4) access middleware ✅, 5) demo readonly ✅, 7) admin invites UI ✅. Отложены: 6) billing integration (отдельный sprint).
+
+### Schema (migration `invite_only_access`)
+
+- `User.workspaceStatus String @default("lead")` — воронка доступа. Возможные значения: `lead` / `demo` / `approved` / `awaiting_payment` / `active` / `paused` / `archived`.
+- `User.role` теперь принимает: `admin` / `sales` / `client` / `demo` / `viewer` / `manager` (back-compat).
+- НОВЫЙ `InviteToken` model: id, `token` (32-byte hex, unique), email (опц.), role, workspaceStatus, createdById, usedAt, usedByUserId, expiresAt, revokedAt, note.
+- Seed backfill: dev user → workspaceStatus=`active`, существующие записи с `lead` поднимаются в `active` чтобы не сломать pre-Sprint-22 аккаунты.
+
+### Backend
+
+- **`server/src/authCrypto.ts`** — добавлен `generateInviteToken()` (32 bytes hex через `crypto.randomBytes`).
+- **`server/src/routes/auth.ts`** — три изменения:
+  - `POST /signup` теперь требует `inviteToken` в body. Валидирует: существует, не revoked, не used, не expired, email совпадает (если задан в invite). После создания user'а помечает invite `usedAt + usedByUserId` — single-use гарантирован.
+  - `GET /invite/:token` — публичный read-only endpoint для фронта (показать «приглашение валидно, для email X»).
+  - `POST /login` блокирует workspaceStatus `archived` / `paused` (понятный код ошибки), для остальных — пропускает, баннер на фронте.
+  - `POST /demo` создаёт team-аккаунты с `workspaceStatus='active'` (внутренний инструмент).
+  - `GET /me` возвращает workspaceStatus.
+- **`server/src/middleware/workspaceAccess.ts`** — НОВЫЙ. Combined middleware `authedAndActive`: сначала auth (Bearer / header), потом workspace check:
+  - `active` → полный доступ
+  - `demo` / `approved` / `awaiting_payment` → GET/HEAD/OPTIONS пропускает, write-методы → 403 `workspace_readonly`
+  - `lead` / `paused` / `archived` → 403 `workspace_not_active`
+  - Применён глобально на `/api` (after `/api/auth`) в index.ts — закрывает все 13 protected routes одной строкой
+- **`server/src/routes/admin.ts`** — добавлены 4 endpoint'а:
+  - `POST /api/admin/invites` — создать (email/role/workspaceStatus/expiresInDays/note)
+  - `GET /api/admin/invites` — список с includes createdBy
+  - `POST /api/admin/invites/:id/revoke` — отозвать (только если ещё не used)
+  - `PATCH /api/admin/users/:id/status` — обновить workspaceStatus + опц. role существующему юзеру
+
+### Frontend
+
+- **`web/src/lib/auth.ts`** — `UserRole` расширен (sales/demo/viewer), новый `WorkspaceStatus` type union. `AuthState` дополнен `workspaceStatus`. Helpers: `isWorkspaceActive`, `isWorkspaceReadonly`, `normalizeWorkspaceStatus`.
+- **`web/src/pages/Signup.tsx`** — переписан под invite-only:
+  - Без `?invite=` параметра → рендерится `<ApplyForAccessPage />` (3-step explainer + mailto CTA «Написать команде» + ссылка на /login)
+  - С `?invite=token` → GET `/api/auth/invite/:token` для валидации, показ инфы кому выпущен (email pre-filled и заблокирован если задан в invite), форма signup, после signup — token + redirect на dashboard
+  - Локализованные ошибки: invite_invalid / invite_used / invite_revoked / invite_expired / invite_email_mismatch
+- **`web/src/pages/Login.tsx`** — translateAuthError мапит workspace_archived / workspace_paused в человеческие сообщения. finishLogin сохраняет workspaceStatus в localStorage.
+- **`web/src/components/layout/WorkspaceBanner.tsx`** — НОВЫЙ. Узкий баннер сверху страницы для не-active workspace'ов. Per-status copy: demo / approved / awaiting_payment / lead / paused / archived. CTA: mailto:hello@zapusk.tech.
+- **`web/src/components/layout/AppLayout.tsx`** — `<WorkspaceBanner />` рендерится между Topbar и main контентом.
+- **`web/src/pages/AdminDashboard.tsx`** — добавлен `<InvitesPanel />`:
+  - Форма создания: email (опц.) / role / workspaceStatus / expiresInDays / note
+  - Таблица всех invites с фильтрацией по состоянию (активно / использовано / отозвано / истекло)
+  - Кнопка «Ссылка» копирует `{origin}/signup?invite={token}` в clipboard
+  - Кнопка «Отозвать» для активных
+  - Рендерится на `/admin/invites` + компактная версия в overview
+- **`web/src/components/layout/Sidebar.tsx`** — добавлен пункт «Приглашения» в admin nav. NAV record стал Partial — fallback на client view для ролей без специфичной навигации.
+
+### Verification
+
+- [x] Migration `invite_only_access` применена
+- [x] Seed backfill отработал на dev DB
+- [x] Local smoke test (6/6 сценариев):
+  - Signup без invite → 400 validation_failed
+  - Admin создаёт invite → 201 token returned
+  - Signup с invite → 201, role=client, workspaceStatus=active
+  - Повторное использование invite → 403 invite_used
+  - Lead workspace: /me OK, /api/projects → 403 workspace_not_active
+  - Demo workspace: GET /api/projects → 200, POST /api/projects → 403 workspace_readonly
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — OK (487.42 kB / 137.31 kB gzip, +13 kB к Sprint 21)
+
+### Production rollout
+
+- `npm start` → `prisma migrate deploy` применяет миграцию идемпотентно
+- Seed backfill (`db:seed:prod`) поднимет существующих pre-Sprint-22 users из default `lead` в `active`
+- Никаких новых env vars не требуется
+- На demo-инстансе (`DEMO_MODE=true`) `/api/auth/demo` остаётся доступным — это team back-office tool
+- На реальном customer tenant: `DISABLE_DEMO_LOGIN=true` отключает team demo flow
+
+### Что осталось
+
+- Billing integration (auto-update workspaceStatus при оплате) — отдельный sprint
+- Полноценный workspace-isolation на уровне БД (Project.workspaceId) — пока isolation через User.id
+- Email-уведомления об invite (сейчас admin копирует ссылку руками)
+- Demo workspace с auto-генерируемыми fake данными — пока demo = пустой workspace с readonly UI
 
 ---
 

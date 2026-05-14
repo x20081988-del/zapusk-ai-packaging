@@ -61,6 +61,7 @@ export default function App() {
       <Route path="/admin/materials" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
       <Route path="/admin/settings" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
       <Route path="/admin/projects" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
+      <Route path="/admin/invites" element={<RequireRole roles={['admin']}><AdminDashboard /></RequireRole>} />
       <Route path="*" element={<Navigate to={home} replace />} />
     </Routes>
   );

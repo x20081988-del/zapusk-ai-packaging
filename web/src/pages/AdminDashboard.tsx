@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  Activity, BriefcaseBusiness, CheckCircle2, FileText, Radio, Settings,
-  ShieldCheck, Users, UserPlus,
+  Activity, BriefcaseBusiness, CheckCircle2, Copy, FileText, Mail,
+  Radio, Settings, ShieldCheck, Users, UserPlus,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Input, Select } from '../components/ui/Input';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { EmptyState } from '../components/ui/EmptyState';
 import { api } from '../lib/api';
 import { formatDate, formatMoney } from '../lib/format';
 
@@ -59,7 +61,8 @@ export default function AdminDashboard() {
     : section === 'leads' ? 'Админ · Лиды'
       : section === 'materials' ? 'Админ · Материалы'
         : section === 'settings' ? 'Админ · Настройки'
-          : 'Админ-панель';
+          : section === 'invites' ? 'Админ · Приглашения'
+            : 'Админ-панель';
 
   return (
     <AppLayout title={title}>
@@ -80,10 +83,12 @@ export default function AdminDashboard() {
           {(section === 'settings') && <SettingsPanel />}
           {(section === 'leads' || section === 'materials') && <AdminMockSection kind={section} />}
           {(section === 'projects') && <AdminProjectsTable projects={data.projects} />}
+          {(section === 'invites') && <InvitesPanel />}
           {(section === 'admin' || section === '') && (
             <>
               <AdminProjectsTable projects={data.projects} />
               <UsersTable users={data.users.slice(0, 6)} compact />
+              <InvitesPanel compact />
             </>
           )}
         </div>
@@ -224,5 +229,208 @@ function Setting({ label, value }: { label: string; value: string }) {
       <div className="flex items-center gap-2 text-sm font-medium text-primary"><ShieldCheck size={14} className="text-success" />{label}</div>
       <div className="text-xs text-muted mt-1">{value}</div>
     </div>
+  );
+}
+
+// Sprint 22 — Invites panel.
+// Админ создаёт invite (email опц. + role + workspaceStatus + срок),
+// получает ссылку, копирует и шлёт пользователю. Single-use, revocable.
+
+interface InviteRow {
+  id: string;
+  token: string;
+  email: string | null;
+  role: string;
+  workspaceStatus: string;
+  usedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  note: string | null;
+  createdAt: string;
+  createdBy: { email: string; name: string | null };
+}
+
+const WORKSPACE_OPTIONS = [
+  { value: 'active', label: 'Active — полный доступ' },
+  { value: 'demo', label: 'Demo — read-only режим' },
+  { value: 'approved', label: 'Approved — одобрен, ждёт оплаты' },
+  { value: 'awaiting_payment', label: 'Awaiting payment' },
+  { value: 'lead', label: 'Lead — нет доступа до approval' },
+];
+const ROLE_OPTIONS = [
+  { value: 'client', label: 'Client' },
+  { value: 'manager', label: 'Manager' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'demo', label: 'Demo' },
+  { value: 'viewer', label: 'Viewer' },
+];
+
+function InvitesPanel({ compact }: { compact?: boolean }) {
+  const [invites, setInvites] = useState<InviteRow[] | null>(null);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('client');
+  const [workspaceStatus, setWorkspaceStatus] = useState('active');
+  const [expiresInDays, setExpiresInDays] = useState('30');
+  const [note, setNote] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedToken, setCopiedToken] = useState<string | null>(null);
+
+  async function load() {
+    const r = await api.get<{ invites: InviteRow[] }>('/api/admin/invites');
+    setInvites(r.invites);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    setCreating(true);
+    setError(null);
+    try {
+      await api.post('/api/admin/invites', {
+        email: email.trim() || undefined,
+        role,
+        workspaceStatus,
+        expiresInDays: expiresInDays ? Number(expiresInDays) : undefined,
+        note: note.trim() || undefined,
+      });
+      setEmail(''); setNote('');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось создать приглашение');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    if (!window.confirm('Отозвать это приглашение? Ссылка станет недействительной.')) return;
+    try {
+      await api.post(`/api/admin/invites/${id}/revoke`);
+      await load();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : 'Не удалось отозвать');
+    }
+  }
+
+  function copyLink(token: string) {
+    const url = `${window.location.origin}/signup?invite=${token}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedToken(token);
+      setTimeout(() => setCopiedToken((c) => c === token ? null : c), 1500);
+    });
+  }
+
+  return (
+    <Card padded accent="zapusk">
+      <CardHeader
+        title="Приглашения в платформу"
+        subtitle="Invite-only архитектура: создаёте ссылку и отправляете клиенту"
+        action={<Mail size={16} className="text-zapusk-400" />}
+      />
+
+      {!compact && (
+        <form onSubmit={create} className="rounded-md border border-hairline bg-canvas/45 p-4 mb-4 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Input
+              label="Email (опционально)"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="founder@startup.com"
+              hint="Если указан, приглашение строго под этот email"
+            />
+            <Input
+              label="Срок действия (дней)"
+              type="number"
+              value={expiresInDays}
+              onChange={(e) => setExpiresInDays(e.target.value)}
+              placeholder="30"
+              hint="Пусто = бессрочно"
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Select label="Роль" value={role} onChange={(e) => setRole(e.target.value)} options={ROLE_OPTIONS} />
+            <Select label="Workspace status" value={workspaceStatus} onChange={(e) => setWorkspaceStatus(e.target.value)} options={WORKSPACE_OPTIONS} />
+          </div>
+          <Input
+            label="Комментарий"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Например: «Demo для Главснаб, после звонка 12.05»"
+          />
+          {error && <div className="text-xs text-danger">{error}</div>}
+          <div className="flex justify-end">
+            <Button type="submit" loading={creating} iconLeft={<UserPlus size={13} />}>
+              Создать приглашение
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {invites === null ? (
+        <p className="text-sm text-muted text-center py-6">Загрузка…</p>
+      ) : invites.length === 0 ? (
+        <EmptyState icon={<Mail size={20} />} title="Приглашений пока нет" description="Создайте первое приглашение, чтобы пустить пользователя в платформу." />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-[0.1em] text-muted">
+                <th className="py-2 pr-4">Email / Note</th>
+                <th className="py-2 pr-4">Role / Status</th>
+                <th className="py-2 pr-4">Статус</th>
+                <th className="py-2 pr-4">Создано</th>
+                <th className="py-2 pr-4">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invites.slice(0, compact ? 5 : 100).map((inv) => {
+                const used = Boolean(inv.usedAt);
+                const revoked = Boolean(inv.revokedAt);
+                const expired = inv.expiresAt && new Date(inv.expiresAt) < new Date();
+                const stateTone = used ? 'success' : revoked ? 'danger' : expired ? 'warning' : 'ai';
+                const stateLabel = used ? 'использовано'
+                  : revoked ? 'отозвано'
+                  : expired ? 'истекло'
+                  : 'активно';
+                return (
+                  <tr key={inv.id} className="border-t border-hairline">
+                    <td className="py-3 pr-4">
+                      <div className="font-medium text-primary">{inv.email ?? <span className="text-muted">любой email</span>}</div>
+                      {inv.note && <div className="text-[11px] text-muted mt-0.5">{inv.note}</div>}
+                    </td>
+                    <td className="py-3 pr-4 text-secondary text-xs">
+                      {inv.role} / {inv.workspaceStatus}
+                    </td>
+                    <td className="py-3 pr-4">
+                      <StatusBadge tone={stateTone} dot>{stateLabel}</StatusBadge>
+                    </td>
+                    <td className="py-3 pr-4 text-xs text-muted">{formatDate(inv.createdAt)}</td>
+                    <td className="py-3 pr-4">
+                      <div className="flex gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={used || revoked || Boolean(expired)}
+                          iconLeft={<Copy size={11} />}
+                          onClick={() => copyLink(inv.token)}
+                        >
+                          {copiedToken === inv.token ? 'Скопировано' : 'Ссылка'}
+                        </Button>
+                        {!used && !revoked && (
+                          <Button size="sm" variant="ghost" onClick={() => revoke(inv.id)}>Отозвать</Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }

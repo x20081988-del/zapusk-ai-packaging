@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, UserRound, ShieldCheck, Handshake } from 'lucide-react';
 import { api } from '../lib/api';
-import { defaultRouteForRole, setAuth, type UserRole } from '../lib/auth';
+import { defaultRouteForRole, setAuth, type UserRole, type WorkspaceStatus } from '../lib/auth';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Logo } from '../components/ui/Logo';
@@ -13,7 +13,7 @@ import { SocialButtons } from '../components/auth/SocialButtons';
 // сценарий для клиента — email/password.
 
 interface AuthResponse {
-  user: { id: string; email: string; name: string | null; role: UserRole };
+  user: { id: string; email: string; name: string | null; role: UserRole; workspaceStatus?: WorkspaceStatus };
   token: string;
 }
 
@@ -59,6 +59,7 @@ export default function Login() {
       role: res.user.role,
       token: res.token,
       userId: res.user.id,
+      workspaceStatus: res.user.workspaceStatus ?? null,
     });
     navigate(defaultRouteForRole(res.user.role));
   }
@@ -194,10 +195,12 @@ function DemoAccess({
 
 function translateAuthError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes('workspace_archived')) return 'Аккаунт архивирован. Свяжитесь с командой ZAPUSK AI.';
+  if (msg.includes('workspace_paused')) return 'Аккаунт приостановлен. Свяжитесь с менеджером.';
   if (msg.includes('401') || msg.includes('invalid_credentials')) return 'Неверный email или пароль.';
   if (msg.includes('409') || msg.includes('email_taken')) return 'Этот email уже зарегистрирован.';
   if (msg.includes('validation_failed')) return 'Проверьте заполнение формы.';
   if (msg.includes('400')) return 'Запрос отклонён. Проверьте поля.';
-  if (msg.includes('403') || msg.includes('demo_login_disabled')) return 'Демо-вход на этом инстансе отключён.';
+  if (msg.includes('demo_login_disabled')) return 'Демо-вход на этом инстансе отключён.';
   return 'Не удалось войти. Попробуйте ещё раз.';
 }

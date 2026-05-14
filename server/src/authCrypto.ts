@@ -45,6 +45,12 @@ export async function verifyPassword(password: string, stored: string | null | u
   }
 }
 
+/** Sprint 22: invite token. 32 bytes hex = 64 chars, безопасно для URL и
+ *  невозможно угадать. Используется admin'ом для invite-only registration. */
+export function generateInviteToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
 function scryptAsync(password: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     crypto.scrypt(
