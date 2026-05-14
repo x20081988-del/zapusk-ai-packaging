@@ -15,7 +15,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
 import { UploadZone } from '../components/ui/UploadZone';
-import { api, type ArtefactReview, type Project, type UploadedFile } from '../lib/api';
+import { api, type ArtefactReview, type InvestmentTrack, type PackagingJob, type Project, type UploadedFile } from '../lib/api';
 import {
   formatMoney, formatPercent, formatDate, parseObj,
   STAGE_LABELS, INVESTOR_TYPE_LABELS,
@@ -26,11 +26,14 @@ import { getDemoMaterials, getDemoTransformationCase } from '../lib/demoMaterial
 import { MissingDataPanel } from '../components/ui/MissingDataPanel';
 import { PersonalManagerMiniCard } from '../components/ui/PersonalManagerCard';
 import { RecentMeetings } from '../components/ui/RecentMeetings';
-import { ProjectJourney } from '../components/ui/ProjectJourney';
-import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
+// Sprint 21: статичный Project Journey убран в пользу нового
+// «Пути привлечения инвестиций» (см. components/project/InvestmentJourney).
 import { getBriefStatus, briefStatusTone } from '../lib/briefStatus';
 import { AIPackagingHistory } from '../components/ui/AIPackagingHistory';
 import { AIDiscoverabilityScore } from '../components/ui/AIDiscoverabilityScore';
+import { InvestmentJourney } from '../components/project/InvestmentJourney';
+import { TrackPicker } from '../components/project/TrackPicker';
+import { ActivityHistory } from '../components/project/ActivityHistory';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -41,18 +44,42 @@ export default function ProjectCockpit() {
   const [generatingFull, setGeneratingFull] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [reviews, setReviews] = useState<ArtefactReview[]>([]);
+  // Sprint 21: путь привлечения инвестиций. jobs нужны для расчёта статусов
+  // пунктов; trackPickerOpen открывается автоматически если трек не выбран.
+  const [jobs, setJobs] = useState<PackagingJob[]>([]);
+  const [trackPickerOpen, setTrackPickerOpen] = useState(false);
+  const [savingTrack, setSavingTrack] = useState(false);
 
   async function load() {
     if (!id) return;
-    const [p, rs] = await Promise.all([
+    const [p, rs, j] = await Promise.all([
       api.get<{ project: Project }>(`/api/projects/${id}`),
       api.get<{ reviews: ArtefactReview[] }>(`/api/reviews/project/${id}`),
+      api.get<{ jobs: PackagingJob[] }>(`/api/packaging-jobs/project/${id}`).catch(() => ({ jobs: [] })),
     ]);
     setProject(p.project);
     setReviews(rs.reviews);
+    setJobs(j.jobs);
+    // Sprint 21: если фаундер ещё не выбрал формат привлечения — открываем
+    // TrackPicker автоматически. Один раз, только при первом загрузке проекта.
+    if (!p.project.investmentTrack && !trackPickerOpen) {
+      setTrackPickerOpen(true);
+    }
   }
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+
+  async function saveTrack(track: InvestmentTrack) {
+    if (!id) return;
+    setSavingTrack(true);
+    try {
+      const r = await api.patch<{ project: Project }>(`/api/projects/${id}`, { investmentTrack: track });
+      setProject(r.project);
+      setTrackPickerOpen(false);
+    } finally {
+      setSavingTrack(false);
+    }
+  }
 
   if (!project) {
     return (
@@ -340,10 +367,11 @@ export default function ProjectCockpit() {
         </div>
       )}
 
-      {/* Sprint 14: Project Journey + compact-mini менеджер опускаются ниже —
-          сначала контекст проекта, потом путь по платформе. */}
+      {/* Sprint 14: PersonalManagerMiniCard остаётся, но Project Journey
+          (статичный DEFAULT_PROJECT_JOURNEY) убран — заменён главным новым
+          блоком «Путь привлечения инвестиций» из Sprint 21. */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
-        <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY} compact />
+        <div /> {/* spacer для grid */}
         <PersonalManagerMiniCard />
       </div>
 
@@ -352,9 +380,26 @@ export default function ProjectCockpit() {
         <RecentMeetings projectId={id} limit={3} />
       </div>
 
+      {/* Sprint 21 — главный новый блок: «Путь привлечения инвестиций».
+          Заменяет «AI generated materials + Discoverability» как primary view.
+          Старые блоки сохраняются ниже как technical-детали для команды. */}
+      <div className="mb-6">
+        <InvestmentJourney
+          project={project}
+          jobs={jobs}
+          onChooseTrack={() => setTrackPickerOpen(true)}
+        />
+      </div>
+
+      {/* История проекта — лента событий, синтезированная из файлов/брифа/job'ов. */}
+      <div className="mb-6">
+        <ActivityHistory project={project} jobs={jobs} />
+      </div>
+
       {/* Sprint 20: AI Discoverability Score — собственная метрика ZAPUSK AI
           поверх AEO-инфраструктуры. Показывает, насколько материалы проекта
-          видны в AI search engines / answer engines. */}
+          видны в AI search engines / answer engines. Sprint 21: оставляем
+          как technical-детали под главным «Путём привлечения инвестиций». */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6 mb-6">
         <AIPackagingHistory
           projectId={id}
@@ -429,6 +474,13 @@ export default function ProjectCockpit() {
       </Card>
 
       <AddLinkModal open={linkOpen} onClose={() => setLinkOpen(false)} onAdd={addLink} />
+      <TrackPicker
+        open={trackPickerOpen}
+        current={project.investmentTrack ?? null}
+        saving={savingTrack}
+        onSave={saveTrack}
+        onClose={() => setTrackPickerOpen(false)}
+      />
     </AppLayout>
   );
 }

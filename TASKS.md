@@ -355,7 +355,90 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 20 AI Search Visibility & AEO shipped)_
+_(empty — Sprint 21 «Путь привлечения инвестиций» shipped)_
+
+---
+
+## Sprint 21 update — 2026-05-14 — Система пути привлечения инвестиций
+
+Theme: **Превратили проект из «набора AI-материалов» в систему сопровождения сделки.** Каждый проект выбирает формат привлечения (акционирование / доля ООО / convertible / SAFE / Pre-IPO / только упаковка), и под формат система собирает 5 этапов: юридическая упаковка, маркетинговая упаковка, подготовка к инвесторам, работа с инвесторами, размещение и сделка. У каждого пункта свой статус (не_начато / в_работе / ожидает_информацию / на_проверке / готово / заблокировано) и handover (AI собирает / аналитик проверяет / юрист / менеджер / команда упаковки).
+
+Главный KPI спринта: фаундер за 15 секунд после открытия проекта видит — какой у него трек, насколько проект готов, что в работе сейчас, что тормозит, какие следующие шаги.
+
+Non-goals (фикс): без новых AI-моделей, без сложных AI-агентов, без investor CRM, без auto-outreach, без новых provider integrations.
+
+### Schema (migration `investment_track`)
+
+- `Project.investmentTrack String?` — формат привлечения. Значения: `shareholding` / `llc_share` / `convertible` / `safe` / `pre_ipo` / `packaging_only` / null. Nullable — старые проекты не ломаются.
+
+### Backend
+
+- **`server/src/routes/projects.ts`** — `projectSchema` дополнен `investmentTrack: z.enum(...).optional().nullable()`. POST принимает при создании, PATCH (via `partial()`) — для смены формата. `start:prod` запускает `prisma migrate deploy` идемпотентно.
+
+### Frontend lib
+
+- **`web/src/lib/api.ts`** — добавлен `InvestmentTrack` type union, `Project.investmentTrack: InvestmentTrack | null`.
+- **`web/src/lib/investmentTrack.ts`** — НОВЫЙ. Главный config-файл спринта (~400 строк):
+  - 6 опций трека (TRACK_OPTIONS) + лейблы
+  - 6 статусов пункта (ItemStatus) + tone-маппинг
+  - 7 handover-ролей (AI / аналитик / юрист / менеджер / команда_упаковки / PR_специалист / фаундер) + UI tones
+  - `buildInvestmentJourney(project, jobs)` — track-aware builder этапов:
+    - **Юридическая упаковка** — структура сделки + специфичные пункты под трек (выпуск акций / реестр / акционерное соглашение для shareholding+pre_ipo; корпоративное соглашение + договоры + legal DD для llc_share; term sheet + договор займа для convertible; форма SAFE для safe; аудит + корп. документы для pre_ipo; полностью скрыт для packaging_only)
+    - **Маркетинговая упаковка** — позиционирование (бриф), pitch deck, финмодель, лендинг, ванпейджер, Investor FAQ
+    - **Подготовка к инвесторам** — интервью с фаундером, AI-подготовка к встречам, работа с возражениями, AI Discoverability
+    - **Работа с инвесторами** (скрыт для packaging_only) — AI-лиды, PR, блогеры, эфиры, инвестклубы, работа с базой
+    - **Размещение и сделка** (скрыт для packaging_only) — размещение на платформе / бронирование (для акционирования и Pre-IPO), подписание с инвесторами (для llc_share/convertible/safe), сопровождение, закрытие, вторичный рынок
+  - Каждый пункт получает динамический статус из контекста проекта: наличие брифа, missing data, packaging jobs (succeeded/awaiting_manager/queued)
+  - `computeJourneyMetrics(build)` — overall readiness 0..100, weighted: готово=1, на_проверке=0.85, в_работе=0.45, ожидает_информацию=0.2
+  - `whatTeamMustDo(build)` / `whatsHappeningNow(build)` — derived лента для сайдбара
+
+### Frontend components
+
+- **`web/src/components/project/InvestmentJourney.tsx`** — НОВЫЙ. Главный блок проекта:
+  - Header «Путь привлечения инвестиций» + badge трека + кнопка «Сменить формат»
+  - H2 «Проект готов к привлечению инвестиций на N%» с color-coded цифрой (success/ai/warning по диапазону)
+  - 3-KPI grid: «В работе / Ждём от команды / Готово»
+  - 5 этапных карточек с раскрытием (chevron + done/total counter + per-stage progress bar)
+  - Каждый пункт = строка со status dot + title + StatusBadge + handover badge + hint
+- **`web/src/components/project/TrackPicker.tsx`** — НОВЫЙ. Модальное окно выбора формата:
+  - Открывается автоматически при первом заходе на проект без трека
+  - 6 radio-карточек с label + hint
+  - CTA «Запустить путь привлечения» при первом выборе / «Сохранить формат» при смене
+- **`web/src/components/project/ActivityHistory.tsx`** — НОВЫЙ. История проекта:
+  - Производный view из существующих данных: UploadedFile + ProjectBrief.updatedAt + PackagingJob events
+  - 5 типов событий (file_uploaded / brief_updated / material_ready / material_review / material_in_progress) с разными иконками
+  - Role-gate: client видит generic «AI собрал», admin/manager — provider name + completedBy
+  - Сортировка по времени desc, top 15
+
+### Cockpit integration
+
+- **`web/src/pages/ProjectCockpit.tsx`**:
+  - `load()` теперь параллельно тянет `/api/packaging-jobs/project/:id` для расчёта статусов
+  - Если `project.investmentTrack === null` — автоматически открывается `<TrackPicker>` (один раз)
+  - Главная позиция в layout: `<InvestmentJourney />` сразу после Hero + Progress Steps (заменяет старый статичный ProjectJourney)
+  - Под ним — `<ActivityHistory />`
+  - Дальше — AIPackagingHistory + AIDiscoverabilityScore (technical детали для манагера/админа)
+  - Старый `<ProjectJourney stages={DEFAULT_PROJECT_JOURNEY}>` удалён — заменён на track-aware версию
+
+### UX-словарь (важно)
+
+В UI исключены: readiness, pipeline, packaging, outreach, onboarding, dashboard, generated materials, task, workflow.
+Используются: готовность проекта, путь привлечения инвестиций, этапы привлечения, материалы проекта, работа с инвесторами, упаковка проекта, задачи проекта, сопровождение сделки.
+Допустимые англицизмы: лендинг / ванпейджер / AI Discoverability / Investor FAQ / Pre-IPO / SAFE / term sheet / due diligence (профессиональные термины рынка).
+
+### Verification
+
+- [x] Миграция `investment_track` применена локально
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — OK (474.71 kB / 133.64 kB gzip, +22 kB к Sprint 20)
+- [ ] Production verify (после redeploy):
+  - Открыть `/projects/{id}` под client'ом — должен автоматически открыться TrackPicker модал
+  - После выбора формата (например, «Акционирование») — главный блок «Путь привлечения инвестиций» с 5 этапами + общая готовность %
+  - Раскрытие этапов работает; пункты помечены статусом и handover-бейджом
+  - Sidebar справа: «Что требуется от вас» + «Что происходит сейчас»
+  - Под блоком — «История проекта» с лентой событий
+  - PATCH `/api/projects/:id` с `{investmentTrack:'shareholding'}` сохраняет в БД
 
 ---
 

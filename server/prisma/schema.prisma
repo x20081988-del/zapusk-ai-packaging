@@ -44,6 +44,11 @@ model Project {
   investorType     String?   // private / fund / strategic / grant
 
   status           String    @default("draft") // draft / packaging / ready
+  // Sprint 21: формат привлечения инвестиций. Управляет, какие этапы покажутся
+  // в «Пути привлечения инвестиций» (юридическая упаковка, маркетинговая,
+  // размещение). null = пользователь ещё не выбрал.
+  // Значения: 'shareholding' / 'llc_share' / 'convertible' / 'safe' / 'pre_ipo' / 'packaging_only'
+  investmentTrack  String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 

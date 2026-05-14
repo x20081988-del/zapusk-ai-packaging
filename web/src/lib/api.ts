@@ -36,6 +36,15 @@ export const api = {
 
 // ─── typed surface ───────────────────────────────────────────
 
+// Sprint 21: формат привлечения инвестиций для проекта. null = не выбран.
+export type InvestmentTrack =
+  | 'shareholding'
+  | 'llc_share'
+  | 'convertible'
+  | 'safe'
+  | 'pre_ipo'
+  | 'packaging_only';
+
 export interface Project {
   id: string;
   name: string;
@@ -51,6 +60,8 @@ export interface Project {
   raiseDeadline: string | null;
   investorType: string | null;
   status: string;
+  // Sprint 21: выбранный трек привлечения инвестиций.
+  investmentTrack: InvestmentTrack | null;
   createdAt: string;
   updatedAt: string;
   files?: UploadedFile[];

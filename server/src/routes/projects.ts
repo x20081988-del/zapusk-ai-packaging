@@ -9,6 +9,12 @@ import { storage } from '../services/storage.js';
 export const projectsRoutes = Router();
 projectsRoutes.use(authMiddleware);
 
+// Sprint 21: формат привлечения инвестиций. nullable — пользователь может
+// ещё не выбрать (по умолчанию TrackPicker предложит на главной странице
+// проекта). 'packaging_only' = «только упаковка», без планов размещения —
+// этапы привлечения скрываются.
+const TRACK_VALUES = ['shareholding', 'llc_share', 'convertible', 'safe', 'pre_ipo', 'packaging_only'] as const;
+
 const projectSchema = z.object({
   name: z.string().min(1),
   inn: z.string().optional().nullable(),
@@ -23,6 +29,7 @@ const projectSchema = z.object({
   raiseDeadline: z.string().optional().nullable(),
   investorType: z.string().optional().nullable(),
   description: z.string().optional().nullable(),
+  investmentTrack: z.enum(TRACK_VALUES).optional().nullable(),
 });
 
 projectsRoutes.get('/', async (req, res) => {
@@ -55,6 +62,7 @@ projectsRoutes.post('/', async (req, res) => {
       equityOffered: d.equityOffered ?? null,
       raiseDeadline: d.raiseDeadline ? new Date(d.raiseDeadline) : null,
       investorType: d.investorType ?? null,
+      investmentTrack: d.investmentTrack ?? null,
     },
   });
   if (d.description?.trim()) {
