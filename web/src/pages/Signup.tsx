@@ -220,35 +220,42 @@ function ApplyForAccessPage() {
 
         <div className="bg-surface border border-line rounded-xl p-7 shadow-lifted">
           <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold mb-2">
-            <Lock size={12} /> Доступ по приглашению
+            <Lock size={12} /> Доступ только по приглашению
           </div>
-          <h1 className="text-2xl font-bold text-primary tracking-tight">Запросите доступ к ZAPUSK AI</h1>
+          <h1 className="text-2xl font-bold text-primary tracking-tight">
+            Доступ к ZAPUSK AI выдаётся после демо
+          </h1>
           <p className="text-sm text-secondary mt-2 leading-relaxed">
-            ZAPUSK AI — это закрытая инфраструктура подготовки проектов к привлечению инвестиций.
-            Регистрация открывается персонально после знакомства с продуктом.
+            Оставьте заявку, мы покажем демо-кабинет, обсудим формат подключения и после одобрения
+            отправим приглашение в платформу.
           </p>
 
           <div className="mt-5 rounded-md border border-hairline bg-canvas/45 p-4 space-y-2.5">
-            <Step n={1} title="Заявка на demo" hint="Расскажите о проекте — мы покажем кабинет ZAPUSK AI в работе" />
-            <Step n={2} title="Demo + знакомство" hint="Подберём формат привлечения и согласуем условия" />
-            <Step n={3} title="Приглашение в кабинет" hint="После approval вы получите ссылку с активацией" />
+            <Step n={1} title="Заявка на демо" hint="Расскажите о проекте — мы покажем кабинет ZAPUSK AI в работе" />
+            <Step n={2} title="Демо + знакомство" hint="Подберём формат привлечения и согласуем условия подключения" />
+            <Step n={3} title="Приглашение в платформу" hint="После одобрения вы получите персональную ссылку для активации" />
           </div>
 
           <div className="flex flex-col sm:flex-row gap-2 mt-5">
-            <a href="mailto:hello@zapusk.tech?subject=Запрос%20доступа%20к%20ZAPUSK%20AI" className="flex-1">
+            <a
+              href="mailto:hello@zapusk.tech?subject=Запрос%20демо-доступа%20к%20ZAPUSK%20AI&body=Здравствуйте!%20Хотим%20посмотреть%20демо%20ZAPUSK%20AI%20по%20проекту:"
+              className="flex-1"
+            >
               <Button className="w-full" size="lg" iconLeft={<Mail size={14} />}>
-                Написать команде
+                Запросить демо-доступ
               </Button>
             </a>
             <Link to="/login" className="flex-1">
-              <Button variant="ghost" className="w-full" size="lg">У меня есть аккаунт</Button>
+              <Button variant="ghost" className="w-full" size="lg">
+                Войти по приглашению
+              </Button>
             </Link>
           </div>
 
           <div className="mt-5 pt-5 border-t border-hairline">
             <div className="flex items-center gap-2 text-[11px] text-muted">
-              <StatusBadge tone="ai" dot>Закрытый доступ</StatusBadge>
-              <span>Платформа работает только с подтверждёнными проектами</span>
+              <StatusBadge tone="ai" dot>Закрытая платформа</StatusBadge>
+              <span>ZAPUSK AI работает только с подключёнными проектами</span>
             </div>
           </div>
         </div>
@@ -278,7 +285,7 @@ function translateSignupError(err: unknown): string {
   if (msg.includes('invite_revoked')) return 'Приглашение отозвано администратором.';
   if (msg.includes('invite_expired')) return 'Срок действия приглашения истёк.';
   if (msg.includes('invite_email_mismatch')) return 'Email не совпадает с email из приглашения.';
-  if (msg.includes('409') || msg.includes('email_taken')) return 'Этот email уже зарегистрирован. Войдите в существующий аккаунт.';
+  if (msg.includes('409') || msg.includes('email_taken')) return 'Этот email уже подключён к платформе. Войдите по приглашению.';
   if (msg.includes('validation_failed')) return 'Проверьте заполнение полей.';
   if (msg.includes('password_too_short')) return 'Пароль должен быть минимум 8 символов.';
   if (msg.includes('400')) return 'Запрос отклонён. Проверьте поля.';

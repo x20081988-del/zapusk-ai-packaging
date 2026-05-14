@@ -355,7 +355,52 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 22 Invite-only access architecture shipped)_
+_(empty — Sprint 23 Access UX cleanup shipped)_
+
+---
+
+## Sprint 23 update — 2026-05-14 — Access UX cleanup поверх Sprint 22
+
+Theme: **Финальная полировка invite-only access UX.** До спринта `/login` показывал demo-кнопки всем посетителям и предлагал «Создать аккаунт» — что противоречит invite-only архитектуре. Также `/signup` без invite-параметра был «apply page», но тексты не совсем правильно говорили о демо-флоу.
+
+### Что изменилось
+
+- **`/login`** — служебный вход:
+  - Заголовок: «Вход в ZAPUSK AI» / подзаголовок «Для клиентов, менеджеров и команды платформы»
+  - Удалён компонент `<SocialButtons />` — сервисный вход, без social mock-кнопок
+  - Ссылка «Создать аккаунт» → заменена на «Запросить демо» с переходом на `/signup` (ApplyForAccessPage)
+  - **Demo-доступ для команды** (3 кнопки client/manager/admin) скрыт по умолчанию. Показывается только при `/login?demo=1` — служебный URL для команды и презентаций. Внешний посетитель этих кнопок не видит.
+- **`/signup`** без `?invite=...` — ApplyForAccessPage с новыми текстами:
+  - Заголовок: «Доступ к ZAPUSK AI выдаётся после демо»
+  - Subtitle: «Оставьте заявку, мы покажем демо-кабинет, обсудим формат подключения и после одобрения отправим приглашение в платформу.»
+  - Primary CTA: «Запросить демо-доступ» → mailto с pre-filled subject/body
+  - Secondary CTA: «Войти по приглашению» → /login
+  - 3-step explainer: «Заявка на демо → Демо + знакомство → Приглашение в платформу»
+- **`/signup?invite=token`** работает как раньше (форма создания аккаунта по приглашению — Sprint 22)
+- **Error mapping**: «Этот email уже зарегистрирован» → «Этот email уже подключён к платформе. Войдите по приглашению.»
+
+### UX-словарь Sprint 23
+
+В пользовательских CTA убраны: «зарегистрируйтесь», «создать аккаунт», «бесплатно», «начать пользоваться».
+Используются: «запросить демо», «получить приглашение», «войти по приглашению», «подключить проект».
+
+### Что НЕ изменилось
+
+- Backend остался идентичным Sprint 22 — `POST /api/auth/signup` всё ещё требует `inviteToken`. Никаких новых API.
+- `/api/auth/demo` endpoint работает для `/login?demo=1` — это служебный путь, не публичный.
+- Тексты «Создайте аккаунт по приглашению» в invite-aware форме `/signup?invite=token` сохранены — это корректное действие для пользователя с invite'ом.
+- WorkspaceBanner / admin invites UI / role-gating — без изменений.
+
+### Verification
+
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — OK (485.97 kB / 136.99 kB gzip, новый hash `index-CSbQ7L4C.js`)
+- [ ] Production verify (после redeploy):
+  - `/login` без параметров — нет demo-кнопок, есть только email/password + «Запросить демо» ссылка
+  - `/login?demo=1` — demo-блок появляется внизу
+  - `/signup` без invite — apply page с «Запросить демо-доступ» CTA (mailto)
+  - `/signup?invite=valid_token` — форма создания аккаунта работает (Sprint 22 функционал)
+  - `POST /api/auth/signup` без inviteToken → 400 (backend Sprint 22)
 
 ---
 

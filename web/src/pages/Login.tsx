@@ -1,16 +1,22 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Sparkles, UserRound, ShieldCheck, Handshake } from 'lucide-react';
 import { api } from '../lib/api';
 import { defaultRouteForRole, setAuth, type UserRole, type WorkspaceStatus } from '../lib/auth';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Logo } from '../components/ui/Logo';
-import { SocialButtons } from '../components/auth/SocialButtons';
 
-// Sprint 19: real email/password login + small «demo access» block внизу для
-// разработки и презентаций. Demo-блок визуально вторичный, чтобы основной
-// сценарий для клиента — email/password.
+// Sprint 23 — служебный вход.
+//
+// /login видят только подключённые пользователи (клиенты после approval,
+// менеджеры, команда платформы). Никаких social-кнопок, никакой ссылки
+// «Создать аккаунт». Внешний пользователь → CTA «Запросить демо» → /signup
+// (ApplyForAccessPage).
+//
+// /login?demo=1 — служебный URL для команды: внизу появляется блок «Демо-
+// доступ для команды» с 3 кнопками (client/manager/admin). Без параметра
+// эти кнопки скрыты — обычный посетитель их не видит.
 
 interface AuthResponse {
   user: { id: string; email: string; name: string | null; role: UserRole; workspaceStatus?: WorkspaceStatus };
@@ -18,6 +24,9 @@ interface AuthResponse {
 }
 
 export default function Login() {
+  const [params] = useSearchParams();
+  const showDemo = params.get('demo') === '1';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -77,15 +86,11 @@ export default function Login() {
 
         <div className="bg-surface border border-line rounded-xl p-7 shadow-lifted">
           <div className="mb-6">
-            <h1 className="text-2xl font-bold text-primary tracking-tight">Войти в аккаунт</h1>
+            <h1 className="text-2xl font-bold text-primary tracking-tight">Вход в ZAPUSK AI</h1>
             <p className="text-sm text-secondary mt-1.5">
-              Продолжите подготовку проекта к привлечению инвестиций через ZAPUSK AI.
+              Для клиентов, менеджеров и команды платформы.
             </p>
           </div>
-
-          <SocialButtons />
-
-          <Divider>или продолжить с email</Divider>
 
           <form onSubmit={submit} className="space-y-3">
             <Input
@@ -112,29 +117,24 @@ export default function Login() {
             </Button>
           </form>
 
+          {/* Sprint 23: CTA для внешнего пользователя без аккаунта. НЕ ведёт
+              на публичную регистрацию — ведёт на /signup (ApplyForAccessPage),
+              где предлагается оставить заявку на демо. */}
           <div className="mt-5 text-center text-sm text-secondary">
-            Нет аккаунта?{' '}
+            Нет доступа?{' '}
             <Link to="/signup" className="text-zapusk-400 hover:text-zapusk-300 font-semibold">
-              Создать аккаунт
+              Запросить демо
             </Link>
           </div>
         </div>
 
-        {/* Sprint 19: «Демо-доступ» — визуально вторичный блок, для разработки
-            и презентаций. Реальный клиент сюда не пойдёт, но команде и
-            инвесторам удобно одним кликом войти под нужной ролью. */}
-        <DemoAccess loading={demoLoading} onPick={loginAsDemo} />
+        {/* Sprint 23: «Демо-доступ для команды» — теперь только под ?demo=1.
+            Внешний посетитель этих кнопок не видит. Команда ходит по
+            /login?demo=1 → один клик и попадает в нужную роль. */}
+        {showDemo && (
+          <DemoAccess loading={demoLoading} onPick={loginAsDemo} />
+        )}
       </div>
-    </div>
-  );
-}
-
-function Divider({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3 my-5">
-      <div className="flex-1 h-px bg-hairline" />
-      <span className="text-[11px] uppercase tracking-[0.12em] text-muted font-semibold">{children}</span>
-      <div className="flex-1 h-px bg-hairline" />
     </div>
   );
 }
@@ -186,8 +186,8 @@ function DemoAccess({
         </Button>
       </div>
       <p className="text-[10px] text-muted mt-2 leading-snug">
-        Демо-вход не требует пароля и доступен только на пробном инстансе. На production
-        отключается через `DISABLE_DEMO_LOGIN`.
+        Служебный режим для команды и презентаций. Доступен по прямой ссылке
+        /login?demo=1 и отключается через `DISABLE_DEMO_LOGIN` на customer tenant.
       </p>
     </div>
   );
@@ -198,7 +198,7 @@ function translateAuthError(err: unknown): string {
   if (msg.includes('workspace_archived')) return 'Аккаунт архивирован. Свяжитесь с командой ZAPUSK AI.';
   if (msg.includes('workspace_paused')) return 'Аккаунт приостановлен. Свяжитесь с менеджером.';
   if (msg.includes('401') || msg.includes('invalid_credentials')) return 'Неверный email или пароль.';
-  if (msg.includes('409') || msg.includes('email_taken')) return 'Этот email уже зарегистрирован.';
+  if (msg.includes('409') || msg.includes('email_taken')) return 'Этот email уже занят.';
   if (msg.includes('validation_failed')) return 'Проверьте заполнение формы.';
   if (msg.includes('400')) return 'Запрос отклонён. Проверьте поля.';
   if (msg.includes('demo_login_disabled')) return 'Демо-вход на этом инстансе отключён.';
