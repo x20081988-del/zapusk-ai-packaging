@@ -75,7 +75,15 @@ interface AILead {
   }>;
 }
 
+// Sprint 27 — backend разделяет три состояния. UI:
+// • empty — active кабинет, лиды не запущены. Скрываем «AI работает сейчас»,
+//   KPI grid и LiveFeed. Показываем onboarding + briefing analyzer.
+// • live  — реальные лиды в БД (когда сделаем persistence)
+// • demo  — Sprint 24 demo workspace или ?demo=1 на /demo/ai-leads
+type AILeadsMode = 'empty' | 'live' | 'demo';
+
 interface AILeadsDashboard {
+  mode: AILeadsMode;
   projectId: string | null;
   projectName: string;
   onboarding: {
@@ -245,24 +253,47 @@ export default function AILeads() {
                   <StrategyCard positioning={dashboard.strategy.positioning} triggers={dashboard.strategy.keyTriggers} investors={dashboard.strategy.icpInvestors} />
                 )}
 
-                <KpiGrid dashboard={dashboard} />
-
-                <LiveFeed leads={dashboard.leads} locked={!dashboard.readiness.criticalReady} />
+                {/* Sprint 27 — KPI grid и LiveFeed только в demo/live режиме.
+                    Для empty (active cabinet, лиды не запущены) — пустой
+                    плейсхолдер «AI-лиды появятся после запуска проекта». */}
+                {dashboard.mode === 'empty' ? (
+                  <EmptyLeadsState dashboard={dashboard} briefHref={briefHref} briefCtaLabel={briefCtaLabel} />
+                ) : (
+                  <>
+                    <KpiGrid dashboard={dashboard} />
+                    <LiveFeed leads={dashboard.leads} locked={!dashboard.readiness.criticalReady} />
+                  </>
+                )}
               </>
             )}
           </div>
 
           <aside className="space-y-4">
             {dashboard && <GuaranteeCard policy={dashboard.replacementPolicy} />}
-            <Card padded accent="ai">
-              <CardHeader title="AI работает сейчас" subtitle="Демо-режим live pipeline" />
-              <div className="space-y-3">
-                <LiveStatus icon={<PhoneCall size={14} />} label="AI-прозвон базы" value="43 звонка сегодня" active />
-                <LiveStatus icon={<MessageSquare size={14} />} label="Мессенджеры" value="128 сообщений" active />
-                <LiveStatus icon={<UserCheck size={14} />} label="Квалификация" value="7 активных лидов" active />
-                <LiveStatus icon={<Radio size={14} />} label="Новый лид" value="ожидается" />
-              </div>
-            </Card>
+            {/* Sprint 27 — «AI работает сейчас» — это demo-витрина. В active
+                кабинете её нет, она живёт в /demo/ai-leads. */}
+            {dashboard?.mode === 'demo' && (
+              <Card padded accent="ai">
+                <CardHeader title="AI работает сейчас" subtitle="Демо-режим live pipeline" />
+                <div className="space-y-3">
+                  <LiveStatus icon={<PhoneCall size={14} />} label="AI-прозвон базы" value="43 звонка сегодня" active />
+                  <LiveStatus icon={<MessageSquare size={14} />} label="Мессенджеры" value="128 сообщений" active />
+                  <LiveStatus icon={<UserCheck size={14} />} label="Квалификация" value="7 активных лидов" active />
+                  <LiveStatus icon={<Radio size={14} />} label="Новый лид" value="ожидается" />
+                </div>
+              </Card>
+            )}
+            {dashboard?.mode === 'empty' && (
+              <Card padded>
+                <CardHeader title="Что произойдёт после запуска" subtitle="AI-каналы откроются после согласования упаковки" />
+                <div className="space-y-3 text-xs text-secondary">
+                  <PendingLine icon={<PhoneCall size={13} />} label="AI-прозвон базы инвесторов" />
+                  <PendingLine icon={<MessageSquare size={13} />} label="Мессенджеры и follow-up" />
+                  <PendingLine icon={<UserCheck size={13} />} label="Квалификация и передача горячих лидов" />
+                  <PendingLine icon={<Radio size={13} />} label="Записи разговоров и контекст" />
+                </div>
+              </Card>
+            )}
           </aside>
         </div>
       </div>
@@ -778,6 +809,73 @@ function PipelineStep({ label, done, live }: { label: string; done?: boolean; li
       </span>
       <span className={`text-sm ${done ? 'text-primary' : 'text-muted'}`}>{label}</span>
       {live && <span className="ml-auto w-2 h-2 rounded-full bg-ai animate-pulse" />}
+    </div>
+  );
+}
+
+// Sprint 27 — empty state для active кабинета без запущенных лидов.
+// Никаких «43 звонка сегодня» — честная коммуникация: AI-лиды откроются
+// после готовности материалов и согласования с менеджером.
+function EmptyLeadsState({
+  dashboard, briefHref, briefCtaLabel,
+}: {
+  dashboard: AILeadsDashboard;
+  briefHref: string;
+  briefCtaLabel: string;
+}) {
+  const briefReady = dashboard.readiness.criticalReady;
+  return (
+    <Card padded accent="ai" className="overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(35,214,176,0.10),transparent_30%)]" />
+      <div className="relative grid grid-cols-1 md:grid-cols-[1fr_320px] gap-6">
+        <div>
+          <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-2">
+            <Sparkles size={12} /> AI-лиды · подготовка
+          </div>
+          <h2 className="text-xl font-semibold text-primary tracking-tight">
+            {briefReady ? 'Готовы запустить поток AI-лидов' : 'AI-лиды появятся после запуска проекта'}
+          </h2>
+          <p className="text-sm text-secondary mt-2 max-w-2xl leading-relaxed">
+            {briefReady
+              ? 'Бриф готов. Следующий шаг — менеджер согласует упаковку и юридическую часть, затем мы запустим AI-каналы.'
+              : 'Заполните бриф проекта — без него AI не сможет квалифицировать инвесторов и презентовать сделку.'}
+          </p>
+          <div className="flex flex-wrap gap-2 mt-4">
+            <Link to={briefHref}>
+              <Button variant={briefReady ? 'secondary' : 'primary'} iconLeft={<Target size={13} />}>
+                {briefCtaLabel}
+              </Button>
+            </Link>
+            <Link to="/demo/ai-leads">
+              <Button variant="ghost" iconLeft={<Sparkles size={13} />}>
+                Посмотреть демо AI-лидов
+              </Button>
+            </Link>
+            <Link to="/personal-manager">
+              <Button variant="ghost" iconLeft={<MessageSquare size={13} />}>
+                Связаться с менеджером
+              </Button>
+            </Link>
+          </div>
+        </div>
+        <div className="rounded-md border border-line bg-canvas/55 p-4 space-y-2">
+          <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">Что появится здесь</div>
+          <PendingLine icon={<PhoneCall size={13} />} label="AI-звонки инвесторам" />
+          <PendingLine icon={<MessageSquare size={13} />} label="AI-переписки в мессенджерах" />
+          <PendingLine icon={<UserCheck size={13} />} label="Квалифицированные лиды" />
+          <PendingLine icon={<Headphones size={13} />} label="Записи и транскрипты разговоров" />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function PendingLine({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-secondary">
+      <span className="text-muted">{icon}</span>
+      <span>{label}</span>
+      <span className="ml-auto text-[10px] uppercase tracking-[0.1em] text-muted">ожидаем данные</span>
     </div>
   );
 }

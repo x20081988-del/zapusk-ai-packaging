@@ -21,6 +21,9 @@ import AILeads from './pages/AILeads';
 import AdminDashboard from './pages/AdminDashboard';
 import ManagerDashboard from './pages/ManagerDashboard';
 import DemoCabinet from './pages/DemoCabinet';
+import DemoAILeads from './pages/DemoAILeads';
+import DemoConversationAnalysis from './pages/DemoConversationAnalysis';
+import ProjectsList from './pages/ProjectsList';
 import PersonalManager from './pages/PersonalManager';
 import InvestorPortfolio from './pages/InvestorPortfolio';
 
@@ -37,6 +40,7 @@ export default function App() {
       <Route path="/signup" element={<Signup />} />
 
       <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
+      <Route path="/projects" element={<RequireAuth><ProjectsList /></RequireAuth>} />
       <Route path="/projects/new" element={<RequireAuth><NewProject /></RequireAuth>} />
       <Route path="/projects/:id" element={<RequireAuth><ProjectCockpit /></RequireAuth>} />
       <Route path="/projects/:id/upload" element={<RequireAuth><ProjectUpload /></RequireAuth>} />
@@ -54,6 +58,8 @@ export default function App() {
       <Route path="/profile" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
       <Route path="/guide" element={<RequireAuth><Guide /></RequireAuth>} />
       <Route path="/demo" element={<RequireAuth><DemoCabinet /></RequireAuth>} />
+      <Route path="/demo/ai-leads" element={<RequireAuth><DemoAILeads /></RequireAuth>} />
+      <Route path="/demo/conversations" element={<RequireAuth><DemoConversationAnalysis /></RequireAuth>} />
       <Route path="/personal-manager" element={<RequireAuth><PersonalManager /></RequireAuth>} />
       <Route path="/ai-leads" element={<RequireAuth><AILeads /></RequireAuth>} />
       <Route path="/sales-assistant" element={<RequireAuth><SalesAssistant /></RequireAuth>} />

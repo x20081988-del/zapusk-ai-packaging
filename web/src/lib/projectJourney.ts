@@ -1,5 +1,5 @@
 export type JourneyStatus = 'locked' | 'available' | 'in_progress' | 'done';
-export type JourneyOwner = 'Клиент' | 'Менеджер' | 'Юрист' | 'Маркетолог';
+export type JourneyOwner = 'Клиент' | 'Менеджер' | 'Юрист' | 'Маркетолог' | 'AI';
 
 export interface JourneyStage {
   id: string;
@@ -103,5 +103,57 @@ export const DEFAULT_PROJECT_JOURNEY: JourneyStage[] = [
     cta: 'Откроется позже',
     owner: 'Менеджер',
     nextAction: 'Раунд закрыт',
+  },
+];
+
+// Sprint 26 — bootstrap state. Используется на Dashboard для активного
+// клиента без проектов. 5 этапов реального пути привлечения инвестиций:
+// brief → marketing → legal → ai-leads → meetings. Без fake «done» —
+// всё, кроме первого шага, locked. CTA говорит, что нужно для разблокировки.
+export const BOOTSTRAP_PROJECT_JOURNEY: JourneyStage[] = [
+  {
+    id: 'brief',
+    title: 'Бриф проекта',
+    description: 'Соберём экономику, команду и инвестиционный запрос вместе с менеджером.',
+    status: 'in_progress',
+    cta: 'Создать проект',
+    owner: 'Клиент',
+    nextAction: 'Заполнить первичные данные',
+  },
+  {
+    id: 'marketing',
+    title: 'Маркетинговая упаковка',
+    description: 'Презентация, посадочная и one-pager под инвестора.',
+    status: 'locked',
+    cta: 'Откроется после брифа',
+    owner: 'Маркетолог',
+    nextAction: 'Ожидаем данные брифа',
+  },
+  {
+    id: 'legal',
+    title: 'Юридическая упаковка',
+    description: 'Структура сделки и документы под выбранную механику.',
+    status: 'locked',
+    cta: 'Откроется после упаковки',
+    owner: 'Юрист',
+    nextAction: 'Ожидаем готовую упаковку',
+  },
+  {
+    id: 'ai-leads',
+    title: 'AI-лиды',
+    description: 'AI приведёт квалифицированных инвесторов по вашему профилю.',
+    status: 'locked',
+    cta: 'Откроется после юр. упаковки',
+    owner: 'AI',
+    nextAction: 'Ожидаем готовые материалы',
+  },
+  {
+    id: 'meetings',
+    title: 'Встречи с инвесторами',
+    description: 'Подготовка, проведение и фиксация результата каждой встречи.',
+    status: 'locked',
+    cta: 'Откроется после первого лида',
+    owner: 'Менеджер',
+    nextAction: 'Ожидаем горячий лид',
   },
 ];

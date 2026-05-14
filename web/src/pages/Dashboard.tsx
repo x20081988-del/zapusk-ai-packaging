@@ -7,11 +7,10 @@ import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { PersonalManagerMiniCard } from '../components/ui/PersonalManagerCard';
-import { ProjectJourney } from '../components/ui/ProjectJourney';
+import { BootstrapWelcome } from '../components/ui/BootstrapWelcome';
 import { api, type Project } from '../lib/api';
 import { computeProgress } from '../lib/progress';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
-import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 import { getAuth } from '../lib/auth';
 
 export default function Dashboard() {
@@ -22,6 +21,7 @@ export default function Dashboard() {
   // /api/projects по isDemo для demo пользователей; фронт меняет тексты и
   // скрывает «Новый проект» CTA.
   const isDemoMode = auth?.workspaceStatus === 'demo';
+  const isActiveWorkspace = auth?.workspaceStatus === 'active';
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
@@ -31,6 +31,19 @@ export default function Dashboard() {
   const total = visibleProjects?.length ?? 0;
   const ready = visibleProjects?.filter((p) => p.status === 'ready').length ?? 0;
   const inWork = visibleProjects?.filter((p) => p.status === 'packaging').length ?? 0;
+
+  // Sprint 26 — bootstrap state. Активный кабинет без проектов = новый клиент,
+  // только что оплативший доступ. Показываем приветствие + большой CTA, а не
+  // fake AI-лиды и fake progress. Demo workspace отдельная ветка ниже.
+  const isBootstrap = isActiveWorkspace && role === 'FOUNDER' && projects !== null && visibleProjects?.length === 0;
+
+  if (isBootstrap) {
+    return (
+      <AppLayout title="Рабочий стол">
+        <BootstrapWelcome userName={auth?.name} />
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout
@@ -188,14 +201,19 @@ export default function Dashboard() {
                 <MiniPill icon={<ShieldCheck size={12} />} label="Замена нецелевых" />
               </div>
             </div>
+            {/* Sprint 27 — убрали фиктивный «12 квалифицированных лидов в
+                demo-feed»: для active кабинета без запущенных лидов это
+                вводило в заблуждение. Теперь — нейтральный CTA в /ai-leads. */}
             <div className="rounded-lg border border-ai/25 bg-canvas/55 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">Live pipeline</div>
-                  <div className="text-3xl font-bold text-primary font-num mt-1">12</div>
-                  <div className="text-xs text-muted">квалифицированных лидов в demo-feed</div>
-                </div>
-                <Button variant="ai" iconLeft={<Sparkles size={14} />}>Запустить AI-лиды</Button>
+              <div className="flex flex-col gap-2">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold">AI-лидогенерация</div>
+                <p className="text-xs text-secondary leading-relaxed">
+                  AI-каналы запускаются после готовности упаковки. Откройте раздел,
+                  чтобы увидеть статус и следующий шаг.
+                </p>
+                <Button variant="ai" iconLeft={<Sparkles size={14} />} className="self-start mt-1">
+                  Открыть AI-лиды
+                </Button>
               </div>
             </div>
           </div>
@@ -203,24 +221,22 @@ export default function Dashboard() {
       </Link>
 
       {/* Sprint 14: compactMini менеджер не занимает пол-экрана. Под ним —
-          лёгкий Project Journey overview и ссылка в демо-кабинет. */}
+          ссылка в демо-кабинет. Sprint 26 — убрали global ProjectJourney
+          (это project-specific, живёт на cockpit'е каждого проекта). */}
       <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] gap-6 mb-6">
         <PersonalManagerMiniCard />
-        <div className="space-y-6">
-          <Link to="/demo" className="block">
-            <Card hoverable accent="zapusk">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold">Демо-кабинет</div>
-                  <h2 className="text-lg font-semibold text-primary mt-1">Посмотреть, как выглядит готовый проект</h2>
-                  <p className="text-sm text-secondary mt-1">Главснаб: бриф, материалы, AI-лиды, запись разговора и путь сделки.</p>
-                </div>
-                <Button variant="secondary">Открыть демо</Button>
+        <Link to="/demo" className="block">
+          <Card hoverable accent="zapusk">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold">Демо-кабинет</div>
+                <h2 className="text-lg font-semibold text-primary mt-1">Посмотреть, как выглядит готовый проект</h2>
+                <p className="text-sm text-secondary mt-1">Главснаб: бриф, материалы, AI-лиды, запись разговора и путь сделки.</p>
               </div>
-            </Card>
-          </Link>
-          <ProjectJourney stages={DEFAULT_PROJECT_JOURNEY.slice(0, 5)} compact />
-        </div>
+              <Button variant="secondary">Открыть демо</Button>
+            </div>
+          </Card>
+        </Link>
       </div>
     </AppLayout>
   );

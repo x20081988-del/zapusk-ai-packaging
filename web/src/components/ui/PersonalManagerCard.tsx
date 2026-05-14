@@ -4,6 +4,17 @@ import { Card, CardHeader } from './Card';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
 
+// Sprint 27 — карточка менеджера больше не несёт fake «последнее действие /
+// следующий шаг»: пока не подключим реальную ленту активности менеджера,
+// показывать «Проверила материалы / Подготовить эфир» в active кабинете
+// = врать клиенту. Demo cabinet передаёт `activity` явно (Sprint 24).
+export interface PersonalManagerActivity {
+  lastAction: string;
+  lastActionAt: string;
+  nextStep: string;
+  nextStepDue: string;
+}
+
 export const PERSONAL_MANAGER = {
   name: 'Екатерина Морозова',
   role: 'Персональный менеджер ZAPUSK AI',
@@ -11,6 +22,11 @@ export const PERSONAL_MANAGER = {
   email: 'manager@zapusk-ai.tech',
   phone: '+7 999 120-45-80',
   sla: 'Отвечает в течение 1 часа в рабочее время',
+};
+
+// Sprint 24 / 27 — demo activity для demo-кабинета. На active кабинете не
+// показываем, пока не появится реальный backend activity feed.
+export const DEMO_MANAGER_ACTIVITY: PersonalManagerActivity = {
   lastAction: 'Проверила материалы проекта и оставила 3 правки',
   lastActionAt: 'сегодня в 11:24',
   nextStep: 'Подготовить эфир по базе инвесторов',
@@ -47,7 +63,15 @@ export function PersonalManagerMiniCard() {
   );
 }
 
-export function PersonalManagerCard({ compact }: { compact?: boolean }) {
+export function PersonalManagerCard({
+  compact,
+  activity,
+}: {
+  compact?: boolean;
+  /** Sprint 27 — передавай activity только когда реально знаешь lastAction/
+   *  nextStep (например, демо-кабинет). По умолчанию активность не показываем. */
+  activity?: PersonalManagerActivity | null;
+}) {
   return (
     <Card padded accent="zapusk">
       <CardHeader
@@ -68,24 +92,26 @@ export function PersonalManagerCard({ compact }: { compact?: boolean }) {
             {PERSONAL_MANAGER.sla}
           </div>
 
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <div className="rounded-md border border-hairline bg-canvas/45 px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">
-                <CheckCircle2 size={11} className="text-success" />
-                Последнее действие
+          {activity && (
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="rounded-md border border-hairline bg-canvas/45 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">
+                  <CheckCircle2 size={11} className="text-success" />
+                  Последнее действие
+                </div>
+                <div className="text-xs text-primary leading-snug">{activity.lastAction}</div>
+                <div className="text-[10px] text-muted mt-1">{activity.lastActionAt}</div>
               </div>
-              <div className="text-xs text-primary leading-snug">{PERSONAL_MANAGER.lastAction}</div>
-              <div className="text-[10px] text-muted mt-1">{PERSONAL_MANAGER.lastActionAt}</div>
-            </div>
-            <div className="rounded-md border border-hairline bg-canvas/45 px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">
-                <ArrowRight size={11} className="text-zapusk-400" />
-                Следующий шаг
+              <div className="rounded-md border border-hairline bg-canvas/45 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">
+                  <ArrowRight size={11} className="text-zapusk-400" />
+                  Следующий шаг
+                </div>
+                <div className="text-xs text-primary leading-snug">{activity.nextStep}</div>
+                <div className="text-[10px] text-muted mt-1">{activity.nextStepDue}</div>
               </div>
-              <div className="text-xs text-primary leading-snug">{PERSONAL_MANAGER.nextStep}</div>
-              <div className="text-[10px] text-muted mt-1">{PERSONAL_MANAGER.nextStepDue}</div>
             </div>
-          </div>
+          )}
 
           <div className={`grid grid-cols-1 ${compact ? '' : 'sm:grid-cols-3'} gap-2 mt-3`}>
             <Contact icon={<MessageCircle size={13} />} label="Telegram" value={PERSONAL_MANAGER.telegram} />

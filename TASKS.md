@@ -355,7 +355,99 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 25 Bootstrap accounts + RBAC shipped)_
+_(empty — Sprint 27 kill fake completed state shipped)_
+
+---
+
+## Sprint 27 update — 2026-05-14 — Убрали фейковые completed-state из боевого кабинета
+
+Theme: **Production кабинет больше не врёт.** До Sprint 27 active workspace всё ещё показывал mock-данные: `/api/ai-leads` возвращал 6 mock-лидов + KPI `43 звонка / 128 сообщений / 7 активных лидов` всем подряд, Dashboard писал «12 квалифицированных лидов в demo-feed», PersonalManagerCard рассказывал, что «менеджер сегодня в 11:24 проверила материалы и оставила 3 правки». Это всё работало в Sprint 25/26 и было заметно после рестарта на пустом active кабинете. Sprint 27 удаляет это на уровне backend + frontend: mock-данные легитимны ТОЛЬКО для demo workspace и явных `/demo/*` витрин.
+
+### Backend
+
+- **`server/src/services/aiLeadsService.ts`**:
+  - Новый тип `AILeadsMode = 'empty' | 'live' | 'demo'`. `AILeadsDashboard` теперь несёт `mode` явно.
+  - `LeadProvider.getDashboard(project, options?)` — `options.demoMode` контролирует, выдавать ли mock-лиды.
+  - `MockAILeadsProvider`: для `demoMode=true` — старое поведение (mockLeads + KPI 43/128/7). Для `demoMode=false` — `leads=[]`, `kpis={totalLeads:0, activeToday:0, avgCheck:'—', callsToday:0, messagesSent:0}`, onboarding адаптирован: «AI-лиды откроются после готовности упаковки и согласования с менеджером».
+- **`server/src/routes/aiLeads.ts`** — `demoMode = req.query.demo === '1' || user.workspaceStatus === 'demo'`. Active кабинет → empty. Demo workspace → mock. `/demo/*` фронт может явно дёрнуть `?demo=1`.
+
+### Frontend
+
+- **`web/src/pages/AILeads.tsx`**:
+  - `AILeadsDashboard` интерфейс получил `mode: AILeadsMode`.
+  - Для `mode='empty'`: вместо `<KpiGrid /> + <LiveFeed />` рендерим `<EmptyLeadsState />` — нейтральная карточка «AI-лиды появятся после запуска проекта», три CTA (бриф / демо / связаться с менеджером), список «что появится после запуска» с пометкой «ожидаем данные».
+  - Sidebar «AI работает сейчас · Демо-режим live pipeline» (43 звонка / 128 сообщений) показываем только при `mode='demo'`. Для empty — `<Card>«Что произойдёт после запуска»</Card>` с серыми pending-строками.
+- **`web/src/pages/Dashboard.tsx`** — AI-leads CTA card: убрана плашка «12 квалифицированных лидов в demo-feed». Вместо `<div className="text-3xl">12</div>` теперь нейтральный текст «AI-каналы запускаются после готовности упаковки. Откройте раздел, чтобы увидеть статус».
+- **`web/src/components/ui/PersonalManagerCard.tsx`**:
+  - Из `PERSONAL_MANAGER` убраны поля `lastAction / lastActionAt / nextStep / nextStepDue`. Эти данные были фикцией, без backend activity feed.
+  - Новый тип `PersonalManagerActivity` + экспорт `DEMO_MANAGER_ACTIVITY` (для demo cabinet, когда понадобится).
+  - `PersonalManagerCard` принимает опциональный `activity?: PersonalManagerActivity | null`. Если не передан — блок «Последнее действие / Следующий шаг» **не рендерится**. До Sprint 27 он рендерился всегда с одинаковым фейк-текстом.
+  - Callers (`PersonalManager.tsx`, `ManagerDashboard.tsx`) не передают activity → блок скрыт. Demo cabinet использует `PersonalManagerMiniCard` (тот вариант никогда не показывал activity, не трогали).
+
+### Что осталось работать как раньше
+
+| Маршрут | Workspace | Источник данных | Поведение |
+|---|---|---|---|
+| `/ai-leads` | active | `/api/ai-leads` → mode='empty' | Пустое состояние, нет fake KPI |
+| `/ai-leads` | demo | `/api/ai-leads` → mode='demo' | Mock-лиды + live pipeline sidebar (Главснаб) |
+| `/demo/ai-leads` | любая | хардкод showcase (Sprint 26) | Витрина без API, читается как пример |
+| `/personal-manager` | любая | хардкод profile | Контакты + SLA, без fake activity feed |
+
+### Verification
+
+- [x] `cd server && npx tsc --noEmit` — clean
+- [x] `cd web && npx tsc --noEmit` — clean
+- [x] `npm run build` — OK (521.28 kB / 146.69 kB gzip, +3 kB к Sprint 26)
+- [x] `/api/ai-leads` smoke (через curl):
+  - workspaceStatus=active → `mode: "empty"`, `leads: []`, `kpis.callsToday: 0`
+  - workspaceStatus=demo → `mode: "demo"`, `leads: [6 mocks]`, `kpis.callsToday: 43`
+  - `?demo=1` flag override → mode demo даже для active workspace (для /demo/* витрин)
+
+### Что осталось (out of scope Sprint 27)
+
+- Реальная persistent модель `AILead` в БД, чтобы `mode='live'` стал чем-то реальным (сейчас mode='live' зарезервирован, но MockAILeadsProvider его не возвращает)
+- Реальный activity feed менеджера (последние действия / следующие шаги) — пока показываем только контакты
+- Подключить `DEMO_MANAGER_ACTIVITY` к `<PersonalManagerCard />` в `DemoCabinet.tsx`, если захотим показать demo-активность менеджера в demo-кабинете (сейчас DemoCabinet использует MiniCard без activity)
+
+---
+
+## Sprint 26 update — 2026-05-14 — Разделение боевого кабинета и demo showcase
+
+Theme: **Активный клиент должен видеть пустой production-кабинет, а не fake completed state.** До спринта новый payed клиент попадал на Dashboard и видел готовые AI-лиды, fake progress journey (done/done/in_progress) и demo-блок Главснаб — впечатление «всё уже сделано без меня». Sprint 26 разносит три состояния явно: **BOOTSTRAP** (active + 0 проектов) → приветствие + CTA, **ACTIVE** (active + есть проекты) → реальный список + инструменты, **DEMO** (workspaceStatus=demo) → showcase Главснаб.
+
+### Frontend
+
+- **`web/src/lib/projectJourney.ts`** — добавлен `BOOTSTRAP_PROJECT_JOURNEY` (5 этапов под Sprint 26 спек: brief → marketing → legal → ai-leads → meetings). Первый этап `in_progress`, остальные `locked` с CTA «Откроется после X». `JourneyOwner` расширен до `'AI'`.
+- **`web/src/components/ui/BootstrapWelcome.tsx`** — НОВЫЙ. Hero «Добро пожаловать в ZAPUSK AI / Начните подготовку проекта», большая CTA «Создать проект» + secondary «Посмотреть демо», 3-step «С чего начать», 5-stage journey. Без AEO-баннеров, без fake AI-leads CTA.
+- **`web/src/pages/Dashboard.tsx`** — early return на `<BootstrapWelcome />` если `workspaceStatus==='active' && role==='FOUNDER' && visibleProjects.length===0`. Убран fake `<ProjectJourney stages={DEFAULT_PROJECT_JOURNEY.slice(0,5)} />` из active-with-projects ветки (это project-specific, живёт на cockpit'е).
+- **`web/src/components/layout/Sidebar.tsx`** — NAV перестроен на секции (`NavSection[]`). Для FOUNDER три секции: **Рабочий кабинет** (Рабочий стол / Новый проект / Мои проекты), **Инструменты** (AI-лиды / AI-разбор / AI-ассистент / Встречи / Ваш менеджер), **Демо ZAPUSK AI** (Демо-кабинет / Демо AI-лиды / Демо AI-переговоры). В demo-режиме «Новый проект» + «Мои проекты» скрываются. SUPER_ADMIN / ADMIN / MANAGER / INVESTOR — без разбиения на секции (one flat list).
+- **`web/src/pages/ProjectsList.tsx`** — НОВЫЙ. Чистый список проектов клиента без Stat-карточек и promo-баннеров. Empty state «Создать проект».
+- **`web/src/pages/DemoAILeads.tsx`** — НОВЫЙ. Showcase Главснаб: 1 HOT-лид с AI-звонком, channel-feed (Telegram/WhatsApp/Follow-up), live pipeline sidebar, гарантия замены, CTA «Перейти в AI-лиды». Хардкод showcase-данных, никаких `/api/ai-leads`.
+- **`web/src/pages/DemoConversationAnalysis.tsx`** — НОВЫЙ. Showcase разбора реального звонка: score 87, 7 findings, 4 рекомендации, эмоциональный контекст. CTA «Разобрать свой звонок» → `/conversation-analysis`.
+- **`web/src/App.tsx`** — 3 новых route: `/projects` (ProjectsList), `/demo/ai-leads` (DemoAILeads), `/demo/conversations` (DemoConversationAnalysis). Все под `RequireAuth`.
+
+### Поведение
+
+| Состояние | URL | Что видит клиент |
+|---|---|---|
+| Active + 0 проектов | `/dashboard` | BootstrapWelcome: «Добро пожаловать», CTA «Создать проект», 5 stages (briefing в работе, остальные locked) |
+| Active + есть проекты | `/dashboard` | KPI / AEO-баннер / список проектов / AI-лиды CTA / демо-кабинет линк / менеджер mini |
+| Demo workspace | `/dashboard` | Demo-баннер, demo-проекты, без «Новый проект» CTA (Sprint 24) |
+| Любая роль | `/demo` `/demo/ai-leads` `/demo/conversations` | Showcase-кейс Главснаб как пример работы платформы |
+
+### Verification
+
+- [x] `cd server && npx tsc --noEmit` — clean
+- [x] `cd web && npx tsc --noEmit` — clean
+- [x] `npm run build` — OK (518.46 kB / 146.12 kB gzip, +22 kB к Sprint 25 за 3 новых страницы + bootstrap component)
+- [x] Routes smoke: `/projects`, `/demo/ai-leads`, `/demo/conversations` отдают SPA 200, не падают
+
+### Что осталось (out of scope для Sprint 26)
+
+- Реальная AI-lead data на `/ai-leads` для active+0-leads workspace (сейчас backend возвращает demo dashboard как fallback — нужно вернуть пустое состояние с «AI-лиды появятся после запуска проекта»)
+- ProjectJourney на cockpit'е каждого проекта — поменять «done/done/in_progress» на динамическое состояние от brief/packaging/legal статуса
+- Audit log для impersonate (carry-over из Sprint 25)
+- 2FA для SUPER_ADMIN (carry-over из Sprint 25)
 
 ---
 

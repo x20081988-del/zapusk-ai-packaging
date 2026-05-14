@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import clsx from 'clsx';
 import {
-  LayoutDashboard, FolderPlus, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
+  LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
   Mail, TrendingUp, Repeat, X,
@@ -10,59 +10,77 @@ import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
 
 interface NavItem { to: string; icon: typeof LayoutDashboard; label: string }
+interface NavSection { label?: string; items: NavItem[] }
 
 // Sprint 25 — нормальная RBAC. Каждая роль видит свой набор пунктов.
-// SUPER_ADMIN наследует ADMIN + видит system настройки. ADMIN видит платформу.
-// MANAGER ведёт проекты и сделки. FOUNDER — кабинет проекта. INVESTOR —
-// возможности и портфель.
-const NAV: Partial<Record<UserRole, NavItem[]>> = {
+// Sprint 26 — навигация FOUNDER разнесена на секции: «Рабочий кабинет»,
+// «Демо ZAPUSK AI» (showcase отдельно), «Инструменты». Это убирает путаницу
+// «где у меня настоящие данные, а где готовый пример».
+const NAV: Partial<Record<UserRole, NavSection[]>> = {
   SUPER_ADMIN: [
-    { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
-    { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
-    { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
-    { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
-    { to: '/templates',        icon: FileCode2,         label: 'Шаблоны' },
-    { to: '/admin/leads',      icon: Radio,             label: 'Лиды' },
-    { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
-    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
-    { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
+    { items: [
+      { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
+      { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
+      { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
+      { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
+      { to: '/templates',        icon: FileCode2,         label: 'Шаблоны' },
+      { to: '/admin/leads',      icon: Radio,             label: 'Лиды' },
+      { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
+      { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+      { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
+    ]},
   ],
   ADMIN: [
-    { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
-    { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
-    { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
-    { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
-    { to: '/admin/leads',      icon: Radio,             label: 'Лиды' },
-    { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
-    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+    { items: [
+      { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
+      { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
+      { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
+      { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
+      { to: '/admin/leads',      icon: Radio,             label: 'Лиды' },
+      { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
+      { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+      { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+    ]},
   ],
   MANAGER: [
-    { to: '/manager',          icon: LayoutDashboard,   label: 'Рабочий стол менеджера' },
-    { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
-    { to: '/manager/leads',    icon: Radio,             label: 'Новые лиды' },
-    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
-    { to: '/manager/meetings', icon: CalendarDays,      label: 'Календарь' },
-    { to: '/manager/tasks',    icon: ClipboardList,     label: 'Задачи' },
-    { to: '/manager/clients',  icon: Users,             label: 'Клиенты' },
+    { items: [
+      { to: '/manager',          icon: LayoutDashboard,   label: 'Рабочий стол менеджера' },
+      { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
+      { to: '/manager/leads',    icon: Radio,             label: 'Новые лиды' },
+      { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+      { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      { to: '/manager/meetings', icon: CalendarDays,      label: 'Календарь' },
+      { to: '/manager/tasks',    icon: ClipboardList,     label: 'Задачи' },
+      { to: '/manager/clients',  icon: Users,             label: 'Клиенты' },
+    ]},
   ],
   FOUNDER: [
-    { to: '/dashboard',        icon: LayoutDashboard,   label: 'Рабочий стол' },
-    { to: '/projects/new',     icon: FolderPlus,        label: 'Новый проект' },
-    { to: '/demo',             icon: Presentation,      label: 'Демо-кабинет' },
-    { to: '/ai-leads',         icon: Radio,             label: 'AI-лиды' },
-    { to: '/sales-assistant',  icon: Headphones,        label: 'AI-ассистент' },
-    { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
-    { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
-    { to: '/personal-manager', icon: MessageCircle,     label: 'Персональный менеджер' },
+    { label: 'Рабочий кабинет', items: [
+      { to: '/dashboard',        icon: LayoutDashboard,   label: 'Рабочий стол' },
+      { to: '/projects/new',     icon: FolderPlus,        label: 'Новый проект' },
+      { to: '/projects',         icon: FolderOpen,        label: 'Мои проекты' },
+    ]},
+    { label: 'Инструменты', items: [
+      { to: '/ai-leads',         icon: Radio,             label: 'AI-лиды' },
+      { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
+      { to: '/sales-assistant',  icon: Headphones,        label: 'AI-ассистент' },
+      { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      { to: '/personal-manager', icon: MessageCircle,     label: 'Ваш менеджер' },
+    ]},
+    { label: 'Демо ZAPUSK AI', items: [
+      { to: '/demo',             icon: Presentation,      label: 'Демо-кабинет' },
+      { to: '/demo/ai-leads',    icon: Radio,             label: 'Демо AI-лиды' },
+      { to: '/demo/conversations', icon: Brain,           label: 'Демо AI-переговоры' },
+    ]},
   ],
   INVESTOR: [
-    { to: '/opportunities',    icon: TrendingUp,        label: 'Инвест-возможности' },
-    { to: '/portfolio',        icon: BriefcaseBusiness, label: 'Портфель' },
-    { to: '/secondary',        icon: Repeat,            label: 'Вторичный рынок' },
-    { to: '/profile',          icon: UserRound,         label: 'Профиль' },
+    { items: [
+      { to: '/opportunities',    icon: TrendingUp,        label: 'Инвест-возможности' },
+      { to: '/portfolio',        icon: BriefcaseBusiness, label: 'Портфель' },
+      { to: '/secondary',        icon: Repeat,            label: 'Вторичный рынок' },
+      { to: '/profile',          icon: UserRound,         label: 'Профиль' },
+    ]},
   ],
 };
 
@@ -76,13 +94,19 @@ interface SidebarProps {
 export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   const auth = getAuth();
   const role = auth?.role ?? 'FOUNDER';
-  const baseNav = NAV[role] ?? NAV.FOUNDER ?? [];
+  const baseSections = NAV[role] ?? NAV.FOUNDER ?? [];
   // Sprint 24: в demo-режиме скрываем «Новый проект» — фаундер не создаёт
   // реальные проекты в показательной витрине.
+  // Sprint 26: в demo-кабинете «Мои проекты» тоже скрываем — у demo юзера
+  // их нет, есть только глобальные демо-кейсы.
   const isDemoMode = auth?.workspaceStatus === 'demo';
-  const visibleNav = isDemoMode
-    ? baseNav.filter((item) => item.to !== '/projects/new')
-    : baseNav;
+  const HIDE_IN_DEMO = new Set(['/projects/new', '/projects']);
+  const visibleSections: NavSection[] = baseSections
+    .map((section) => ({
+      ...section,
+      items: isDemoMode ? section.items.filter((i) => !HIDE_IN_DEMO.has(i.to)) : section.items,
+    }))
+    .filter((section) => section.items.length > 0);
 
   const sidebarBody = (
     <>
@@ -101,23 +125,28 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
 
       <nav className="flex-1 px-3 py-5 space-y-1 overflow-y-auto">
         <SectionLabel>{roleLabel(role)}</SectionLabel>
-        {visibleNav.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            onClick={mobile ? onClose : undefined}
-            className={({ isActive }) =>
-              clsx(
-                'flex items-center gap-3 px-3 h-10 rounded-md text-sm transition-all',
-                isActive
-                  ? 'bg-zapusk/10 text-primary border border-zapusk/30 shadow-glow'
-                  : 'text-secondary hover:text-primary hover:bg-surface',
-              )
-            }
-          >
-            <Icon size={16} className="shrink-0" />
-            {label}
-          </NavLink>
+        {visibleSections.map((section, sectionIndex) => (
+          <div key={section.label ?? `section-${sectionIndex}`} className={sectionIndex > 0 ? 'pt-5' : ''}>
+            {section.label && <SectionLabel>{section.label}</SectionLabel>}
+            {section.items.map(({ to, icon: Icon, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                onClick={mobile ? onClose : undefined}
+                className={({ isActive }) =>
+                  clsx(
+                    'flex items-center gap-3 px-3 h-10 rounded-md text-sm transition-all',
+                    isActive
+                      ? 'bg-zapusk/10 text-primary border border-zapusk/30 shadow-glow'
+                      : 'text-secondary hover:text-primary hover:bg-surface',
+                  )
+                }
+              >
+                <Icon size={16} className="shrink-0" />
+                {label}
+              </NavLink>
+            ))}
+          </div>
         ))}
 
         <div className="pt-6">

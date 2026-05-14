@@ -80,7 +80,15 @@ export interface LeadReplacementPolicy {
   disclaimers: string[];
 }
 
+// Sprint 27 — mode разделяет «реальный пустой кабинет», «реальный кабинет с
+// лидами» и «демо-витрину Главснаб». UI решает по mode, что показывать.
+// • empty — active кабинет, leads ещё не запущены (или их 0 в БД)
+// • live  — active кабинет, есть реальные лиды (когда сделаем persistence)
+// • demo  — demo workspace или /demo/* showcase, мок-данные легитимны
+export type AILeadsMode = 'empty' | 'live' | 'demo';
+
 export interface AILeadsDashboard {
+  mode: AILeadsMode;
   projectId: string | null;
   projectName: string;
   onboarding: {
@@ -97,8 +105,16 @@ export interface AILeadsDashboard {
   leads: AILead[];
 }
 
+export interface LeadProviderOptions {
+  /** true = пользователь в demo workspace (Sprint 24) — можно показать mock-лиды. */
+  demoMode?: boolean;
+}
+
 export interface LeadProvider {
-  getDashboard(project: ProjectForAILeads | null): Promise<AILeadsDashboard>;
+  getDashboard(
+    project: ProjectForAILeads | null,
+    options?: LeadProviderOptions,
+  ): Promise<AILeadsDashboard>;
 }
 
 export interface AICommunicationProvider {
@@ -160,13 +176,37 @@ class ContractLeadReplacementPolicy implements LeadReplacementPolicyProvider {
 class MockAILeadsProvider implements LeadProvider {
   private policy = new ContractLeadReplacementPolicy();
 
-  async getDashboard(project: ProjectForAILeads | null): Promise<AILeadsDashboard> {
+  async getDashboard(
+    project: ProjectForAILeads | null,
+    options: LeadProviderOptions = {},
+  ): Promise<AILeadsDashboard> {
     const readiness = buildReadiness(project);
-    const leads = mockLeads(project?.name ?? 'ваш проект');
+    const demoMode = Boolean(options.demoMode);
+    // Sprint 27 — mock-лиды и demo-KPI остаются ТОЛЬКО для demo workspace
+    // (Sprint 24) и /demo/* витрин. Реальный active кабинет получает пустое
+    // состояние: leads=[], kpis=0/0/0. Никаких fake-completed states в боевом
+    // кабинете.
+    const leads = demoMode ? mockLeads(project?.name ?? 'ваш проект') : [];
+    const mode: AILeadsMode = demoMode ? 'demo' : 'empty';
+
     return {
+      mode,
       projectId: project?.id ?? null,
       projectName: project?.name ?? 'Проект не выбран',
-      onboarding: {
+      onboarding: this.onboardingFor(mode, readiness),
+      readiness,
+      strategy: buildStrategy(project),
+      kpis: demoMode
+        ? { totalLeads: leads.length, activeToday: 7, avgCheck: '2,8 млн ₽', callsToday: 43, messagesSent: 128 }
+        : { totalLeads: 0, activeToday: 0, avgCheck: '—', callsToday: 0, messagesSent: 0 },
+      replacementPolicy: this.policy.getPolicy(),
+      leads,
+    };
+  }
+
+  private onboardingFor(mode: AILeadsMode, readiness: BriefingReadiness) {
+    if (mode === 'demo') {
+      return {
         title: readiness.criticalReady ? 'AI начал поиск инвесторов' : 'Подготовьте AI к поиску инвесторов',
         description: readiness.criticalReady
           ? 'AI-агенты используют ваш бриф, investor profile и сценарии коммуникации, чтобы ежедневно приводить заинтересованных инвесторов.'
@@ -176,18 +216,20 @@ class MockAILeadsProvider implements LeadProvider {
         launchLabel: readiness.criticalReady
           ? 'Запустить AI-привлечение инвесторов'
           : 'Запуск AI-лидов станет доступен после завершения briefing',
-      },
-      readiness,
-      strategy: buildStrategy(project),
-      kpis: {
-        totalLeads: leads.length,
-        activeToday: 7,
-        avgCheck: '2,8 млн ₽',
-        callsToday: 43,
-        messagesSent: 128,
-      },
-      replacementPolicy: this.policy.getPolicy(),
-      leads,
+      };
+    }
+    // empty / live: честная коммуникация — мы ничего не делаем, пока не дойдём
+    // до этапа AI-leads в pipeline проекта. Никаких «43 звонка сегодня».
+    return {
+      title: readiness.criticalReady ? 'Готовы запустить AI-лидогенерацию' : 'AI-лидогенерация откроется позже',
+      description: readiness.criticalReady
+        ? 'Бриф готов. После согласования упаковки и юридической части мы запустим AI-каналы — звонки, мессенджеры, follow-up.'
+        : 'Заполните бриф проекта — без него AI не сможет квалифицировать инвесторов и презентовать сделку.',
+      cta: readiness.criticalReady ? 'Запросить запуск у менеджера' : 'Заполнить бриф',
+      launchEnabled: false,
+      launchLabel: readiness.criticalReady
+        ? 'Запуск AI-лидов согласовывает менеджер после готовности упаковки'
+        : 'Запуск AI-лидов откроется после завершения брифа и упаковки',
     };
   }
 }
