@@ -355,7 +355,75 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 23 Access UX cleanup shipped)_
+_(empty — Sprint 24 Demo workspace → боевой кабинет shipped)_
+
+---
+
+## Sprint 24 update — 2026-05-14 — Демо-режим vs боевой кабинет
+
+Theme: **Разделили demo-витрину и реальный production-кабинет на уровне данных.** До спринта demo user = readonly доступ к платформе с пустым набором проектов. Теперь demo user видит глобальные показательные кейсы (Венский ветер / Luce Silva / Планета 60) как «демо-витрину»; после активации (`workspaceStatus → active`) демо-проекты исчезают, появляется пустой production-кабинет под реальные проекты клиента.
+
+### Schema (migration `project_is_demo`)
+
+- `Project.isDemo Boolean @default(false)` — глобальные демо-витрины. Видны только пользователям с `workspaceStatus='demo'`.
+- Seed: 3 проекта (Венский ветер, Luce Silva, Планета 60) помечены `isDemo=true`.
+
+### Backend
+
+- **`server/src/routes/projects.ts`** — `/api/projects` GET и `/api/projects/:id` GET теперь фильтруют:
+  - **demo workspace** → `where: { isDemo: true }` (3 показательных кейса)
+  - **active workspace** → `where: { userId, isDemo: false }` (свои реальные проекты)
+  - **admin** → `{}` (видит всё для аудита)
+- **`server/src/auth.ts`** — `getUser()` теперь возвращает `workspaceStatus` (нужно фильтру).
+- Write-методы остаются заблокированными для demo через `requireActiveWorkspace` middleware (Sprint 22).
+
+### Frontend
+
+- **`web/src/pages/Dashboard.tsx`** — Dashboard теперь полностью адаптирован под `isDemoMode`:
+  - Title: «Демо-кабинет ZAPUSK AI» (вместо «Рабочий стол»)
+  - Header CTA: «Получить рабочий доступ» (mailto) вместо «Новый проект»
+  - Новый Sprint 24 demo-баннер с объяснением «Это глобальные демо-кейсы. После подключения откроется ваш рабочий кабинет — пустой, под ваши проекты, с активной упаковкой, AI-лидами и сопровождением сделки»
+  - Старый AEO баннер (Sprint 20) скрыт в demo-режиме
+  - KPI labels: «Демо-проектов» вместо «Проектов всего»
+  - «Проекты» heading → «Демо-проекты»; subtitle: «Откройте проект, чтобы посмотреть путь привлечения изнутри»
+  - EmptyState (если 0 проектов в demo) → «Демо-кейсы готовятся. Свяжитесь с менеджером для активации рабочего кабинета»
+- **`web/src/components/layout/Sidebar.tsx`** — в demo-режиме пункт «Новый проект» скрыт из навигации.
+- **`web/src/pages/AdminDashboard.tsx`** — UsersTable полностью переписан:
+  - Колонки: Пользователь / Email / Роль / **Режим кабинета** (badge с tone по статусу) / Проектов / Создан / Действия
+  - Кнопка **«Активировать кабинет»** — переключает workspaceStatus → active одним кликом. После refresh демо-проекты у клиента исчезают, появляется production-кабинет.
+  - Кнопка «В демо» для перевода active → demo с подтверждением
+  - `STATUS_RU` и `STATUS_TONE_ADMIN` мапы для рендера workspace state в RU labels
+
+### Verification
+
+- [x] Migration `project_is_demo` applied
+- [x] Seed помечает 3 демо-проекта `isDemo=true`
+- [x] Local end-to-end smoke (6/6 сценариев):
+  - Demo user видит 3 demo проекта (с isDemo=true)
+  - Active user видит 0 проектов (пустой свой кабинет)
+  - Demo user POST /api/projects → 403 workspace_readonly
+  - Admin PATCH /api/admin/users/:id/status → workspaceStatus=active
+  - После switch: demo проекты исчезают, появляется пустой production-кабинет
+  - Создание проекта после switch → succeed, isDemo=false автоматически
+- [x] `( cd server && npx tsc --noEmit )` — clean
+- [x] `( cd web && npx tsc --noEmit )` — clean
+- [x] `npm run build` — OK (490.19 kB / 138.10 kB gzip, +4 kB к Sprint 23)
+
+### Ключевая разница до/после Sprint 24
+
+| Аспект | До | После |
+|---|---|---|
+| Demo user видит | Свой пустой кабинет | 3 demo-кейса (Венский ветер / Luce Silva / Планета 60) |
+| Title для demo | «Рабочий стол» | «Демо-кабинет ZAPUSK AI» |
+| Header CTA demo | «Новый проект» | «Получить рабочий доступ» (mailto) |
+| Active user данные | Пересечение с demo | Изолированы (свои проекты + isDemo=false) |
+| Admin activate | Только через invite | Один клик «Активировать кабинет» в UsersTable |
+
+### Что НЕ изменилось
+
+- Backend write-блок через `requireActiveWorkspace` (Sprint 22) остался прежним
+- WorkspaceBanner (Sprint 22) продолжает показывать «Демо-режим» сверху страниц
+- Invite-only signup (Sprint 22 + 23) — без изменений
 
 ---
 

@@ -58,10 +58,17 @@ interface SidebarProps {
 }
 
 export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
-  const role = getAuth()?.role ?? 'client';
+  const auth = getAuth();
+  const role = auth?.role ?? 'client';
   // Если для роли нет навигации (sales/demo/viewer/legacy) — показываем
   // клиентский список. Серверный middleware всё равно ограничивает запись.
-  const visibleNav = NAV[role] ?? NAV.client ?? [];
+  const baseNav = NAV[role] ?? NAV.client ?? [];
+  // Sprint 24: в demo-режиме скрываем пункт «Новый проект» — фаундер не
+  // создаёт реальные проекты в показательной витрине.
+  const isDemoMode = auth?.workspaceStatus === 'demo';
+  const visibleNav = isDemoMode
+    ? baseNav.filter((item) => item.to !== '/projects/new')
+    : baseNav;
 
   const sidebarBody = (
     <>

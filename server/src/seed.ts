@@ -91,6 +91,8 @@ async function main() {
           raiseDeadline: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
           investorType: 'private',
           status: 'packaging',
+          // Sprint 24: глобальная демо-витрина — видна demo-пользователям.
+          isDemo: true,
         },
       })
     : await prisma.project.create({
@@ -109,6 +111,8 @@ async function main() {
         raiseDeadline: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // +60 days
         investorType: 'private',
         status: 'packaging',
+        // Sprint 24: показывать в demo-витрине.
+        isDemo: true,
       },
     });
 
@@ -229,6 +233,9 @@ async function seedDemoArchetype(userId: string, d: DemoProject) {
     investorType: d.investorType,
     status: d.status,
     raiseDeadline: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+    // Sprint 24: все archetypes (Luce Silva, Планета 60, и т.д.) — это
+    // глобальные демо-витрины для demo пользователей.
+    isDemo: true,
   };
   const existing = await prisma.project.findFirst({ where: { name: d.name, userId } });
   const project = existing

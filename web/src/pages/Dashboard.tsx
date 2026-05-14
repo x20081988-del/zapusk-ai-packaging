@@ -15,8 +15,13 @@ import { DEFAULT_PROJECT_JOURNEY } from '../lib/projectJourney';
 import { getAuth } from '../lib/auth';
 
 export default function Dashboard() {
+  const auth = getAuth();
   const [projects, setProjects] = useState<Project[] | null>(null);
-  const role = getAuth()?.role ?? 'client';
+  const role = auth?.role ?? 'client';
+  // Sprint 24: demo workspace = отдельная демо-витрина. Backend уже фильтрует
+  // /api/projects по isDemo для demo пользователей; фронт меняет тексты и
+  // скрывает «Новый проект» CTA.
+  const isDemoMode = auth?.workspaceStatus === 'demo';
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
@@ -29,50 +34,98 @@ export default function Dashboard() {
 
   return (
     <AppLayout
-      title="Рабочий стол"
+      title={isDemoMode ? 'Демо-кабинет ZAPUSK AI' : 'Рабочий стол'}
       action={
-        <Link to="/projects/new">
-          <Button size="md" iconLeft={<Plus size={14} strokeWidth={2.5} />}>
-            Новый проект
-          </Button>
-        </Link>
+        // Sprint 24: «Новый проект» виден только в активном кабинете. Demo —
+        // только просмотр, никаких CTA на создание.
+        !isDemoMode ? (
+          <Link to="/projects/new">
+            <Button size="md" iconLeft={<Plus size={14} strokeWidth={2.5} />}>
+              Новый проект
+            </Button>
+          </Link>
+        ) : (
+          <a href="mailto:hello@zapusk.tech?subject=Получить%20рабочий%20кабинет%20ZAPUSK%20AI">
+            <Button size="md" variant="primary">
+              Получить рабочий доступ
+            </Button>
+          </a>
+        )
       }
     >
+      {/* Sprint 24: demo-объяснялка. Показывается только в demo-кабинете. */}
+      {isDemoMode && (
+        <Card padded accent="zapusk" className="mb-6 overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(196,148,58,0.14),transparent_30%)]" />
+          <div className="relative flex flex-col md:flex-row md:items-center gap-4">
+            <div className="w-12 h-12 rounded-lg bg-zapusk/15 border border-zapusk/30 text-zapusk-400 flex items-center justify-center shrink-0">
+              <Sparkles size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-zapusk-400 font-semibold mb-1">
+                Демо-кабинет ZAPUSK AI
+              </div>
+              <h2 className="text-base font-semibold text-primary">
+                Посмотрите, как выглядит путь привлечения инвестиций внутри платформы
+              </h2>
+              <p className="text-xs text-secondary mt-1 leading-relaxed max-w-2xl">
+                Это глобальные демо-кейсы реальных проектов. После подключения откроется ваш
+                рабочий кабинет — пустой, под ваши проекты, с активной упаковкой, AI-лидами и
+                сопровождением сделки.
+              </p>
+            </div>
+            <a href="mailto:hello@zapusk.tech?subject=Активировать%20рабочий%20кабинет%20ZAPUSK%20AI" className="shrink-0">
+              <Button variant="primary" size="md">Получить рабочий доступ</Button>
+            </a>
+          </div>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <StatCard label="Проектов всего" value={total} icon={<FolderOpen size={16} />} />
+        <StatCard label={isDemoMode ? 'Демо-проектов' : 'Проектов всего'} value={total} icon={<FolderOpen size={16} />} />
         <StatCard label="В работе" value={inWork} icon={<Sparkles size={16} />} accent="ai" />
         <StatCard label="Готово к показу инвестору" value={ready} icon={<TrendingUp size={16} />} accent="zapusk" />
       </div>
 
       {/* Sprint 20: AEO / AI-search positioning баннер. Объясняет на главной
           странице, что упаковка проекта собирается под AI search engines —
-          собственная инфраструктура ZAPUSK AI, без vendor names. */}
-      <Card padded accent="ai" className="mb-6 overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(35,214,176,0.12),transparent_30%),radial-gradient(circle_at_88%_0%,rgba(196,148,58,0.10),transparent_28%)]" />
-        <div className="relative flex flex-col md:flex-row md:items-center gap-4">
-          <div className="w-12 h-12 rounded-lg bg-grad-ai/15 border border-ai/30 text-ai-glow flex items-center justify-center shrink-0">
-            <Sparkles size={20} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
-              AI Search Ready · собственная инфраструктура
+          собственная инфраструктура ZAPUSK AI, без vendor names.
+          Sprint 24: оставляем только в активном кабинете — в demo-режиме
+          уже есть свой demo-баннер. */}
+      {!isDemoMode && (
+        <Card padded accent="ai" className="mb-6 overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_15%,rgba(35,214,176,0.12),transparent_30%),radial-gradient(circle_at_88%_0%,rgba(196,148,58,0.10),transparent_28%)]" />
+          <div className="relative flex flex-col md:flex-row md:items-center gap-4">
+            <div className="w-12 h-12 rounded-lg bg-grad-ai/15 border border-ai/30 text-ai-glow flex items-center justify-center shrink-0">
+              <Sparkles size={20} />
             </div>
-            <h2 className="text-base font-semibold text-primary">AI-ready упаковка проекта</h2>
-            <p className="text-xs text-secondary mt-1 leading-relaxed max-w-2xl">
-              Лендинги, презентации и one-pager'ы собираются с semantic structure и AEO-слоем — их
-              видят и могут процитировать ChatGPT, Claude, Perplexity и другие AI answer engines.
-              Каждый проект получает собственный AI Discoverability Score.
-            </p>
+            <div className="flex-1 min-w-0">
+              <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
+                AI Search Ready · собственная инфраструктура
+              </div>
+              <h2 className="text-base font-semibold text-primary">AI-ready упаковка проекта</h2>
+              <p className="text-xs text-secondary mt-1 leading-relaxed max-w-2xl">
+                Лендинги, презентации и one-pager'ы собираются с semantic structure и AEO-слоем — их
+                видят и могут процитировать ChatGPT, Claude, Perplexity и другие AI answer engines.
+                Каждый проект получает собственный AI Discoverability Score.
+              </p>
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {/* Sprint 14: «Проекты» сразу под KPI — пользователь должен видеть свои
           проекты, а не искать их ниже AI-плашки. */}
       <div className="mb-4 flex items-end justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-primary tracking-tight">Проекты</h2>
-          <p className="text-xs text-muted">Каждый проект проходит путь: материалы → бизнес на салфетке → интервью по проекту → материалы для инвестора</p>
+          <h2 className="text-lg font-semibold text-primary tracking-tight">
+            {isDemoMode ? 'Демо-проекты' : 'Проекты'}
+          </h2>
+          <p className="text-xs text-muted">
+            {isDemoMode
+              ? 'Реальные кейсы, упакованные через ZAPUSK AI. Откройте проект, чтобы посмотреть путь привлечения изнутри.'
+              : 'Каждый проект проходит путь: материалы → бизнес на салфетке → интервью по проекту → материалы для инвестора'}
+          </p>
         </div>
       </div>
 
@@ -82,16 +135,29 @@ export default function Dashboard() {
         </Card>
       ) : visibleProjects?.length === 0 ? (
         <Card className="mb-6">
-          <EmptyState
-            icon={<Sparkles size={20} />}
-            title="Пока нет проектов"
-            description="Создайте первый проект, загрузите материалы — и система соберёт «бизнес на салфетке» за минуту."
-            action={
-              <Link to="/projects/new">
-                <Button iconLeft={<Plus size={14} strokeWidth={2.5} />}>Создать проект</Button>
-              </Link>
-            }
-          />
+          {isDemoMode ? (
+            <EmptyState
+              icon={<Sparkles size={20} />}
+              title="Демо-кейсы готовятся"
+              description="Команда ZAPUSK AI добавит показательные проекты в ближайшее время. Свяжитесь с менеджером для активации рабочего кабинета."
+              action={
+                <a href="mailto:hello@zapusk.tech?subject=Активация%20кабинета%20ZAPUSK%20AI">
+                  <Button>Обсудить подключение</Button>
+                </a>
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={<Sparkles size={20} />}
+              title="Пока нет проектов"
+              description="Создайте первый проект, загрузите материалы — и система соберёт «бизнес на салфетке» за минуту."
+              action={
+                <Link to="/projects/new">
+                  <Button iconLeft={<Plus size={14} strokeWidth={2.5} />}>Создать проект</Button>
+                </Link>
+              }
+            />
+          )}
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-6">

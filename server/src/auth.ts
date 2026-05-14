@@ -71,7 +71,9 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 }
 
 export function getUser(req: Request) {
-  return (req as Request & { user: { id: string; email: string; name: string | null; role?: string } }).user;
+  // Sprint 24: расширили возврат — workspaceStatus полезен для роутов,
+  // которые фильтруют контент по demo/active state (см. /api/projects).
+  return (req as Request & { user: { id: string; email: string; name: string | null; role?: string; workspaceStatus?: string } }).user;
 }
 
 export function getRole(req: Request): UserRole {

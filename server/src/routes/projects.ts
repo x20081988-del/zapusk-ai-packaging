@@ -33,9 +33,20 @@ const projectSchema = z.object({
 });
 
 projectsRoutes.get('/', async (req, res) => {
-  const user = getUser(req);
+  const user = getUser(req) as { id: string; workspaceStatus?: string; role?: string };
+  // Sprint 24 — разделение demo и active workspace'ов:
+  //   • demo — видит только глобальные показательные проекты (isDemo=true)
+  //   • active — видит только свои реальные проекты (own userId + isDemo=false)
+  //   • admin — видит всё для аудита
+  const isDemo = user.workspaceStatus === 'demo';
+  const isAdmin = user.role === 'admin';
+  const where = isAdmin
+    ? {}
+    : isDemo
+      ? { isDemo: true }
+      : { userId: user.id, isDemo: false };
   const projects = await prisma.project.findMany({
-    where: { userId: user.id },
+    where,
     orderBy: { updatedAt: 'desc' },
     include: { files: { select: { id: true } }, brief: { select: { version: true, updatedAt: true } } },
   });
@@ -87,9 +98,20 @@ projectsRoutes.post('/', async (req, res) => {
 });
 
 projectsRoutes.get('/:id', async (req, res) => {
-  const user = getUser(req);
+  const user = getUser(req) as { id: string; workspaceStatus?: string; role?: string };
+  const isDemo = user.workspaceStatus === 'demo';
+  const isAdmin = user.role === 'admin';
+
+  // Sprint 24: demo users могут читать только isDemo проекты, active — только
+  // свои own. Admin видит всё.
+  const where = isAdmin
+    ? { id: req.params.id }
+    : isDemo
+      ? { id: req.params.id, isDemo: true }
+      : { id: req.params.id, userId: user.id };
+
   const project = await prisma.project.findFirst({
-    where: { id: req.params.id, userId: user.id },
+    where,
     include: {
       files: true,
       brief: true,

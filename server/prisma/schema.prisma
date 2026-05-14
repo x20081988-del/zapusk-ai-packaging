@@ -78,6 +78,10 @@ model Project {
   // размещение). null = пользователь ещё не выбрал.
   // Значения: 'shareholding' / 'llc_share' / 'convertible' / 'safe' / 'pre_ipo' / 'packaging_only'
   investmentTrack  String?
+  // Sprint 24: глобальные демо-витрины. isDemo=true → проект виден только
+  // пользователям с workspaceStatus='demo'. Сами по себе demo-проекты
+  // хранятся под dev/admin user'ом, но обычные клиенты их не видят.
+  isDemo           Boolean   @default(false)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 

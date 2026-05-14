@@ -31,6 +31,10 @@ interface AdminUserRow {
   email: string;
   name: string | null;
   createdAt: string;
+  // Sprint 24: видим workspace state в админке для быстрого switch.
+  role?: string;
+  workspaceStatus?: string;
+  lastLoginAt?: string | null;
   _count: { projects: number };
 }
 
@@ -173,21 +177,125 @@ function briefBadge(p: AdminProjectRow) {
   return <StatusBadge tone="success">v{p.brief.version}</StatusBadge>;
 }
 
+// Sprint 24: workspace status human labels + tone-маппинг.
+const STATUS_RU: Record<string, string> = {
+  lead: 'Лид',
+  demo: 'Демо',
+  approved: 'Одобрен',
+  awaiting_payment: 'Ждёт оплату',
+  active: 'Активен',
+  paused: 'На паузе',
+  archived: 'Архив',
+};
+const STATUS_TONE_ADMIN: Record<string, 'neutral' | 'ai' | 'warning' | 'success' | 'danger'> = {
+  lead: 'neutral',
+  demo: 'ai',
+  approved: 'ai',
+  awaiting_payment: 'warning',
+  active: 'success',
+  paused: 'warning',
+  archived: 'danger',
+};
+
 function UsersTable({ users, compact }: { users: AdminUserRow[]; compact?: boolean }) {
+  const [list, setList] = useState<AdminUserRow[]>(users);
+  const [updating, setUpdating] = useState<string | null>(null);
+
+  useEffect(() => { setList(users); }, [users]);
+
+  // Sprint 24 — быстрая активация рабочего кабинета. Меняет workspaceStatus
+  // на 'active'. Demo проекты у пользователя пропадают, появляется пустой
+  // боевой кабинет (см. /api/projects filter в Sprint 24).
+  async function activate(userId: string) {
+    setUpdating(userId);
+    try {
+      const r = await api.patch<{ user: AdminUserRow }>(`/api/admin/users/${userId}/status`, {
+        workspaceStatus: 'active',
+      });
+      setList((cur) => cur.map((u) => (u.id === userId ? { ...u, ...r.user } : u)));
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Не удалось активировать');
+    } finally {
+      setUpdating(null);
+    }
+  }
+
+  async function moveToDemo(userId: string) {
+    if (!window.confirm('Перевести пользователя в демо-режим? Его рабочие проекты сохранятся, но он будет видеть только демо-витрину.')) return;
+    setUpdating(userId);
+    try {
+      const r = await api.patch<{ user: AdminUserRow }>(`/api/admin/users/${userId}/status`, {
+        workspaceStatus: 'demo',
+      });
+      setList((cur) => cur.map((u) => (u.id === userId ? { ...u, ...r.user } : u)));
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Не удалось перевести');
+    } finally {
+      setUpdating(null);
+    }
+  }
+
   return (
     <Card padded>
-      <CardHeader title="Пользователи" subtitle={compact ? 'Последние пользователи' : 'Все demo-пользователи и число проектов'} action={<Users size={16} className="text-muted" />} />
+      <CardHeader
+        title="Пользователи платформы"
+        subtitle={compact ? 'Последние подключённые пользователи и их режим' : 'Все пользователи: роль, режим кабинета, активность'}
+        action={<Users size={16} className="text-muted" />}
+      />
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-sm min-w-[760px]">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-[0.1em] text-muted">
+              <th className="py-2 pr-4">Пользователь</th>
+              <th className="py-2 pr-4">Email</th>
+              <th className="py-2 pr-4">Роль</th>
+              <th className="py-2 pr-4">Режим кабинета</th>
+              <th className="py-2 pr-4">Проектов</th>
+              <th className="py-2 pr-4">Создан</th>
+              <th className="py-2 pr-4">Действия</th>
+            </tr>
+          </thead>
           <tbody>
-            {users.map((u) => (
-              <tr key={u.id} className="border-t border-hairline">
-                <td className="py-3 pr-4 font-medium text-primary">{u.name ?? u.email}</td>
-                <td className="py-3 pr-4 text-secondary">{u.email}</td>
-                <td className="py-3 pr-4 font-num">{u._count.projects} проектов</td>
-                <td className="py-3 pr-4 text-xs text-muted">{formatDate(u.createdAt)}</td>
-              </tr>
-            ))}
+            {list.map((u) => {
+              const status = u.workspaceStatus ?? 'lead';
+              const tone = STATUS_TONE_ADMIN[status] ?? 'neutral';
+              return (
+                <tr key={u.id} className="border-t border-hairline">
+                  <td className="py-3 pr-4 font-medium text-primary">{u.name ?? u.email}</td>
+                  <td className="py-3 pr-4 text-secondary">{u.email}</td>
+                  <td className="py-3 pr-4 text-xs text-secondary">{u.role ?? 'client'}</td>
+                  <td className="py-3 pr-4">
+                    <StatusBadge tone={tone} dot>{STATUS_RU[status] ?? status}</StatusBadge>
+                  </td>
+                  <td className="py-3 pr-4 font-num">{u._count.projects}</td>
+                  <td className="py-3 pr-4 text-xs text-muted">{formatDate(u.createdAt)}</td>
+                  <td className="py-3 pr-4">
+                    <div className="flex gap-1.5">
+                      {status !== 'active' && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={updating === u.id}
+                          onClick={() => activate(u.id)}
+                        >
+                          Активировать кабинет
+                        </Button>
+                      )}
+                      {status === 'active' && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={updating === u.id}
+                          onClick={() => moveToDemo(u.id)}
+                        >
+                          В демо
+                        </Button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
