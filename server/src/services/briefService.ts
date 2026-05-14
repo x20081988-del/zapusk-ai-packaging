@@ -1,3 +1,4 @@
+import type { ProjectBrief } from '@prisma/client';
 import { prisma } from '../db.js';
 import { aiComplete } from '../ai/client.js';
 import { SYSTEM_BRIEF_EXTRACTOR } from '../ai/prompts.js';
@@ -6,6 +7,39 @@ import { extractFromUploadedFile } from './fileParser.js';
 
 export interface StoredAnswer { question: string; answer: string; category?: string; savedAt?: string }
 export type BriefFeedbackFocus = 'narrative' | 'finance' | 'risks' | 'investor_offer' | 'missing_data';
+
+// Sprint 32 — snapshot текущего ProjectBrief в ProjectBriefVersion ПЕРЕД любым
+// update. Это превращает brief edit из destructive в append-only: regenerate /
+// interview answer / feedback refine больше не стирают историю.
+//
+// Вызывается из:
+//   • briefService.generateBrief (upsert path) — если existing brief, snapshot
+//   • briefService.regenerateBriefWithFeedback — snapshot перед update
+//   • routes/brief.ts saveInterviewAnswers — snapshot перед update
+//   • restore endpoint — snapshot текущего перед заменой на старую версию
+export async function snapshotBrief(
+  brief: ProjectBrief,
+  source: 'ai_generate' | 'ai_regenerate_feedback' | 'interview' | 'restore' | 'manual_edit',
+): Promise<void> {
+  await prisma.projectBriefVersion.create({
+    data: {
+      projectId: brief.projectId,
+      version: brief.version,
+      businessSummary: brief.businessSummary,
+      monetization: brief.monetization,
+      keyMetrics: brief.keyMetrics,
+      investmentAsk: brief.investmentAsk,
+      strengths: brief.strengths,
+      weaknesses: brief.weaknesses,
+      missingData: brief.missingData,
+      missingByCategory: brief.missingByCategory,
+      interviewAnswers: brief.interviewAnswers,
+      napkin: brief.napkin,
+      rawAIResponse: brief.rawAIResponse,
+      source,
+    },
+  });
+}
 
 interface BriefShape {
   businessSummary?: string | null;
@@ -136,6 +170,11 @@ ${interviewBlock}
     rawAIResponse: ai.text,
   };
 
+  // Sprint 32 — snapshot существующего brief'а ПЕРЕД upsert overwrite.
+  if (previousBrief) {
+    await snapshotBrief(previousBrief, 'ai_generate');
+  }
+
   const brief = await prisma.projectBrief.upsert({
     where: { projectId },
     update: { version: nextVersion, ...briefPayload },
@@ -238,6 +277,9 @@ ${feedback}
     interviewAnswers: previousBrief.interviewAnswers,
     rawAIResponse: ai.text,
   };
+
+  // Sprint 32 — snapshot ПЕРЕД destructive update.
+  await snapshotBrief(previousBrief, 'ai_regenerate_feedback');
 
   const brief = await prisma.projectBrief.update({
     where: { projectId },

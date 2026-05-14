@@ -102,6 +102,7 @@ model Project {
   salesSessions        SalesSession[]
   conversationAnalyses ConversationAnalysis[]
   packagingJobs        PackagingJob[]
+  briefVersions        ProjectBriefVersion[]
 }
 
 model UploadedFile {
@@ -386,6 +387,40 @@ model ConversationAnalysis {
 
   @@index([projectId])
   @@index([createdAt])
+}
+
+// Sprint 32 — версии брифа. ProjectBrief остаётся "current" (one-per-project),
+// а каждое изменение (regenerate, interview answer, AI enrich) делает snapshot
+// текущего состояния в ProjectBriefVersion ПЕРЕД update.
+// Restore: копирует данные старой ProjectBriefVersion обратно в ProjectBrief.
+// Append-only: версии никогда не редактируются и не удаляются.
+model ProjectBriefVersion {
+  id                String   @id @default(cuid())
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Снапшот всех полей ProjectBrief в момент перед update.
+  version           Int
+  businessSummary   String?
+  monetization      String?
+  keyMetrics        String?
+  investmentAsk     String?
+  strengths         String?
+  weaknesses        String?
+  missingData       String?
+  missingByCategory String?
+  interviewAnswers  String?
+  napkin            String?
+  rawAIResponse     String?
+
+  // Откуда пришла версия — для аудита и UX.
+  // 'ai_generate' | 'ai_regenerate' | 'ai_regenerate_feedback' | 'interview' | 'restore'
+  source            String
+
+  createdAt         DateTime @default(now())
+
+  @@index([projectId, version])
+  @@index([projectId, createdAt])
 }
 
 // Sprint 30 — audit trail для destructive operations и admin actions.

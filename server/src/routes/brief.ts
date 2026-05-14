@@ -10,7 +10,9 @@ import {
   parseAnswers,
   regenerateBriefWithFeedback,
   serializeNapkinWithInterviewAnswers,
+  snapshotBrief,
 } from '../services/briefService.js';
+import { recordAudit } from '../lib/audit.js';
 
 export const briefRoutes = Router();
 briefRoutes.use(authMiddleware);
@@ -99,6 +101,10 @@ briefRoutes.patch('/:projectId/interview', async (req, res) => {
   const nextVersion = existing.version + 1;
   const nextNapkin = serializeNapkinWithInterviewAnswers(existing.napkin, mergedAnswers);
 
+  // Sprint 32 — snapshot предыдущей версии brief'а до того как interview
+  // ответы перепишут missingData / napkin.
+  await snapshotBrief(existing, 'interview');
+
   const brief = await prisma.projectBrief.update({
     where: { projectId: req.params.projectId },
     data: {
@@ -122,3 +128,90 @@ briefRoutes.patch('/:projectId/interview', async (req, res) => {
   });
   res.json({ brief, savedCount: mergedAnswers.length });
 });
+
+// ─── Sprint 32 — brief versions: list + restore ───────────────────────────
+
+// GET /api/brief/:projectId/versions — append-only history брифа.
+briefRoutes.get("/:projectId/versions", async (req, res) => {
+  const user = getUser(req);
+  if (!(await assertOwnership(user.id, req.params.projectId))) {
+    return res.status(404).json({ error: "project_not_found" });
+  }
+  const [current, versions] = await Promise.all([
+    prisma.projectBrief.findUnique({ where: { projectId: req.params.projectId } }),
+    prisma.projectBriefVersion.findMany({
+      where: { projectId: req.params.projectId },
+      orderBy: [{ version: "desc" }, { createdAt: "desc" }],
+      take: 50,
+    }),
+  ]);
+  res.json({ current, versions });
+});
+
+// POST /api/brief/:projectId/restore/:versionId — snapshot current → restore old.
+// Никаких данных не теряется: текущая версия сохраняется в ProjectBriefVersion
+// перед тем как старая записывается обратно в ProjectBrief.
+briefRoutes.post("/:projectId/restore/:versionId", async (req, res) => {
+  const user = getUser(req);
+  if (!(await assertOwnership(user.id, req.params.projectId))) {
+    return res.status(404).json({ error: "project_not_found" });
+  }
+  const current = await prisma.projectBrief.findUnique({ where: { projectId: req.params.projectId } });
+  if (!current) return res.status(404).json({ error: "brief_not_generated" });
+
+  const target = await prisma.projectBriefVersion.findFirst({
+    where: { id: req.params.versionId, projectId: req.params.projectId },
+  });
+  if (!target) return res.status(404).json({ error: "version_not_found" });
+
+  // 1. Snapshot текущего состояния, чтобы restore был обратим.
+  await snapshotBrief(current, "restore");
+
+  // 2. Перезаписать ProjectBrief данными старой версии. Version=current+1 —
+  //    restore это новая версия, не клон старой.
+  const restored = await prisma.projectBrief.update({
+    where: { projectId: req.params.projectId },
+    data: {
+      version: current.version + 1,
+      businessSummary: target.businessSummary,
+      monetization: target.monetization,
+      keyMetrics: target.keyMetrics,
+      investmentAsk: target.investmentAsk,
+      strengths: target.strengths,
+      weaknesses: target.weaknesses,
+      missingData: target.missingData,
+      missingByCategory: target.missingByCategory,
+      interviewAnswers: target.interviewAnswers,
+      napkin: target.napkin,
+      rawAIResponse: target.rawAIResponse,
+    },
+  });
+
+  await recordAudit(req, {
+    action: "brief.restore",
+    targetType: "ProjectBrief",
+    targetId: restored.id,
+    payload: {
+      projectId: restored.projectId,
+      restoredFromVersionId: target.id,
+      restoredFromVersionNumber: target.version,
+      newVersion: restored.version,
+    },
+  });
+
+  res.json({ brief: restored, restoredFrom: { id: target.id, version: target.version } });
+});
+
+// GET /api/brief/:projectId/versions/:versionId — full snapshot одной версии.
+briefRoutes.get("/:projectId/versions/:versionId", async (req, res) => {
+  const user = getUser(req);
+  if (!(await assertOwnership(user.id, req.params.projectId))) {
+    return res.status(404).json({ error: "project_not_found" });
+  }
+  const v = await prisma.projectBriefVersion.findFirst({
+    where: { id: req.params.versionId, projectId: req.params.projectId },
+  });
+  if (!v) return res.status(404).json({ error: "not_found" });
+  res.json({ version: v });
+});
+

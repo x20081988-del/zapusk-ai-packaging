@@ -355,7 +355,79 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 31 critical-only: pre-deploy snapshot + full backup shipped)_
+_(empty — Sprint 32 brief versioning shipped)_
+
+---
+
+## Sprint 32 update — 2026-05-14 — Append-only brief versions + restore (catastrophic-only scope)
+
+Theme: **Brief edit history больше не теряется.** До Sprint 32: ProjectBrief был `@unique(projectId)` (one per project), любой regenerate / interview / feedback-refine вызывал `prisma.projectBrief.upsert/update` который **перезаписывал** старые данные. Если фаундер 3 часа уточнял брифинг через AI-интервью, а потом нажал «Пересобрать бриф» — все ответы исчезали.
+
+GeneratedPrompt + GeneratedDocument уже были append-only (Sprint 21 design — каждый generate = новая строка), но не было endpoint'а для restore из старой версии. Sprint 32 закрыл оба: brief snapshots + universal restore.
+
+### Узкий scope (по запросу)
+
+Только catastrophic-grade защита. Compare UI с diff highlighting, Material History Drawer, manual edit detection — отложено в Sprint 33.
+
+### Schema (migration `20260514183249_sprint32_brief_versions`)
+
+- **`ProjectBriefVersion`** — НОВАЯ таблица. Snapshot всех 11 brief полей (businessSummary, monetization, keyMetrics, investmentAsk, strengths, weaknesses, missingData, missingByCategory, interviewAnswers, napkin, rawAIResponse) + `source` ('ai_generate' | 'ai_regenerate_feedback' | 'interview' | 'restore' | 'manual_edit') + `version` (integer) + createdAt.
+- Append-only: только create, никаких update/delete на ProjectBriefVersion.
+- Indices на `(projectId, version)` и `(projectId, createdAt)`.
+- ProjectBrief schema **не меняется** — остаётся `@unique(projectId)`, "current". Существующий код продолжает работать.
+
+### Backend
+
+- **`server/src/services/briefService.ts`**:
+  - Новый export `snapshotBrief(brief, source)` — копирует все поля в ProjectBriefVersion.
+  - `generateBrief()` — если existing brief есть, snapshot ПЕРЕД `upsert`.
+  - `regenerateBriefWithFeedback()` — snapshot ПЕРЕД `update`.
+- **`server/src/routes/brief.ts`**:
+  - `PATCH /:projectId/interview` — snapshot ПЕРЕД `update` (interview answers тоже могут перезаписать missingData/napkin).
+  - **`GET /:projectId/versions`** — список всех snapshots + current, newest first.
+  - **`GET /:projectId/versions/:versionId`** — full snapshot одной версии.
+  - **`POST /:projectId/restore/:versionId`** — snapshot текущего → перезаписывает ProjectBrief данными старой версии. Version=current+1 (restore это новая версия, не клон). Audit `brief.restore` с `restoredFromVersionNumber` + `newVersion`.
+- **`server/src/routes/prompts.ts`** — universal restore без schema change (GeneratedPrompt + GeneratedDocument уже append-only):
+  - `GET /:projectId/:kind/versions` — 50 latest prompt versions
+  - `POST /:projectId/:kind/restore/:promptId` — append new row с body старой версии + `feedback: [restored from v{n}]`. Audit `prompt.restore`.
+  - `GET /:projectId/documents/:kind/versions`
+  - `POST /:projectId/documents/:kind/restore/:documentId` — то же для документов. Audit `document.restore`.
+
+### Audit events
+
+| Action | Payload |
+|---|---|
+| `brief.restore` | `{projectId, restoredFromVersionId, restoredFromVersionNumber, newVersion}` |
+| `prompt.restore` | `{projectId, kind, restoredFromVersion, newVersion}` |
+| `document.restore` | `{projectId, kind, restoredFromVersion, newVersion}` |
+
+Generate events не логируются отдельно — каждая запись `ProjectBriefVersion` сама является событием (с source field).
+
+### Что закрыто Sprint 32
+
+| Сценарий | До | После |
+|---|---|---|
+| Regenerate brief стирает старые ответы | unrecoverable | v1 snapshot'нут в ProjectBriefVersion, restore доступен |
+| Interview answers перезаписали missingData | unrecoverable | snapshot перед update |
+| Feedback refine пишет over старый текст | unrecoverable | snapshot перед update |
+| Юзер хочет вернуть старый prompt/document | latest only, история есть но restore нет | append new row с body старой + audit log |
+
+### Local smoke (verified)
+
+1. Create project → generate brief v1 → 0 snapshots (correct)
+2. Regenerate brief → v1 snapshot создан, current=v2
+3. Restore v1 → v2 snapshot создан, current=v3 (с content v1)
+4. `/api/admin/audit?action=brief.restore` — event записан с полным payload
+5. Server tsc clean, full build OK
+
+### Что вне scope (Sprint 33+)
+
+- Compare UI с side-by-side diff (нужна `diff` library или custom highlighting)
+- Material History Drawer component (UI)
+- ProjectCockpit visual updates (cosmetic)
+- "Редактировалось вручную" badge + manual edit endpoint
+- Landing draft/publish flow
+- AI auto-create-draft вместо overwrite-current (regenerate UX semantics)
 
 ---
 
