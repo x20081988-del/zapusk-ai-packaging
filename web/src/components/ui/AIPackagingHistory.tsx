@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, AlertTriangle, ChevronRight, Clock, Cpu, ExternalLink, Loader2, MessageCircle, RefreshCw } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronRight, Clock, Cpu, ExternalLink, History as HistoryIcon, Loader2, MessageCircle, RefreshCw } from 'lucide-react';
 import { Card, CardHeader } from './Card';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
@@ -22,6 +22,8 @@ import { getAuth } from '../../lib/auth';
 interface Props {
   projectId: string | undefined;
   onRegenerate?: (templateKey: string) => void;
+  // Sprint 33 — родитель открывает MaterialHistoryDrawer на этот kind.
+  onOpenHistory?: (templateKey: string, label: string) => void;
 }
 
 const STATUS_TONE: Record<PackagingJob['status'], 'success' | 'warning' | 'danger' | 'ai' | 'neutral'> = {
@@ -53,7 +55,7 @@ const STATUS_LABEL_INTERNAL: Record<PackagingJob['status'], string> = {
   awaiting_manager: 'На ручной обработке',
 };
 
-export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
+export function AIPackagingHistory({ projectId, onRegenerate, onOpenHistory }: Props) {
   const [jobs, setJobs] = useState<PackagingJob[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const role = getAuth()?.role ?? 'client';
@@ -137,6 +139,7 @@ export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
               job={job}
               showVendors={showVendors}
               onRegenerate={onRegenerate}
+              onOpenHistory={onOpenHistory}
             />
           ))}
         </ul>
@@ -146,8 +149,13 @@ export function AIPackagingHistory({ projectId, onRegenerate }: Props) {
 }
 
 function JobRow({
-  job, showVendors, onRegenerate,
-}: { job: PackagingJob; showVendors: boolean; onRegenerate?: (templateKey: string) => void }) {
+  job, showVendors, onRegenerate, onOpenHistory,
+}: {
+  job: PackagingJob;
+  showVendors: boolean;
+  onRegenerate?: (templateKey: string) => void;
+  onOpenHistory?: (templateKey: string, label: string) => void;
+}) {
   const isAwaiting = job.status === 'awaiting_manager' || job.status === 'queued' || job.status === 'running';
   const statusLabel = (showVendors ? STATUS_LABEL_INTERNAL : STATUS_LABEL_CLIENT)[job.status];
 
@@ -227,6 +235,18 @@ function JobRow({
               Открыть результат
             </Button>
           </a>
+        )}
+        {/* Sprint 33 — «История версий» доступна всем (client + admin). Покажет
+            timeline всех версий этого артефакта + restore button. */}
+        {onOpenHistory && (
+          <Button
+            size="sm"
+            variant="ghost"
+            iconLeft={<HistoryIcon size={12} />}
+            onClick={() => onOpenHistory(job.templateKey, outputTypeLabel(job.outputType))}
+          >
+            История
+          </Button>
         )}
         {/* Sprint 18: «Перезапустить» скрыт для client всегда — он не должен
             видеть, что внутри есть AI pipeline, который можно перезапустить. */}

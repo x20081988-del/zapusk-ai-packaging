@@ -34,7 +34,9 @@ import { AIDiscoverabilityScore } from '../components/ui/AIDiscoverabilityScore'
 import { InvestmentJourney } from '../components/project/InvestmentJourney';
 import { TrackPicker } from '../components/project/TrackPicker';
 import { ActivityHistory } from '../components/project/ActivityHistory';
+import { MaterialHistoryDrawer, type MaterialKind } from '../components/ui/MaterialHistoryDrawer';
 import { listMeetings } from '../lib/salesSessions';
+import { History } from 'lucide-react';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -53,6 +55,8 @@ export default function ProjectCockpit() {
   const [leadsLaunched, setLeadsLaunched] = useState(false);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [savingTrack, setSavingTrack] = useState(false);
+  // Sprint 33 — какое material history drawer открыт. null = закрыт.
+  const [historyDrawer, setHistoryDrawer] = useState<{ kind: MaterialKind; promptKind?: string; title: string } | null>(null);
 
   async function load() {
     if (!id) return;
@@ -353,9 +357,20 @@ export default function ProjectCockpit() {
             title="Бизнес на салфетке"
             subtitle={project.brief ? `Разбор v${project.brief.version} · ${briefStatus.longLabel}` : 'Будет собран после генерации брифа'}
             action={project.brief && (
-              <Link to={`/projects/${id}/brief`}>
-                <Button variant="ghost" size="sm" iconRight={<ChevronRight size={14} />}>{briefStatus.cta}</Button>
-              </Link>
+              <div className="flex items-center gap-1.5">
+                {/* Sprint 33 — Brief history drawer */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  iconLeft={<History size={12} />}
+                  onClick={() => setHistoryDrawer({ kind: 'brief', title: 'История · Бриф проекта' })}
+                >
+                  История версий
+                </Button>
+                <Link to={`/projects/${id}/brief`}>
+                  <Button variant="ghost" size="sm" iconRight={<ChevronRight size={14} />}>{briefStatus.cta}</Button>
+                </Link>
+              </div>
             )}
           />
           {project.brief ? (
@@ -417,6 +432,9 @@ export default function ProjectCockpit() {
         <AIPackagingHistory
           projectId={id}
           onRegenerate={(templateKey) => generatePrompt(templateKey)}
+          onOpenHistory={(templateKey, label) =>
+            setHistoryDrawer({ kind: 'prompt', promptKind: templateKey, title: `История · ${label}` })
+          }
         />
         <AIDiscoverabilityScore
           projectId={id}
@@ -494,6 +512,18 @@ export default function ProjectCockpit() {
         onSave={saveTrack}
         onClose={() => setTrackPickerOpen(false)}
       />
+      {/* Sprint 33 — material history drawer (brief / prompt / document) */}
+      {id && historyDrawer && (
+        <MaterialHistoryDrawer
+          open
+          onClose={() => setHistoryDrawer(null)}
+          kind={historyDrawer.kind}
+          projectId={id}
+          promptKind={historyDrawer.promptKind}
+          title={historyDrawer.title}
+          onRestored={() => load()}
+        />
+      )}
     </AppLayout>
   );
 }

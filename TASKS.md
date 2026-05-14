@@ -355,7 +355,63 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 32 brief versioning shipped)_
+_(empty — Sprint 33 material history UI + compare + restore shipped)_
+
+---
+
+## Sprint 33 update — 2026-05-15 — Material History Drawer + Compare + Restore UI
+
+Theme: **Backend versioning из Sprint 32 теперь видим пользователю.** До Sprint 33: snapshots, restore endpoints, audit log — всё было только в API. Sprint 33 — UI поверх: timeline версий, side-by-side compare с diff highlighting, restore через confirm modal. AI больше не выглядит как «магическая кнопка, которая что-то перезаписала».
+
+### Узкий MVP scope
+
+Без npm-зависимостей (custom diff вместо react-diff-viewer). Без manual edit tracking (нужен отдельный edit endpoint — Sprint 34). Без landing draft/publish flow.
+
+### Новые компоненты
+
+- **`web/src/components/ui/Drawer.tsx`** — slide-in panel primitive (right side). Pattern из Modal: portal, ESC, body-scroll-lock. Slide-in animation, footer slot.
+- **`web/src/lib/diff.ts`** — LCS line-by-line diff без npm. `diffLines(old, new)` → массив `{op, text, oldIndex, newIndex}`. `diffStats(diff)` → `{added, removed, unchanged}`. ~80 строк, достаточно для markdown/text.
+- **`web/src/components/ui/MaterialCompareModal.tsx`** — fullscreen split: левая колонка «Было», правая «Стало». Подсветка: зелёный=add, красный=remove, neutral=equal. Шапка показывает stats (+/−/без изменений).
+- **`web/src/components/ui/MaterialHistoryDrawer.tsx`** — главный component:
+  - Timeline всех версий (current + snapshots) с source badge: AI-сгенерировано / AI-интервью / Восстановлено / Ручная правка / Архив
+  - «Сравнить с текущей» → открывает CompareModal
+  - «Сделать основной» → `window.confirm` + POST restore endpoint + audit log
+  - Brief версии сериализуются в markdown (sections: Бизнес / Монетизация / Метрики / Сильные / Риски / Не хватает / Salfetka) для осмысленного diff'а
+  - Универсальный — kind: 'brief' | 'prompt' | 'document'
+
+### Интеграция в ProjectCockpit
+
+- `<AIPackagingHistory>` получил prop `onOpenHistory(templateKey, label)` — родитель открывает MaterialHistoryDrawer. Per-row кнопка «История» в admin/manager и client view.
+- Brief CardHeader получил кнопку «История версий» рядом с briefStatus.cta.
+- `historyDrawer` state в cockpit держит `{kind, promptKind?, title}`, после restore вызывает `load()` для обновления project content.
+
+### Local preview verified
+
+- `cd web && tsc --noEmit` — clean
+- `npm run build` — 550.19 kB / 155.19 kB gzip (+13 kB к Sprint 32)
+- Vite dev server + API local:
+  - login FOUNDER → create project → generate brief x2 (v1 snapshot create)
+  - открыл /projects/X → кнопка «История версий» видна
+  - click → drawer открылся с timeline v2 (current, Основная badge) + v1 (AI-сгенерировано)
+  - click «Сравнить с текущей» → compare modal открылся, diff table рендерится, stats показывают +/−/без изменений
+  - **0 console errors**
+
+### Что закрыто Sprint 33
+
+| Угроза | До | После |
+|---|---|---|
+| История версий невидима пользователю | только в backend через `/api/.../versions` | UI drawer на каждой material card |
+| Compare версий — нельзя увидеть diff | none | fullscreen side-by-side с подсветкой add/remove |
+| Restore через API без UX | curl-only | кнопка «Сделать основной» + confirm explaining что current сохранится в истории |
+| AI vs Human source неясен | source field в API, не показан | badge на каждой версии: AI-сгенерировано / AI-интервью / Восстановлено / Ручная правка |
+
+### Что осталось вне scope (Sprint 34+)
+
+- **Manual edit tracking** — нужен `human_edited` source flag + edit endpoint (требует UI editor)
+- **Landing draft/publish flow** — preview draft + manual publish (нужна интеграция с Lovable preview URL)
+- **ProjectCockpit Journey alert** «Есть новая AI-версия на проверке» — cosmetic, depends на manual edit tracking
+- **«Есть N черновиков»** badge в AIPackagingHistory — depends на draft status field (Sprint 32 решил оставить append-only без draft/published flag)
+- **react-diff-viewer** для wrapper/highlighted-words diff — нужен npm install, custom LCS достаточен для MVP
 
 ---
 
