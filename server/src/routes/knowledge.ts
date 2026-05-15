@@ -7,6 +7,7 @@ import { recordAudit } from '../lib/audit.js';
 import { getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 import {
   ingestKnowledgeSource,
+  retrieveKnowledgeForTranscript,
   KNOWLEDGE_SOURCE_TYPES,
   type KnowledgeScope,
   type KnowledgeSourceType,
@@ -289,8 +290,15 @@ knowledgeRoutes.patch(
         ...(d.summary !== undefined ? { summary: d.summary } : {}),
       },
     });
+    // Sprint 39 P2 — гранулярный audit. Спека просит публикацию/отключение
+    // как отдельные события, чтобы их было видно в audit-логе без парсинга
+    // payload'а. Для остальных полей пишем общий update.
+    const action =
+      d.status === 'published' ? 'knowledge.source.publish'
+      : d.status === 'disabled' ? 'knowledge.source.disable'
+      : 'knowledge.source.update';
     await recordAudit(req, {
-      action: 'knowledge.update',
+      action,
       targetType: 'KnowledgeSource',
       targetId: existing.id,
       payload: {
@@ -298,9 +306,119 @@ knowledgeRoutes.patch(
         // не пишем сами значения чтобы не утечь — статус/visibility достаточно для audit'а.
         status: d.status,
         visibility: d.visibility,
+        previousStatus: existing.status,
       },
     });
     res.json({ source: { id: updated.id, status: updated.status, visibility: updated.visibility } });
+  },
+);
+
+// POST /api/knowledge/create-note — Sprint 39. Ручная заметка из raw text.
+// Используется формой «Создать заметку» в админ-разделе «База знаний».
+// Backend в Sprint 38 уже поддерживал rawText в ingestKnowledgeSource,
+// но HTTP-эндпоинта для него не было.
+const createNoteSchema = z.object({
+  projectId: z.string().optional().nullable(),
+  scope: z.enum(['global', 'project']),
+  title: z.string().trim().min(1).max(300),
+  text: z.string().trim().min(40, 'too_short').max(60_000),
+  sourceType: z.enum(KNOWLEDGE_SOURCE_TYPES),
+  status: z.enum(['draft', 'published', 'disabled']).optional(),
+  visibility: z.enum(['internal', 'client_safe']).optional(),
+  tags: z.array(z.string()).max(20).optional(),
+  summary: z.string().max(2_000).optional().nullable(),
+});
+
+knowledgeRoutes.post(
+  '/create-note',
+  requireRole(['ADMIN', 'MANAGER']),
+  async (req, res) => {
+    const parsed = createNoteSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const d = parsed.data;
+    try {
+      const out = await ingestKnowledgeSource({
+        scope: d.scope as KnowledgeScope,
+        projectId: d.projectId ?? null,
+        title: d.title,
+        sourceType: d.sourceType as KnowledgeSourceType,
+        status: (d.status ?? 'draft') as KnowledgeStatus,
+        visibility: (d.visibility ?? 'internal') as KnowledgeVisibility,
+        tags: d.tags,
+        summary: d.summary ?? null,
+        createdById: getUser(req).id,
+        rawText: d.text,
+      });
+      await recordAudit(req, {
+        action: 'knowledge.source.create',
+        targetType: 'KnowledgeSource',
+        targetId: out.sourceId,
+        payload: {
+          scope: d.scope,
+          sourceType: d.sourceType,
+          chunkCount: out.chunkCount,
+          totalChars: out.totalChars,
+          // НЕ пишем full text — только сигнатуру (см. Sprint 38 audit policy).
+        },
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      console.error('[knowledge:create-note]', err);
+      const msg = err instanceof Error ? err.message : 'create_failed';
+      res.status(400).json({ error: msg });
+    }
+  },
+);
+
+// POST /api/knowledge/search-debug — Sprint 39 P1. Тестовая ручка для
+// отладки качества retrieval'а: «Проверить поиск» в админке. Возвращает
+// тот же shape, что и внутренний retrieve, но с raw score'ом видимым.
+// Только admin/manager — это диагностический инструмент.
+const searchDebugSchema = z.object({
+  query: z.string().trim().min(3).max(8_000),
+  projectId: z.string().optional().nullable(),
+  topN: z.number().int().min(1).max(20).optional(),
+});
+
+knowledgeRoutes.post(
+  '/search-debug',
+  requireRole(['ADMIN', 'MANAGER']),
+  async (req, res) => {
+    const parsed = searchDebugSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const d = parsed.data;
+    const role = getActorRole(req);
+    const result = await retrieveKnowledgeForTranscript(d.query, {
+      projectId: d.projectId ?? null,
+      role,
+      topN: d.topN ?? 8,
+    });
+    await recordAudit(req, {
+      action: 'knowledge.search.debug',
+      targetType: 'KnowledgeSearch',
+      targetId: null,
+      payload: {
+        projectId: d.projectId ?? null,
+        queryLength: d.query.length,
+        hitCount: result.sources.length,
+        chunksScanned: result.totalChunksScanned,
+        // Сам query не пишем — он может содержать transcript встречи.
+      },
+    });
+    res.json({
+      sources: result.sources.map((s) => ({
+        sourceId: s.sourceId,
+        title: s.title,
+        sourceType: s.sourceType,
+        scope: s.scope,
+        visibility: s.visibility,
+        summary: s.summary,
+        // Admin/manager — raw snippet видят полностью.
+        snippet: s.snippetText,
+        score: Number(s.score.toFixed(4)),
+      })),
+      totalChunksScanned: result.totalChunksScanned,
+    });
   },
 );
 

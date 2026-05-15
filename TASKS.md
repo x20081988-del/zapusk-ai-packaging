@@ -355,7 +355,116 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 38: Knowledge Base v1 landed)_
+_(empty — Sprint 39: KB admin UI landed)_
+
+---
+
+## Sprint 39 — 2026-05-15 — UI для базы знаний AI-продаж
+
+Theme: **База знаний перестаёт быть backend-функцией и становится управляемым активом команды ZAPUSK.** В Sprint 38 KB могла только наполняться через API-вызовы. Теперь admin/manager управляют ею через интерфейс: список с фильтрами, ручные заметки, загрузка файлов, публикация/отключение, preview фрагментов и тестовая «Проверить поиск» панель для отладки retrieval.
+
+### P0 — Backend (2 новых endpoint'а)
+
+- **`POST /api/knowledge/create-note`** ([routes/knowledge.ts](server/src/routes/knowledge.ts)) — ручная заметка из raw text. Принимает title / text / sourceType / scope / projectId / visibility / status / tags / summary. Под капотом — `ingestKnowledgeSource({ rawText })` из Sprint 38, который уже умел работать с raw text, но без HTTP-эндпоинта. Audit `knowledge.source.create`.
+- **`POST /api/knowledge/search-debug`** — диагностический retrieval. Принимает query + projectId + topN. Возвращает source'ы с raw `score` для отладки качества keyword-поиска. Admin/manager only. Audit `knowledge.search.debug` (logging — query length + hit count, без самого query — чтобы не утечь transcript встречи).
+- **PATCH /api/knowledge/:id** теперь пишет гранулярный audit: `knowledge.source.publish` / `knowledge.source.disable` / `knowledge.source.update` в зависимости от смены статуса.
+
+### P0 — Frontend: страница `/admin/knowledge`
+
+- **Новый компонент [`web/src/pages/AdminKnowledge.tsx`](web/src/pages/AdminKnowledge.tsx)** — single-page приложение для управления KB.
+- **Route**: `/admin/knowledge` с `RequireRole roles={['SUPER_ADMIN', 'ADMIN', 'MANAGER']}` в App.tsx. FOUNDER → редирект на /dashboard; INVESTOR → не виден в nav и на API получает 403.
+
+**Что на странице:**
+
+1. **Список источников** — список карточек с:
+   - название (кликабельно, открывает preview drawer)
+   - тип материала (русифицированный лейбл из 13 sourceType'ов)
+   - область (Глобальная / Проект)
+   - видимость (Внутренняя / Безопасная)
+   - количество фрагментов
+   - дата создания
+   - теги
+   - summary (если есть, 2 строки max)
+2. **Фильтры** (4 dropdown'а в grid): status / scope / sourceType / fuzzy-search по названию+тегам. Все клиент-side, без round-trip к API.
+3. **Действия на строке** (для admin/manager): «Опубликовать» / «Отключить» / «В черновик» — один PATCH /knowledge/:id, перерисовка списка.
+4. **Создание ручной заметки** (modal) — title + text + sourceType + scope + projectId + visibility + status + tags + summary. POST /knowledge/create-note. Закрытие → перезагрузка списка.
+5. **Загрузка файла** (modal) — двухшаговый flow: сначала `/api/files/:projectId/upload` (нужен проект как owner для file row), потом `/api/knowledge/import-from-file`. UX-комментарий в модалке объясняет почему projectId обязателен.
+6. **Preview drawer** — Drawer (Sprint 33 primitive) с метаданными source'а + список chunks. `redactedText` показан если backend вернул `text=null`; admin/manager видят raw. Кнопка «Архивировать» (DELETE) с confirm.
+
+### P1 — «Проверить поиск» панель
+
+- Внизу страницы — `SearchDebugCard`: textarea для transcript-like запроса + optional projectId + кнопка «Найти фрагменты». Выводит топ-8 результатов с `score` бейджем, sourceType + scope, expandable snippet (`<details>`).
+- Полезно для команды чтобы понимать «почему AI зацепил/не зацепил тот или иной кейс» — keyword retrieval требует контроля, до пока не появится embeddings (Sprint 40+).
+
+### P0 — Nav
+
+- **[Sidebar.tsx](web/src/components/layout/Sidebar.tsx)** — пункт «База знаний AI-продаж» (иконка BookOpen) добавлен в SUPER_ADMIN / ADMIN / MANAGER блоки. FOUNDER / INVESTOR не видят.
+
+### Связь с AI-ассистентом
+
+Бейдж в SalesAssistant `KnowledgeSourcesBlock` уже умеет (с Sprint 38):
+- показывать количество кейсов
+- раскрытие списка по клику
+- title + sourceType + scope для всех
+- snippet только для admin/manager (founder видит null)
+
+Дополнительной работы по UI ассистента не потребовалось — список уже корректно отображается.
+
+### Audit events (P2)
+
+Все добавлены поверх Sprint 38:
+- `knowledge.source.create` — при ручной заметке
+- `knowledge.source.publish` / `knowledge.source.disable` / `knowledge.source.update` — при PATCH в зависимости от смены статуса
+- `knowledge.search.debug` — при использовании тестового поиска
+- `knowledge.archive` (sprint 38) — при DELETE
+
+Payload не содержит chunk text / transcript / query — только metadata (sourceId, chunkCount, queryLength, scope, sourceType).
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-DmDabcU8.js` (580KB).
+- **Local preview end-to-end**:
+  - ADMIN navigate to `/admin/knowledge` → page renders с 3 source'ами (унаследованными от Sprint 38 smoke + новый Sprint 39 note), 4 фильтра, search debug card.
+  - POST /api/knowledge/create-note → 201, chunkCount=1, sourceId returned. Source появляется в списке.
+  - POST /api/knowledge/search-debug → 200, 2 source'а с score (новая заметка + Sprint 38 source).
+  - FOUNDER navigate to `/admin/knowledge` → RequireRole redirect to `/dashboard`. ✓
+  - INVESTOR → GET /api/knowledge → 403 `investor_forbidden`. ✓
+  - FOUNDER → GET /api/knowledge → 200, видит только client_safe global. ✓
+  - Console errors: 0.
+
+### Какие проверки прошли
+
+| Проверка | Результат |
+|---|---|
+| Admin видит страницу | ✓ /admin/knowledge рендерится для ADMIN |
+| Manager видит страницу | ✓ MANAGER добавлен в RequireRole |
+| Founder не видит страницу | ✓ редирект на /dashboard, в Sidebar пункта нет |
+| Investor не видит страницу | ✓ /api/knowledge возвращает 403; в Sidebar пункта нет |
+| Создать ручную заметку | ✓ create-note 201 |
+| Опубликовать заметку | ✓ PATCH status=published, audit knowledge.source.publish |
+| AI-ассистент использует заметку | ✓ search-debug подтверждает score>0 |
+| Отключить заметку | ✓ PATCH status=disabled, audit knowledge.source.disable; retrieval её больше не учитывает (WHERE status='published') |
+| Открыть chunks preview | ✓ drawer рендерится с chunks + metadata |
+| Поиск работает | ✓ search-debug возвращает score и snippet |
+| Build/typecheck clean | ✓ оба tsc pass, vite build pass |
+
+### Файлы (5)
+
+- Server: `routes/knowledge.ts` (manual-note + search-debug + granular audit на PATCH).
+- Web: **new** `pages/AdminKnowledge.tsx`, `App.tsx` (route), `components/layout/Sidebar.tsx` (nav для SUPER_ADMIN/ADMIN/MANAGER).
+- Docs: `TASKS.md`.
+
+### Что осталось на Sprint 40
+
+- **CTA «Добавить в базу знаний»** в карточках ConversationAnalysis / SalesSession — кнопка с pre-filled полями, ведёт на POST /knowledge/import-from-analysis. Backend готов (Sprint 38), нужна UI-обвязка.
+- **Embeddings + hybrid search** — когда KB перевалит за ~1000 источников и keyword retrieval начнёт промахиваться.
+- **Retrieval metrics dashboard** — какие source'ы AI чаще всего использует, какие никогда не появляются (отдельная модель `KnowledgeRetrievalEvent`).
+- **Bulk import** — массовая загрузка папки файлов с предзаполнением title из filename.
+- **Demo-assets review** — наследуется из Sprint 37.
+- **Manager assignment schema** — наследуется из Sprint 37.
+- **Backend AbortSignal проксинг** — наследуется из Hotfix 2026-05-15.
 
 ---
 

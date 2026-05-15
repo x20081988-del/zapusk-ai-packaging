@@ -28,6 +28,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
       { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      // Sprint 39 — управление базой знаний AI-продаж.
+      { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
       { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
       { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
     ]},
@@ -42,6 +44,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/materials',  icon: PackageCheck,      label: 'Материалы' },
       { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
+      // Sprint 39 — управление базой знаний AI-продаж.
+      { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
       { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
     ]},
   ],
@@ -55,6 +59,9 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/manager/meetings', icon: CalendarDays,      label: 'Календарь' },
       { to: '/manager/tasks',    icon: ClipboardList,     label: 'Задачи' },
       { to: '/manager/clients',  icon: Users,             label: 'Клиенты' },
+      // Sprint 39 — менеджеры тоже могут управлять KB (загружать скрипты,
+      // кейсы из своих сделок).
+      { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
     ]},
   ],
   FOUNDER: [
