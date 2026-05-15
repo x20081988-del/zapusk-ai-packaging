@@ -82,6 +82,11 @@ interface AssistantCard {
   provider: string;
   model: string;
   fellBackToMock: boolean;
+  // Sprint 34Б.2 — откуда AI взял system-prompt.
+  //   'db'       — активный template 'sales_gpt' из суперадминки (правильное состояние)
+  //   'fallback' — hardcoded prompt из кода (template отсутствует / выключен)
+  promptSource?: 'db' | 'fallback';
+  promptTemplateId?: string | null;
 }
 
 type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
@@ -691,6 +696,15 @@ export default function SalesAssistant() {
             )}
             {aiError && <StatusBadge tone="warning" dot>AI временно недоступен</StatusBadge>}
             {card && <StatusBadge tone={card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success'} dot>{providerLabel}</StatusBadge>}
+            {/* Sprint 34Б.2 — источник prompt'а. 'db' = template из суперадминки
+                (правильно, prompt управляется без deploy). 'fallback' = hardcoded —
+                означает что template отсутствует/выключен и нужно вмешательство admin'а. */}
+            {card?.promptSource === 'db' && (
+              <StatusBadge tone="info" dot>шаблон из админки</StatusBadge>
+            )}
+            {card?.promptSource === 'fallback' && (
+              <StatusBadge tone="warning" dot>fallback prompt — проверьте шаблон</StatusBadge>
+            )}
           </div>
         </div>
         {permError && (

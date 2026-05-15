@@ -355,7 +355,57 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 34Б.1 visual priority reorder shipped)_
+_(empty — Sprint 34Б.2 dynamic prompt template shipped)_
+
+---
+
+## Sprint 34Б.2 update — 2026-05-15 — Sales prompt теперь управляемый слой, не код
+
+Theme: **Prompt engineering — ключевой IP. Не должен жить в коде.** До Sprint 34Б.2 `analyzeSalesTurn` использовал `import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js'` — hardcoded 167-строчный TS module. PromptTemplate row `key='sales_gpt'` (4173 символа, active=true) **существовала в БД и редактировалась через super-admin → Шаблоны**, но `analyzeSalesTurn` её **игнорировал**. Sprint 34Б.2 перевернул контракт: prompt берётся из template, fallback на код только при отсутствии.
+
+### Backend
+
+**`server/src/services/salesAssistantService.ts`**:
+- Новый `resolveSalesPrompt()` helper: `prisma.promptTemplate.findFirst({where: {key: 'sales_gpt'}})`. Если template есть, active=true и body > 200 chars → `{system: tpl.body, source: 'db', templateId: tpl.id}`. Иначе fallback на hardcoded `SALES_ASSISTANT_SYSTEM` с reason: `not_found | inactive | body_too_short`.
+- `analyzeSalesTurn` дёргает `resolveSalesPrompt()` в начале + использует `promptDecision.system` вместо `SALES_ASSISTANT_SYSTEM`.
+- Console log: `[sales-assistant] prompt source=db templateId=cmp5cge9a...` или `[sales-assistant] template "sales_gpt" not usable (reason=inactive) — falling back to hardcoded`.
+- **AuditEvent `sales_prompt.fallback`** пишется на каждом fallback с payload `{key, reason, active, bodyLen}`. Super-admin видит в `/admin/audit` если template сломан.
+
+**`AssistantCard` interface (server + frontend)**:
+- Новые поля `promptSource: 'db' | 'fallback'`, `promptTemplateId: string | null` в каждом response.
+- `CoreCard` type обновлён чтобы Omit-ить эти 2 новых поля.
+
+### Frontend
+
+**`web/src/pages/SalesAssistant.tsx`**:
+- AssistantCard интерфейс расширен полями `promptSource?`, `promptTemplateId?`.
+- Status row badges:
+  - `promptSource === 'db'` → `<StatusBadge tone="info">шаблон из админки</StatusBadge>` (зелёный info)
+  - `promptSource === 'fallback'` → `<StatusBadge tone="warning">fallback prompt — проверьте шаблон</StatusBadge>` (жёлтый)
+- Пользователь видит, откуда AI взял свою «голову».
+
+### Dynamic update verified (no redeploy)
+
+| Step | promptSource | templateId |
+|---|---|---|
+| Initial (template active) | `db` | `cmp5cge9a00092sj8s2deye3c` ✓ |
+| PATCH /api/templates/:id `{active: false}` → analyze immediately | `fallback` | `null` ✓ |
+| AuditEvent `sales_prompt.fallback` записан | reason=`inactive`, bodyLen=4173 ✓ | |
+| PATCH `{active: true}` → analyze immediately | `db` | `cmp5cge9a00092sj8s2deye3c` ✓ |
+
+Super-admin может менять, выключать, восстанавливать template (Sprint 32 versioning) → AI отвечает по новому prompt'у с **следующего запроса**. Деплой не нужен.
+
+### Что осталось не сделано (вне Sprint 34Б.2 scope)
+
+- **Prompt versioning UI** в шаблонах — Sprint 32 уже даёт `/api/prompts/:projectId/:kind/versions` для project-scoped prompts. Для `PromptTemplate` (system templates) аналог пока отсутствует. Если super-admin сделает «плохой» prompt — откатить можно только через DB.
+- **Provider/model из template** — поля `provider`, `model` уже есть в PromptTemplate row (Sprint 15 orchestration), но `analyzeSalesTurn` всё ещё использует `feature: 'sales_assistant.analyze'` и берёт provider из env. Если хотим управлять моделью через шаблон — отдельная задача.
+
+### Verification
+
+- [x] Both `tsc --noEmit` clean
+- [x] `npm run build` OK
+- [x] Local: template fetch + fallback + audit + dynamic toggle all working
+- [x] Audit event payload содержит reason / active / bodyLen — диагностируется в `/admin/audit`
 
 ---
 

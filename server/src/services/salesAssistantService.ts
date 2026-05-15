@@ -2,6 +2,57 @@ import { prisma } from '../db.js';
 import { aiClient } from '../ai/client.js';
 import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js';
 
+// Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
+// `analyzeSalesTurn` теперь читает активный template `sales_gpt` из БД и
+// использует его body как system-prompt. Если template отсутствует / выключен /
+// пустой — громко в лог + AuditEvent + fallback на hardcoded SALES_ASSISTANT_SYSTEM.
+// Это превращает prompt из «часть кода» в «настройку суперадмина без redeploy».
+const SALES_PROMPT_TEMPLATE_KEY = 'sales_gpt';
+
+export type SalesPromptSource = 'db' | 'fallback';
+
+async function resolveSalesPrompt(): Promise<{ system: string; source: SalesPromptSource; templateId: string | null }> {
+  try {
+    // Sprint 34Б.2 — findFirst без active filter, чтобы различать «нет
+    // template вообще» vs «template есть, но выключен».
+    const tpl = await prisma.promptTemplate.findFirst({
+      where: { key: SALES_PROMPT_TEMPLATE_KEY },
+    });
+    if (tpl && tpl.active && tpl.body && tpl.body.trim().length > 200) {
+      return { system: tpl.body, source: 'db', templateId: tpl.id };
+    }
+    const reason = !tpl
+      ? 'not_found'
+      : !tpl.active
+        ? 'inactive'
+        : (tpl.body?.trim().length ?? 0) <= 200
+          ? 'body_too_short'
+          : 'unknown';
+    console.warn(
+      `[sales-assistant] template "${SALES_PROMPT_TEMPLATE_KEY}" not usable (reason=${reason}) — ` +
+      `falling back to hardcoded SALES_ASSISTANT_SYSTEM. ` +
+      `Edit template via super-admin → /templates to control prompt without redeploy.`,
+    );
+    await prisma.auditEvent.create({
+      data: {
+        action: 'sales_prompt.fallback',
+        targetType: 'PromptTemplate',
+        targetId: tpl?.id ?? null,
+        payload: JSON.stringify({
+          key: SALES_PROMPT_TEMPLATE_KEY,
+          reason,
+          active: tpl?.active ?? null,
+          bodyLen: tpl?.body?.length ?? 0,
+        }),
+      },
+    }).catch((err) => console.warn('[sales-assistant] audit write failed:', err));
+    return { system: SALES_ASSISTANT_SYSTEM, source: 'fallback', templateId: null };
+  } catch (err) {
+    console.warn(`[sales-assistant] template fetch failed, using hardcoded fallback:`, err);
+    return { system: SALES_ASSISTANT_SYSTEM, source: 'fallback', templateId: null };
+  }
+}
+
 export interface AnalyzeInput {
   transcript: string;       // полный transcript встречи на момент ручного обновления
   recentContext?: string;   // последние N символов разговора
@@ -69,9 +120,14 @@ export interface AssistantCard {
   provider: 'anthropic' | 'openai' | 'mock';
   model: string;
   fellBackToMock: boolean;
+  // Sprint 34Б.2 — откуда пришёл system-prompt:
+  //   'db'       — активный template `sales_gpt` из суперадминки
+  //   'fallback' — hardcoded SALES_ASSISTANT_SYSTEM (template отсутствует/выключен)
+  promptSource: SalesPromptSource;
+  promptTemplateId: string | null;
 }
 
-type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock'>;
+type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock' | 'promptSource' | 'promptTemplateId'>;
 
 const SALES_ASSISTANT_RESPONSE_SCHEMA = {
   type: 'object',
@@ -143,6 +199,10 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const adviceHistory = formatAdviceHistory(input.adviceHistory);
+  // Sprint 34Б.2 — system-prompt теперь из template `sales_gpt`. Изменения
+  // в админке отражаются на следующем запросе AI, без deploy.
+  const promptDecision = await resolveSalesPrompt();
+  console.log(`[sales-assistant] prompt source=${promptDecision.source} templateId=${promptDecision.templateId ?? 'none'}`);
 
   const user = [
     'Режим работы: live AI co-pilot переговоров с инвестором. Это НЕ summary встречи.',
@@ -179,7 +239,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   ].join('\n');
 
   const ai = await aiClient.generateJson({
-    system: SALES_ASSISTANT_SYSTEM,
+    system: promptDecision.system,
     user,
     feature: 'sales_assistant.analyze',
     modelRoute: 'main',
@@ -202,7 +262,15 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
 
   if (!parsed || !parsed.situation || !parsed.mainQuestion) {
     const card = heuristicCard(input);
-    return { ...card, source: 'mock', provider: ai.provider, model: ai.model, fellBackToMock: true };
+    return {
+      ...card,
+      source: 'mock',
+      provider: ai.provider,
+      model: ai.model,
+      fellBackToMock: true,
+      promptSource: promptDecision.source,
+      promptTemplateId: promptDecision.templateId,
+    };
   }
 
   const stage = normalizeStage(parsed.spinStage);
@@ -270,6 +338,8 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     provider: ai.provider,
     model: ai.model,
     fellBackToMock: ai.fellBackToMock,
+    promptSource: promptDecision.source,
+    promptTemplateId: promptDecision.templateId,
   };
 }
 
