@@ -119,6 +119,7 @@ model Project {
   conversationAnalyses ConversationAnalysis[]
   packagingJobs        PackagingJob[]
   briefVersions        ProjectBriefVersion[]
+  knowledgeSources     KnowledgeSource[]
 }
 
 model UploadedFile {
@@ -470,4 +471,84 @@ model ReferenceMaterial {
   filePath  String?
   note      String?
   createdAt DateTime @default(now())
+}
+
+// Sprint 38 — Knowledge Base для AI-продаж инвесторам.
+//
+// AI-ассистент должен опираться не только на prompt, но и на накопленные
+// успехи команды: разборы встреч, кейсы, скрипты, объекции, follow-up'ы,
+// инвест-презентации. MVP: SQLite + keyword retrieval, без vector DB.
+// Embeddings и semantic search готовятся архитектурно (см. Sprint 38 P2),
+// но не реализованы.
+//
+// Изоляция:
+//   • global KB видна всем; chunks ОБЯЗАНЫ быть redacted на ingest.
+//   • project KB видна только в контексте этого projectId.
+//   • visibility=internal — только manager/admin/super_admin
+//   • visibility=client_safe — founder тоже может видеть source title
+//   • text snippet самого chunk'а founder НЕ видит никогда (только title)
+//
+// scope = 'global' | 'project'
+// sourceType = см. Sprint 38 P1 taxonomy: successful_sale | failed_sale |
+//              objection | qualification | follow_up | legal_question |
+//              financial_question | project_presentation | deal_case |
+//              manager_script | messenger_thread | meeting_recording | other
+// status = 'draft' | 'published' | 'disabled'
+// visibility = 'internal' | 'client_safe'
+model KnowledgeSource {
+  id                     String   @id @default(cuid())
+  scope                  String   // 'global' | 'project'
+  projectId              String?
+  project                Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title                  String
+  sourceType             String   // taxonomy enum (см. комментарий выше)
+  status                 String   @default("draft") // draft / published / disabled
+  visibility             String   @default("internal") // internal / client_safe
+
+  // Source backlinks — какой именно UploadedFile / Analysis / Session породил
+  // эту запись. Удобно для preview в админке и для аудита «откуда».
+  uploadedFileId         String?
+  conversationAnalysisId String?
+  salesSessionId         String?
+
+  tagsJson               String?  // JSON array<string>: ['hot_lead', 'real_estate', …]
+  summary                String?  // короткое safe-summary для founder UI
+
+  createdById            String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  archivedAt             DateTime?
+
+  chunks                 KnowledgeChunk[]
+
+  @@index([scope, status])
+  @@index([projectId, status])
+  @@index([sourceType, status])
+  @@index([createdAt])
+}
+
+// Chunked текст source'а. Размер ~800-1200 символов на chunk (см.
+// knowledgeService.chunkText). На retrieve мы скорим chunks по keywords
+// из transcript'а, забираем top-N. tagsJson наследуется от source, можно
+// и переопределить per-chunk (для future таггирования).
+model KnowledgeChunk {
+  id            String   @id @default(cuid())
+  sourceId      String
+  source        KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  // projectId копируется из source для быстрых индексов и WHERE-фильтров.
+  // Чтобы запрос «retrieve для project X» работал одним index hit'ом, без
+  // JOIN'а на KnowledgeSource.
+  projectId     String?
+
+  chunkIndex    Int       // 0-based
+  text          String    // сырой текст для manager/admin
+  redactedText  String?   // phones/urls/emails замаскированы — для founder UI
+  tokenEstimate Int       // примерно text.length / 4 — на момент ingest
+
+  tagsJson      String?
+  createdAt     DateTime  @default(now())
+
+  @@index([sourceId, chunkIndex])
+  @@index([projectId])
 }

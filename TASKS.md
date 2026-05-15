@@ -355,7 +355,151 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 37: auth-downloads + audit on sensitive reads + INVESTOR hardening)_
+_(empty — Sprint 38: Knowledge Base v1 landed)_
+
+---
+
+## Sprint 38 — 2026-05-15 — Knowledge Base для AI-продаж инвесторам
+
+Theme: **AI-ассистент перестаёт быть «просто prompt'ом» и становится AI-памятью команды продаж ZAPUSK.** Подсказки опираются на накопленные кейсы успешных продаж, разборы встреч, objections, follow-up'ы и инвест-материалы. MVP без vector DB: SQLite + chunks + keyword retrieval; embeddings и semantic search архитектурно подготовлены, но не реализованы.
+
+### P0 — Schema
+
+- **`server/prisma/schema.prisma`** — добавлены 2 модели:
+  - `KnowledgeSource` (scope global/project, status draft/published/disabled, visibility internal/client_safe, sourceType из P1 taxonomy, FK на UploadedFile / ConversationAnalysis / SalesSession, soft-delete через archivedAt).
+  - `KnowledgeChunk` (sourceId, projectId-копия для быстрых индексов, chunkIndex, text, redactedText, tokenEstimate, tagsJson).
+  - Индексы по (scope,status), (projectId,status), (sourceType,status), createdAt + (sourceId,chunkIndex), projectId.
+- Миграция: [migrations/20260515153000_sprint38_knowledge_base/migration.sql](server/prisma/migrations/20260515153000_sprint38_knowledge_base/migration.sql) — применяется в prod через `prisma migrate deploy` на startup (`start:prod` уже зовёт его).
+
+### P0 — Ingestion
+
+- **Новый `server/src/services/knowledgeService.ts`** — единая точка ingest + retrieve + redact + formatForPrompt + formatForUi.
+- `ingestKnowledgeSource(input)` принимает rawText / uploadedFileId / conversationAnalysisId / salesSessionId / generatedDocumentId.
+  - UploadedFile → проходит через существующий `fileParser.extractFromUploadedFile` (PDF/DOCX/XLSX/TXT, до 30k chars).
+  - ConversationAnalysis → склейка `investorName + spinStage + sentiment + analysis JSON + transcript`.
+  - SalesSession → склейка `summary + investorInterest + checkRange + objections + materialsToSend + nextStep + followUpMessage + managerNote + transcript`.
+  - GeneratedDocument → `title + body`.
+  - Минимальный порог 40 символов сырого текста, иначе `knowledge_source_text_too_short`.
+- `chunkText(raw)` — paragraph-aware алгоритм: разбиение по абзацам, target 800–1200 chars, для длинных абзацев — fallback на sentence split, для аномального OCR-мусора — hard slice. Cap 200 chunks на source.
+
+### P0 — Retrieval (без vector DB)
+
+- `retrieveKnowledgeForTranscript(transcript, { projectId, role, topN })`:
+  - Извлекает ключевые слова (lowercase, 4+ chars, без стоп-слов RU+EN, top-40 по частоте).
+  - Загружает published + неархивированные chunks с filter'ом `scope='global' OR (scope='project' AND projectId=options.projectId)` + visibility-фильтром по роли.
+  - Скорит каждый chunk: `hits / sqrt(chunkLength)` — лёгкий TF-IDF.
+  - Группирует по source, берёт top-1 chunk на source, возвращает top-N source'ов.
+- В контексте Sprint 38 P0 Security: **никогда не смешиваются chunks из чужих проектов** — WHERE-фильтр гарантирует это.
+
+### P0 — AI Integration
+
+- **`server/src/services/salesAssistantService.ts`**:
+  - `AnalyzeInput.actorRole` — новое опциональное поле, route прокидывает `getActorRole(req)`.
+  - `AssistantCard.usedKnowledgeSources: UsedKnowledgeSource[]` + `FastAssistantCard.usedKnowledgeSources: UsedKnowledgeSource[]` — оба ответа возвращают список использованных source'ов.
+  - В обоих функциях (`analyzeSalesTurn`, `analyzeSalesTurnFast`) после `projectContext` инжектируется блок:
+    ```
+    Релевантный опыт ZAPUSK (используй как контекст, не цитируй дословно):
+    [1] <title> (тип: <sourceType>, scope: <scope>)
+       Краткое: <summary>
+       Фрагмент: <snippet 0-800 chars>
+    [2] …
+    ```
+  - Для `analyze-fast` берём topN=3 (бюджет токенов), для полного `/analyze` topN=5.
+  - Если KB пустая или нет совпадений по keywords — блок не появляется в prompt; AI работает как раньше.
+- **`server/src/routes/salesAssistant.ts`** — оба endpoint'а передают `actorRole: getActorRole(req)` в сервис.
+
+### P0 — Security
+
+- **Project isolation**: WHERE-фильтр в `retrieveKnowledgeForTranscript` пускает только `scope='global'` ИЛИ `scope='project' AND projectId=current`. Проверено на preview: secret KB для проекта A не появляется при запросе с projectId=B.
+- **Global KB redaction**: на ingest каждый chunk сохраняет два варианта — `text` (raw) и `redactedText` (телефоны→`[телефон]`, email→`[email]`, http(s)://→`[ссылка]`). NLP-детекция ФИО не делается (false-positive ratio слишком высокий) — рассчитываем на ручную проверку перед публикацией.
+- **Visibility**:
+  - `visibility='internal'` доступен только SUPER_ADMIN / ADMIN / MANAGER (см. `visibilityFor` в knowledgeService).
+  - `visibility='client_safe'` доступен FOUNDER'у тоже.
+  - INVESTOR заблокирован глобально на route-уровне через `requireNotInvestor()`.
+- **Snippet visibility**:
+  - Manager/Admin получают raw snippet в AI prompt + UI могут раскрыть.
+  - Founder получает redacted snippet в AI prompt; в UI `snippet: null` (видит только title + sourceType + summary). Проверено на preview.
+- **Audit**: ingest/update/archive пишут `knowledge.import_file` / `knowledge.import_analysis` / `knowledge.update` / `knowledge.archive`. **НЕ логируем**: текст chunk, transcript, prompt body, retrieval-запросы (по спеке).
+
+### P0 — KB API routes
+
+- **`server/src/routes/knowledge.ts`** + wired в `server/src/index.ts`:
+  - `GET /api/knowledge` — list. Founder видит только global+own_project, client_safe. Admin видит всё.
+  - `GET /api/knowledge/:id/preview` — preview chunks. Founder получает только redactedText; admin/manager — оба.
+  - `POST /api/knowledge/import-from-file` — admin/manager, новый source из UploadedFile.
+  - `POST /api/knowledge/import-from-analysis` — admin/manager, новый source из ConversationAnalysis или SalesSession (это кнопка «Добавить в базу знаний» из AI-разбора).
+  - `PATCH /api/knowledge/:id` — admin/manager, обновление status / visibility / sourceType / tags / summary / title.
+  - `DELETE /api/knowledge/:id` — admin/manager, soft-delete через archivedAt.
+
+### P1 — Taxonomy
+
+Тип source'а ограничен enum (zod + service):
+```
+successful_sale | failed_sale | objection | qualification | follow_up |
+legal_question | financial_question | project_presentation | deal_case |
+manager_script | messenger_thread | meeting_recording | other
+```
+
+### P1 — Assistant UI
+
+- **`web/src/pages/SalesAssistant.tsx`**:
+  - `FastCardShape` и `AssistantCard` получили `usedKnowledgeSources?: UsedKnowledgeSource[]`.
+  - Новый компонент `KnowledgeSourcesBlock` рендерится в action zone над «Главным вопросом сейчас»:
+    - Бейдж «Подсказка опирается на N похожих кейсов из базы ZAPUSK» (с русским склонением).
+    - Раскрывающий список source'ов: title + `sourceType · scope` + summary.
+    - Snippet (320 chars) — только если backend вернул `snippet !== null` (т.е. для admin/manager). Founder snippet не видит.
+  - Иконка `BookOpen` из lucide-react добавлена в imports.
+
+### P1 — Admin UI (deferred)
+
+Полноценный admin-раздел «База знаний AI-продаж» (список + загрузка + теги + draft/published + preview + enable/disable + ингест из AI-разбора одной кнопкой) **не реализован в Sprint 38**. API готов, фронт можно добавить отдельно без backend'а. См. Sprint 39 ниже.
+
+### P2 — Future-ready (architecture only)
+
+Подготовлено комментариями в knowledgeService.ts:
+- Embeddings: `KnowledgeChunk` готова к добавлению поля `embedding Bytes?` без поломки текущего keyword-flow.
+- Hybrid search: текущий `scoreChunkAgainstKeywords` легко заменяется на `0.5 * keyword + 0.5 * cosine(embedding)`.
+- Retrieval metrics: можно добавить новую модель `KnowledgeRetrievalEvent` (sourceId, transcriptHash, score, accepted?).
+- Learning loop: founder bookmarks helpful sources → boost их score'а в будущих retrieval'ах.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-DLlH7XZT.js`.
+- **Preview end-to-end**:
+  - Admin загружает текстовый файл с кейсом успешной продажи → import-from-file → 1 chunk (732 chars). 
+  - analyze-fast с матчинговым transcript → 200, возвращает 1 source с `hasSnippet: true`, mainQuestion адаптируется к контексту кейса.
+  - PATCH visibility=client_safe → FOUNDER calls analyze-fast → 200, тот же source, но `snippet: null` (только title видит).
+  - Project isolation: создаём project A + project B; ingest СЕКРЕТНЫЙ source в scope='project' projectId=A → analyze-fast с projectId=B **не возвращает** A-source (`bSecretLeaked: false`); analyze-fast с projectId=A **возвращает** (`aSecretFound: true`).
+  - 0 console errors.
+
+### Какие проверки прошли
+
+| Проверка | Результат |
+|---|---|
+| Founder project A не получает snippets project B | ✓ изоляция проверена |
+| Retrieval реально влияет на AI-подсказки | ✓ mainQuestion адаптировался под кейс |
+| AI Assistant возвращает source titles | ✓ `usedKnowledgeSources[]` в ответе |
+| Founder не видит internal snippets | ✓ snippet=null на founder-role |
+| Manager/Admin видят snippets | ✓ snippet заполнен на admin-role |
+| AI работает если KB пустая | ✓ блок не появляется в prompt, ответ как раньше |
+| Build/typecheck clean | ✓ оба tsc pass, vite build clean |
+
+### Файлы (8)
+
+- Server: `prisma/schema.prisma`, `prisma/migrations/20260515153000_sprint38_knowledge_base/migration.sql` (new), `services/knowledgeService.ts` (new), `services/salesAssistantService.ts`, `routes/salesAssistant.ts`, `routes/knowledge.ts` (new), `index.ts`.
+- Web: `pages/SalesAssistant.tsx`.
+
+### Что осталось на Sprint 39
+
+- **Admin UI** — раздел «База знаний AI-продаж» в AdminDashboard: список source'ов с фильтрами scope/status/sourceType, формы добавления (upload + теги + scope + draft/published), preview chunks, drafts → published. API уже готов.
+- **CTA «Добавить в базу знаний»** в ConversationAnalysis / SalesAssistant cards — отдельная задача (одна кнопка → POST /import-from-analysis с pre-filled полями).
+- **Demo-assets review** — наследуется из Sprint 37 P1 (~200MB файлов клиентов).
+- **Embeddings + hybrid search** — когда KB накопит >1000 source'ов и keyword retrieval начнёт промахиваться.
+- **Retrieval metrics** — отдельная модель + dashboard «какие source'ы AI чаще всего использует».
+- **Manager assignment schema** — наследуется из Sprint 37 (Project.managerId или ProjectAssignment).
+- **Backend AbortSignal проксинг** — наследуется из Hotfix 2026-05-15.
 
 ---
 

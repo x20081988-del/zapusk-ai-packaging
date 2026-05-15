@@ -1,6 +1,11 @@
 import { prisma } from '../db.js';
 import { aiClient } from '../ai/client.js';
 import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js';
+import {
+  retrieveKnowledgeForTranscript,
+  formatKnowledgeForPrompt,
+  formatKnowledgeForUi,
+} from './knowledgeService.js';
 
 // Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
 // `analyzeSalesTurn` теперь читает активный template `sales_gpt` из БД и
@@ -60,6 +65,22 @@ export interface AnalyzeInput {
   previousSpinStage?: SpinStage | null;
   adviceHistory?: unknown[];
   projectId?: string | null;
+  // Sprint 38 — роль актора нужна для KB retrieval (visibility-фильтр,
+  // raw vs redacted snippet). Передаётся route'ом из getActorRole(req).
+  actorRole?: string;
+}
+
+// Sprint 38 — KB-источники, использованные в AI-подсказке. Возвращаем их
+// в response, чтобы фронт мог нарисовать бейдж «опирается на N кейсов» и
+// (для admin/manager) раскрыть snippets. Для founder фронт получает только
+// title + sourceType + summary; raw snippet — null.
+export interface UsedKnowledgeSource {
+  sourceId: string;
+  title: string;
+  sourceType: string;
+  scope: 'global' | 'project';
+  summary: string | null;
+  snippet: string | null;
 }
 
 export type SpinStage = 'S' | 'P' | 'I' | 'N';
@@ -125,9 +146,12 @@ export interface AssistantCard {
   //   'fallback' — hardcoded SALES_ASSISTANT_SYSTEM (template отсутствует/выключен)
   promptSource: SalesPromptSource;
   promptTemplateId: string | null;
+  // Sprint 38 — KB-источники, использованные при построении этой подсказки.
+  // Founder получает только title+sourceType+summary; admin/manager — также snippet.
+  usedKnowledgeSources: UsedKnowledgeSource[];
 }
 
-type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock' | 'promptSource' | 'promptTemplateId'>;
+type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock' | 'promptSource' | 'promptTemplateId' | 'usedKnowledgeSources'>;
 
 const SALES_ASSISTANT_RESPONSE_SCHEMA = {
   type: 'object',
@@ -204,6 +228,22 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   const promptDecision = await resolveSalesPrompt();
   console.log(`[sales-assistant] prompt source=${promptDecision.source} templateId=${promptDecision.templateId ?? 'none'}`);
 
+  // Sprint 38 — Knowledge Base retrieval. Подмешиваем релевантный опыт ZAPUSK
+  // в prompt: успешные продажи, objections, follow-up, кейсы. Project isolation
+  // и role-based visibility гарантируются knowledgeService.
+  // Retrieval не падает при пустой KB — просто возвращает sources=[] и
+  // блок «Релевантный опыт» в prompt не появляется.
+  const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
+    projectId: input.projectId ?? null,
+    role: input.actorRole ?? 'FOUNDER',
+    topN: 5,
+  });
+  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER');
+  const knowledgeForUi = formatKnowledgeForUi(knowledge, input.actorRole ?? 'FOUNDER');
+  if (knowledge.sources.length > 0) {
+    console.log(`[sales-assistant] kb sources=${knowledge.sources.length} scanned=${knowledge.totalChunksScanned}`);
+  }
+
   const user = [
     'Режим работы: live AI co-pilot переговоров с инвестором. Это НЕ summary встречи.',
     'Сформируй structured mini-brief для текущего момента. Каждый блок 1-3 строки, не больше.',
@@ -212,6 +252,12 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     'Контекст проекта:',
     projectContext,
     '',
+    // Sprint 38 — knowledge block. Вставляется ПОСЛЕ project context и ПЕРЕД
+    // SPIN-history, чтобы AI «знал» команду до того, как смотрит на текущий
+    // разговор. Если KB пустая — блок пропускается.
+    ...(knowledgeBlock
+      ? ['Релевантный опыт ZAPUSK (используй как контекст, не цитируй дословно):', knowledgeBlock, '']
+      : []),
     input.previousSpinStage ? `Предыдущий SPIN-этап: ${input.previousSpinStage}` : 'Предыдущий SPIN-этап: не задан',
     '',
     previousAdvice ? `Предыдущая подсказка, которую нельзя просто повторить:\n${previousAdvice}` : 'Предыдущая подсказка: нет',
@@ -270,6 +316,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
       fellBackToMock: true,
       promptSource: promptDecision.source,
       promptTemplateId: promptDecision.templateId,
+      usedKnowledgeSources: knowledgeForUi,
     };
   }
 
@@ -340,6 +387,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     fellBackToMock: ai.fellBackToMock,
     promptSource: promptDecision.source,
     promptTemplateId: promptDecision.templateId,
+    usedKnowledgeSources: knowledgeForUi,
   };
 }
 
@@ -359,6 +407,8 @@ export interface FastAssistantCard {
   fellBackToMock: boolean;
   promptSource: SalesPromptSource;
   promptTemplateId: string | null;
+  // Sprint 38 — KB-источники (см. AssistantCard).
+  usedKnowledgeSources: UsedKnowledgeSource[];
 }
 
 const SALES_FAST_RESPONSE_SCHEMA = {
@@ -380,6 +430,18 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const promptDecision = await resolveSalesPrompt();
   console.log(`[sales-assistant:fast] prompt source=${promptDecision.source}`);
 
+  // Sprint 38 — KB retrieval и для fast endpoint. На fast мы УЖЕ ограничены
+  // 8s timeout'ом, поэтому keyword-retrieval (без AI-вызова) подходит идеально:
+  // 100-200ms максимум, дальше уходит токеновый бюджет в OpenAI. Маленький
+  // topN (3) чтобы prompt не разрастался.
+  const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
+    projectId: input.projectId ?? null,
+    role: input.actorRole ?? 'FOUNDER',
+    topN: 3,
+  });
+  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER');
+  const knowledgeForUi = formatKnowledgeForUi(knowledge, input.actorRole ?? 'FOUNDER');
+
   const user = [
     'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ТАКТИЧЕСКАЯ ПОДСКАЗКА. Live AI co-pilot переговоров.',
     'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
@@ -388,6 +450,9 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     'Контекст проекта:',
     projectContext,
     '',
+    ...(knowledgeBlock
+      ? ['Релевантный опыт ZAPUSK (используй как контекст, не цитируй дословно):', knowledgeBlock, '']
+      : []),
     input.previousSpinStage ? `Предыдущий SPIN-этап: ${input.previousSpinStage}` : 'Предыдущий SPIN-этап: не задан',
     '',
     previousAdvice ? `Предыдущая подсказка:\n${previousAdvice}` : 'Предыдущая подсказка: нет',
@@ -442,6 +507,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     fellBackToMock: ai.fellBackToMock || !parsed?.mainQuestion,
     promptSource: promptDecision.source,
     promptTemplateId: promptDecision.templateId,
+    usedKnowledgeSources: knowledgeForUi,
   };
 }
 

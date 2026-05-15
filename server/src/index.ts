@@ -20,6 +20,7 @@ import { salesAssistantRoutes } from './routes/salesAssistant.js';
 import { salesSessionsRoutes } from './routes/salesSessions.js';
 import { conversationAnalysisRoutes } from './routes/conversationAnalysis.js';
 import { aiLeadsRoutes } from './routes/aiLeads.js';
+import { knowledgeRoutes } from './routes/knowledge.js';
 import { managerRoutes } from './routes/manager.js';
 
 const app = express();
@@ -128,6 +129,9 @@ app.use('/api/sales-assistant', salesAssistantRoutes);
 app.use('/api/sales-sessions', salesSessionsRoutes);
 app.use('/api/conversation-analysis', conversationAnalysisRoutes);
 app.use('/api/ai-leads', aiLeadsRoutes);
+// Sprint 38 — Knowledge Base. AI-ассистент использует KB для retrieval,
+// admin/manager управляют source'ами через REST.
+app.use('/api/knowledge', knowledgeRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

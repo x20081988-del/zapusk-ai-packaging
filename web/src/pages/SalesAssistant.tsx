@@ -5,7 +5,7 @@ import {
   Activity, ChevronRight, RefreshCw, Save, CheckCircle2, Upload,
   Compass, ShieldAlert, HelpCircle, Megaphone, Ban, Gauge, Zap,
   HeartHandshake, Brain, Thermometer, TrendingUp, TrendingDown, Minus,
-  HeartCrack, Wand2, UserRound,
+  HeartCrack, Wand2, UserRound, BookOpen,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -87,6 +87,20 @@ interface AssistantCard {
   //   'fallback' — hardcoded prompt из кода (template отсутствует / выключен)
   promptSource?: 'db' | 'fallback';
   promptTemplateId?: string | null;
+  // Sprint 38 — KB-источники, использованные в подсказке. Founder получает
+  // только title + sourceType + summary; admin/manager — также snippet.
+  usedKnowledgeSources?: UsedKnowledgeSource[];
+}
+
+// Sprint 38 — KB-источник, использованный AI-подсказкой.
+export interface UsedKnowledgeSource {
+  sourceId: string;
+  title: string;
+  sourceType: string;
+  scope: 'global' | 'project';
+  summary: string | null;
+  // Null для founder, заполнен для admin/manager.
+  snippet: string | null;
 }
 
 // Sprint 34В — fast тактический ответ (этап 1 двухэтапной генерации).
@@ -104,6 +118,8 @@ interface FastCardShape {
   fellBackToMock: boolean;
   promptSource?: 'db' | 'fallback';
   promptTemplateId?: string | null;
+  // Sprint 38 — KB-источники в fast-ответе тоже.
+  usedKnowledgeSources?: UsedKnowledgeSource[];
 }
 
 type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
@@ -1014,6 +1030,11 @@ function AdviceCard({
       </div>
       <div className="text-[11px] text-muted mb-4">{STAGE_HINT[action.spinStage]}</div>
 
+      {/* Sprint 38 — KB-источники, использованные AI-подсказкой. Бейдж сверху,
+          раскрытие snippets — только для admin/manager. Founder видит только
+          titles + summary (sensitive content скрыт). */}
+      <KnowledgeSourcesBlock sources={card?.usedKnowledgeSources ?? fastCard?.usedKnowledgeSources ?? []} />
+
       {/* Sprint 34В — ГЛАВНАЯ ЗОНА ДЕЙСТВИЯ. Использует action (fastCard или card).
           Рендерится сразу после ultra-fast этапа — фаундер получает реплику
           через 1-3 секунды, не дожидаясь полной аналитики. */}
@@ -1322,4 +1343,58 @@ function SectionLabel({ icon, children }: { icon: React.ReactNode; children: Rea
       {children}
     </div>
   );
+}
+
+// Sprint 38 — бейдж «Подсказка опирается на N кейсов» + раскрываемый список
+// source'ов. Founder видит title + sourceType + summary; admin/manager видят
+// также text snippet (raw). Snippet null для founder обеспечен на backend'е.
+function KnowledgeSourcesBlock({ sources }: { sources: UsedKnowledgeSource[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!sources || sources.length === 0) return null;
+  // Если у первого source есть snippet — значит роль раскрывающая (admin/manager).
+  const showSnippets = sources.some((s) => Boolean(s.snippet));
+  return (
+    <div className="mb-3 rounded-md border border-ai/30 bg-ai/8 px-3 py-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 text-left"
+      >
+        <span className="flex items-center gap-1.5 text-[12px] text-primary">
+          <BookOpen size={13} className="text-ai-glow" />
+          <span>
+            Подсказка опирается на <span className="font-semibold">{sources.length}</span>{' '}
+            {plural(sources.length, 'похожий кейс', 'похожих кейса', 'похожих кейсов')} из базы ZAPUSK
+          </span>
+        </span>
+        <span className="text-[10px] text-muted">{expanded ? 'скрыть' : 'раскрыть'}</span>
+      </button>
+      {expanded && (
+        <ul className="mt-2 space-y-2">
+          {sources.map((s) => (
+            <li key={s.sourceId} className="border-l-2 border-ai/40 pl-3">
+              <div className="text-[12.5px] text-primary font-medium">{s.title}</div>
+              <div className="text-[10px] uppercase tracking-[0.08em] text-muted mt-0.5">
+                {s.sourceType} · {s.scope === 'global' ? 'глобальный' : 'проект'}
+              </div>
+              {s.summary && <div className="text-[12px] text-secondary mt-1 leading-snug">{s.summary}</div>}
+              {showSnippets && s.snippet && (
+                <div className="mt-1.5 text-[11.5px] text-muted leading-snug border-l border-line pl-2 whitespace-pre-wrap">
+                  {s.snippet.length > 320 ? `${s.snippet.slice(0, 320)}…` : s.snippet}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
 }

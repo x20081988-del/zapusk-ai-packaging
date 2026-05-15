@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware } from '../auth.js';
-import { assertProjectOwnership, requireNotInvestor } from '../lib/ownership.js';
+import { assertProjectOwnership, getActorRole, requireNotInvestor } from '../lib/ownership.js';
 import { analyzeSalesTurn, analyzeSalesTurnFast } from '../services/salesAssistantService.js';
 
 export const salesAssistantRoutes = Router();
@@ -40,6 +40,8 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
       previousSpinStage: parsed.data.previousSpinStage ?? undefined,
       adviceHistory: parsed.data.adviceHistory ?? undefined,
       projectId: parsed.data.projectId ?? null,
+      // Sprint 38 — роль нужна для KB retrieval (visibility + raw vs redacted).
+      actorRole: getActorRole(req),
     });
     res.json({ card });
   } catch (err) {
@@ -70,6 +72,8 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
       previousSpinStage: parsed.data.previousSpinStage ?? undefined,
       adviceHistory: parsed.data.adviceHistory ?? undefined,
       projectId: parsed.data.projectId ?? null,
+      // Sprint 38 — то же что и в /analyze.
+      actorRole: getActorRole(req),
     });
     res.json({ fast });
   } catch (err) {
