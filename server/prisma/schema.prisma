@@ -515,6 +515,53 @@ model KnowledgeSource {
   tagsJson               String?  // JSON array<string>: ['hot_lead', 'real_estate', …]
   summary                String?  // короткое safe-summary для founder UI
 
+  // Sprint 40 — Candidate / quality control flow.
+  //
+  // База знаний не должна превращаться в склад мусора. Auto-capture'ы (из
+  // ConversationAnalysis / SalesSession) попадают сюда как isCandidate=true
+  // с status='draft' и qualityScore от 0 до 100. Manager или admin вручную
+  // подтверждает (publish) или отклоняет (disable + reason).
+  //
+  //   • isCandidate=true  → авто-созданный, ждёт ручной проверки, НЕ участвует
+  //                          в retrieval даже при status='published'.
+  //   • isCandidate=false → проверенный человеком, может попасть в retrieval
+  //                          если status='published'.
+  isCandidate            Boolean  @default(false)
+  qualityScore           Int?     // 0..100, эвристическая оценка ценности (см. captureCandidate*)
+  qualityReasonJson      String?  // JSON array<string>: ['probabilityScore=78', 'has_objections', …]
+
+  // Sprint 40 — дедупликация. На ingest вычисляем sha256 от нормализованного
+  // текста. Если source с таким же contentHash уже существует (не архивированный) —
+  // не создаём дубль, возвращаем existing. Защищает KB от повторной загрузки
+  // того же файла, повторного capture той же встречи.
+  contentHash            String?
+
+  // Sprint 40 — provenance. Откуда source появился: 'manual_note' / 'file_upload' /
+  // 'auto_capture_analysis' / 'auto_capture_session' / 'import_from_analysis' /
+  // 'import_from_file'. originId — внешний reference, например conversationAnalysisId.
+  originType             String?
+  originId               String?
+
+  // Sprint 40 — verification. Заполняется когда manager/admin нажимает
+  // «Подтвердить и опубликовать» (или просто публикует draft вручную).
+  verifiedById           String?
+  verifiedAt             DateTime?
+  publishedAt            DateTime?
+  disabledReason         String?  // причина отключения (показывается в админке)
+
+  // Sprint 40 — retrieval-метрики. Каждый retrieval, который попадает в AI prompt,
+  // инкрементирует retrievalCount и обновляет lastRetrievedAt. Используется
+  // для UI «какие источники AI чаще всего использует» и для бонуса в scoring
+  // (свежие активно используемые источники чуть выше).
+  lastRetrievedAt        DateTime?
+  retrievalCount         Int      @default(0)
+
+  // Sprint 40 P1 — environment. Разделение production / demo / synthetic данных.
+  // production — реальные клиентские кейсы, не для demo workspace.
+  // demo       — глобальные кейсы Главснаб/Luce Silva, для demo workspace.
+  // synthetic  — публичные обезличенные примеры, безопасны для всех.
+  environment            String   @default("production") // production / demo / synthetic
+
   createdById            String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -526,6 +573,10 @@ model KnowledgeSource {
   @@index([projectId, status])
   @@index([sourceType, status])
   @@index([createdAt])
+  // Sprint 40 — индексы для candidate-flow и dedupe lookup'а.
+  @@index([isCandidate, status])
+  @@index([contentHash])
+  @@index([environment, status])
 }
 
 // Chunked текст source'а. Размер ~800-1200 символов на chunk (см.

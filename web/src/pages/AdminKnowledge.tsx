@@ -46,6 +46,15 @@ const SOURCE_TYPE_LABELS: Record<string, string> = Object.fromEntries(
   SOURCE_TYPES.map((t) => [t.value, t.label]),
 );
 
+// Sprint 40 — Russian plural agreement: 1 кандидат / 2-4 кандидата / 5+ кандидатов.
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
 interface KbSource {
   id: string;
   scope: 'global' | 'project';
@@ -59,6 +68,17 @@ interface KbSource {
   chunkCount: number;
   createdAt: string;
   updatedAt: string;
+  // Sprint 40
+  isCandidate?: boolean;
+  qualityScore?: number | null;
+  qualityReasons?: string[];
+  originType?: string | null;
+  environment?: 'production' | 'demo' | 'synthetic';
+  verifiedAt?: string | null;
+  publishedAt?: string | null;
+  disabledReason?: string | null;
+  retrievalCount?: number;
+  lastRetrievedAt?: string | null;
 }
 
 interface KbChunkPreview {
@@ -97,6 +117,9 @@ export default function AdminKnowledge() {
   const [filterScope, setFilterScope] = useState<'all' | 'global' | 'project'>('all');
   const [filterType, setFilterType] = useState<'all' | string>('all');
   const [filterQuery, setFilterQuery] = useState('');
+  // Sprint 40 — candidate-flow filter. По умолчанию показываем кандидатов
+  // первыми (admin/manager должны их разобрать).
+  const [filterCandidate, setFilterCandidate] = useState<'all' | 'candidates' | 'verified'>('all');
   const [openSourceId, setOpenSourceId] = useState<string | null>(null);
   const [showNoteForm, setShowNoteForm] = useState(false);
   const [showUploadForm, setShowUploadForm] = useState(false);
@@ -124,6 +147,8 @@ export default function AdminKnowledge() {
       if (filterStatus !== 'all' && s.status !== filterStatus) return false;
       if (filterScope !== 'all' && s.scope !== filterScope) return false;
       if (filterType !== 'all' && s.sourceType !== filterType) return false;
+      if (filterCandidate === 'candidates' && !s.isCandidate) return false;
+      if (filterCandidate === 'verified' && s.isCandidate) return false;
       if (filterQuery) {
         const q = filterQuery.toLowerCase();
         const hay = `${s.title} ${s.summary ?? ''} ${(s.tags ?? []).join(' ')}`.toLowerCase();
@@ -131,7 +156,11 @@ export default function AdminKnowledge() {
       }
       return true;
     });
-  }, [sources, filterStatus, filterScope, filterType, filterQuery]);
+  }, [sources, filterStatus, filterScope, filterType, filterCandidate, filterQuery]);
+
+  // Sprint 40 — счётчик кандидатов в шапке: чтобы admin сразу видел сколько
+  // материалов ждут разбора.
+  const candidateCount = sources?.filter((s) => s.isCandidate).length ?? 0;
 
   return (
     <AppLayout
@@ -161,7 +190,33 @@ export default function AdminKnowledge() {
           }
         />
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        {/* Sprint 40 — заметная плашка «N кандидатов ждут разбора», если они
+            есть. Кликабельная — переключает фильтр сразу на candidates. */}
+        {candidateCount > 0 && (
+          <button
+            type="button"
+            className="w-full text-left mb-3 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 flex items-center justify-between hover:bg-warning/15 transition-colors"
+            onClick={() => setFilterCandidate('candidates')}
+          >
+            <span className="text-sm text-primary">
+              <span className="font-semibold">{candidateCount}</span> {plural(candidateCount, 'кандидат', 'кандидата', 'кандидатов')} ждут разбора —
+              auto-capture'нутых из встреч и анализов разговоров.
+            </span>
+            <span className="text-[11px] text-warning underline underline-offset-2">показать только кандидатов →</span>
+          </button>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+          <Select
+            label="Кандидаты"
+            value={filterCandidate}
+            onChange={(e) => setFilterCandidate(e.target.value as typeof filterCandidate)}
+            options={[
+              { value: 'all', label: 'Все' },
+              { value: 'candidates', label: 'Кандидаты (ждут разбора)' },
+              { value: 'verified', label: 'Проверенные' },
+            ]}
+          />
           <Select
             label="Статус"
             value={filterStatus}
@@ -256,7 +311,7 @@ export default function AdminKnowledge() {
 function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: () => void; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
 
-  async function patch(payload: Partial<{ status: KbSource['status']; visibility: KbSource['visibility'] }>) {
+  async function patch(payload: Record<string, unknown>) {
     setBusy(true);
     try {
       await api.patch(`/api/knowledge/${source.id}`, payload);
@@ -268,13 +323,20 @@ function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: ()
     }
   }
 
+  async function reject() {
+    const reason = window.prompt('Причина отключения (опционально):') ?? '';
+    await patch({ status: 'disabled', disabledReason: reason.trim() || null });
+  }
+
   const statusTone = source.status === 'published' ? 'success' : source.status === 'disabled' ? 'danger' : 'neutral';
   const statusLabel = source.status === 'published' ? 'Опубликовано' : source.status === 'disabled' ? 'Отключено' : 'Черновик';
   const scopeLabel = source.scope === 'global' ? 'Глобальная' : 'Проект';
   const visLabel = source.visibility === 'internal' ? 'Внутренняя' : 'Безопасная';
+  const envLabel = source.environment === 'demo' ? 'демо' : source.environment === 'synthetic' ? 'синтетика' : 'production';
+  const qualityTone = (source.qualityScore ?? 0) >= 70 ? 'success' : (source.qualityScore ?? 0) >= 40 ? 'warning' : 'neutral';
 
   return (
-    <div className="rounded-md border border-hairline bg-canvas/40 px-3 py-2.5 flex items-start gap-3 group">
+    <div className={`rounded-md border px-3 py-2.5 flex items-start gap-3 group ${source.isCandidate ? 'border-warning/30 bg-warning/5' : 'border-hairline bg-canvas/40'}`}>
       <button
         type="button"
         onClick={onOpen}
@@ -284,18 +346,41 @@ function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: ()
         <BookOpen size={13} className="text-ai-glow" />
       </button>
       <div className="flex-1 min-w-0">
-        <button type="button" onClick={onOpen} className="text-sm font-medium text-primary text-left hover:text-ai-glow transition-colors">
-          {source.title}
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button type="button" onClick={onOpen} className="text-sm font-medium text-primary text-left hover:text-ai-glow transition-colors">
+            {source.title}
+          </button>
+          {/* Sprint 40 — candidate badge на видном месте. */}
+          {source.isCandidate && <StatusBadge tone="warning" dot>Кандидат</StatusBadge>}
+          {typeof source.qualityScore === 'number' && (
+            <StatusBadge tone={qualityTone} dot>quality {source.qualityScore}</StatusBadge>
+          )}
+          {source.environment && source.environment !== 'production' && (
+            <StatusBadge tone="info" dot>{envLabel}</StatusBadge>
+          )}
+        </div>
         <div className="text-[11px] text-muted mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           <span>{SOURCE_TYPE_LABELS[source.sourceType] ?? source.sourceType}</span>
           <span>· {scopeLabel}</span>
           <span>· {visLabel}</span>
           <span>· {source.chunkCount} фрагм.</span>
           <span>· {new Date(source.createdAt).toLocaleDateString('ru-RU')}</span>
+          {source.originType && <span>· источник: {source.originType.replace(/_/g, ' ')}</span>}
+          {typeof source.retrievalCount === 'number' && source.retrievalCount > 0 && (
+            <span title="Сколько раз AI использовал этот source">· AI исп.: {source.retrievalCount}</span>
+          )}
         </div>
         {source.summary && (
           <div className="text-[12px] text-secondary mt-1 leading-snug line-clamp-2">{source.summary}</div>
+        )}
+        {(source.qualityReasons?.length ?? 0) > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {(source.qualityReasons ?? []).map((r) => (
+              <span key={r} className="text-[10px] px-1.5 py-0.5 rounded bg-warning/10 border border-warning/30 text-warning">
+                {r}
+              </span>
+            ))}
+          </div>
         )}
         {(source.tags?.length ?? 0) > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
@@ -306,17 +391,30 @@ function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: ()
             ))}
           </div>
         )}
+        {source.disabledReason && (
+          <div className="mt-1 text-[11px] text-danger leading-snug">
+            <span className="opacity-70">отключено:</span> {source.disabledReason}
+          </div>
+        )}
       </div>
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
         <StatusBadge tone={statusTone} dot>{statusLabel}</StatusBadge>
-        {source.status !== 'published' && (
+        {/* Sprint 40 — candidate-flow primary action: «Подтвердить и опубликовать».
+            Это PATCH status=published; backend сам выставит isCandidate=false +
+            verifiedAt + publishedAt + verifiedById. */}
+        {source.isCandidate && (
+          <Button size="sm" variant="primary" iconLeft={<CheckCircle2 size={12} />} loading={busy} onClick={() => patch({ status: 'published' })}>
+            Подтвердить
+          </Button>
+        )}
+        {!source.isCandidate && source.status !== 'published' && (
           <Button size="sm" variant="ghost" iconLeft={<CheckCircle2 size={12} />} loading={busy} onClick={() => patch({ status: 'published' })}>
             Опубликовать
           </Button>
         )}
         {source.status !== 'disabled' && (
-          <Button size="sm" variant="ghost" iconLeft={<EyeOff size={12} />} loading={busy} onClick={() => patch({ status: 'disabled' })}>
-            Отключить
+          <Button size="sm" variant="ghost" iconLeft={<EyeOff size={12} />} loading={busy} onClick={reject}>
+            {source.isCandidate ? 'Отклонить' : 'Отключить'}
           </Button>
         )}
         {source.status !== 'draft' && (

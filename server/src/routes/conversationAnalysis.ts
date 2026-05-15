@@ -5,6 +5,7 @@ import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
 import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
+import { captureCandidateFromConversationAnalysis } from '../services/knowledgeService.js';
 import {
   ingestConversation,
   listAnalyses,
@@ -51,6 +52,14 @@ conversationAnalysisRoutes.post('/', upload.single('file'), async (req, res) => 
       investorName,
     });
 
+    // Sprint 40 P0.3 — auto-capture candidate в KB. Fire-and-forget.
+    captureCandidateFromConversationAnalysis((result.row as { id: string }).id, getUser(req).id)
+      .then((r) => {
+        if (r.captured) console.log(`[conv-analysis/auto-capture] sourceId=${r.sourceId} duplicate=${r.duplicate ?? false}`);
+        else console.log(`[conv-analysis/auto-capture] skipped reason=${r.reason}`);
+      })
+      .catch((err) => console.warn('[conv-analysis/auto-capture] failed', err));
+
     res.status(201).json({ analysis: result.card, row: result.row });
   } catch (err) {
     if (err instanceof Error && err.message === 'transcript_too_short') {
@@ -82,6 +91,12 @@ conversationAnalysisRoutes.post('/text', async (req, res) => {
       projectId: parsed.data.projectId ?? null,
       investorName: parsed.data.investorName ?? null,
     });
+    // Sprint 40 P0.3 — auto-capture для /text endpoint тоже.
+    captureCandidateFromConversationAnalysis((result.row as { id: string }).id, getUser(req).id)
+      .then((r) => {
+        if (r.captured) console.log(`[conv-analysis/text auto-capture] sourceId=${r.sourceId}`);
+      })
+      .catch((err) => console.warn('[conv-analysis/text auto-capture] failed', err));
     res.status(201).json({ analysis: result.card, row: result.row });
   } catch (err) {
     console.error('[conversation-analysis/text]', err instanceof Error ? err.message : err);

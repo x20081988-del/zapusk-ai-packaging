@@ -4,6 +4,7 @@ import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
 import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
+import { captureCandidateFromSalesSession } from '../services/knowledgeService.js';
 import {
   completeSession,
   persistSession,
@@ -44,6 +45,22 @@ salesSessionsRoutes.post('/complete', async (req, res) => {
   try {
     const summary = await completeSession(input);
     const session = await persistSession(input, summary);
+
+    // Sprint 40 P0.3 — auto-capture candidate в KB. Fire-and-forget, не
+    // блокирует ответ. Quality gate внутри: если probability/tone/objections
+    // не дотягивают — capture не создаст source. isCandidate=true →
+    // retrieval его не получит, пока manager не подтвердит.
+    const user = getUser(req);
+    captureCandidateFromSalesSession(session.id, user.id)
+      .then((r) => {
+        if (r.captured) {
+          console.log(`[sales-sessions/auto-capture] sourceId=${r.sourceId} duplicate=${r.duplicate ?? false}`);
+        } else {
+          console.log(`[sales-sessions/auto-capture] skipped reason=${r.reason}`);
+        }
+      })
+      .catch((err) => console.warn('[sales-sessions/auto-capture] failed', err));
+
     res.status(201).json({ summary, session });
   } catch (err) {
     console.error('[sales-sessions/complete]', err instanceof Error ? err.message : err);

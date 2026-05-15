@@ -83,6 +83,17 @@ export interface UsedKnowledgeSource {
   snippet: string | null;
 }
 
+// Sprint 40 P0.6 — retrieval event meta-данные. Прокидываем наверх из
+// сервиса, чтобы route мог записать единый audit-event с этой структурой.
+// НЕ содержит chunk text / transcript / prompt — только metadata.
+export interface KnowledgeRetrievalMeta {
+  feature: string;
+  sourceIds: string[];
+  count: number;
+  chunksScanned: number;
+  totalChars: number;
+}
+
 export type SpinStage = 'S' | 'P' | 'I' | 'N';
 export type Tone = 'SOFT' | 'CONTROL' | 'CLOSE';
 export type DealControl = 'LOW' | 'MEDIUM' | 'HIGH';
@@ -149,9 +160,12 @@ export interface AssistantCard {
   // Sprint 38 — KB-источники, использованные при построении этой подсказки.
   // Founder получает только title+sourceType+summary; admin/manager — также snippet.
   usedKnowledgeSources: UsedKnowledgeSource[];
+  // Sprint 40 — meta для audit-write (route пишет, не сам сервис, чтобы
+  // recordAudit имел доступ к Request).
+  knowledgeRetrievalMeta: KnowledgeRetrievalMeta;
 }
 
-type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock' | 'promptSource' | 'promptTemplateId' | 'usedKnowledgeSources'>;
+type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock' | 'promptSource' | 'promptTemplateId' | 'usedKnowledgeSources' | 'knowledgeRetrievalMeta'>;
 
 const SALES_ASSISTANT_RESPONSE_SCHEMA = {
   type: 'object',
@@ -237,9 +251,18 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
     topN: 5,
+    feature: 'sales_assistant.analyze',
   });
-  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER');
+  // Sprint 40 P0.5 — full analyze: до 2500 символов KB-контекста.
+  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 2500 });
   const knowledgeForUi = formatKnowledgeForUi(knowledge, input.actorRole ?? 'FOUNDER');
+  const knowledgeRetrievalMeta: KnowledgeRetrievalMeta = {
+    feature: 'sales_assistant.analyze',
+    sourceIds: knowledge.sources.map((s) => s.sourceId),
+    count: knowledge.sources.length,
+    chunksScanned: knowledge.totalChunksScanned,
+    totalChars: knowledgeBlock.length,
+  };
   if (knowledge.sources.length > 0) {
     console.log(`[sales-assistant] kb sources=${knowledge.sources.length} scanned=${knowledge.totalChunksScanned}`);
   }
@@ -317,6 +340,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
       promptSource: promptDecision.source,
       promptTemplateId: promptDecision.templateId,
       usedKnowledgeSources: knowledgeForUi,
+      knowledgeRetrievalMeta,
     };
   }
 
@@ -388,6 +412,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     promptSource: promptDecision.source,
     promptTemplateId: promptDecision.templateId,
     usedKnowledgeSources: knowledgeForUi,
+    knowledgeRetrievalMeta,
   };
 }
 
@@ -409,6 +434,8 @@ export interface FastAssistantCard {
   promptTemplateId: string | null;
   // Sprint 38 — KB-источники (см. AssistantCard).
   usedKnowledgeSources: UsedKnowledgeSource[];
+  // Sprint 40 — meta для retrieval audit-event.
+  knowledgeRetrievalMeta: KnowledgeRetrievalMeta;
 }
 
 const SALES_FAST_RESPONSE_SCHEMA = {
@@ -438,9 +465,18 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
     topN: 3,
+    feature: 'sales_assistant.analyze_fast',
   });
-  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER');
+  // Sprint 40 P0.5 — fast analyze: жёсткий 1000-character budget.
+  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 1000 });
   const knowledgeForUi = formatKnowledgeForUi(knowledge, input.actorRole ?? 'FOUNDER');
+  const knowledgeRetrievalMeta: KnowledgeRetrievalMeta = {
+    feature: 'sales_assistant.analyze_fast',
+    sourceIds: knowledge.sources.map((s) => s.sourceId),
+    count: knowledge.sources.length,
+    chunksScanned: knowledge.totalChunksScanned,
+    totalChars: knowledgeBlock.length,
+  };
 
   const user = [
     'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ТАКТИЧЕСКАЯ ПОДСКАЗКА. Live AI co-pilot переговоров.',
@@ -508,6 +544,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     promptSource: promptDecision.source,
     promptTemplateId: promptDecision.templateId,
     usedKnowledgeSources: knowledgeForUi,
+    knowledgeRetrievalMeta,
   };
 }
 

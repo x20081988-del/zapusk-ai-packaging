@@ -63,6 +63,10 @@ const patchSourceSchema = z.object({
   sourceType: z.enum(KNOWLEDGE_SOURCE_TYPES).optional(),
   tags: z.array(z.string()).max(20).optional(),
   summary: z.string().max(2_000).optional().nullable(),
+  // Sprint 40 — confirm/reject действия.
+  isCandidate: z.boolean().optional(),
+  disabledReason: z.string().max(500).optional().nullable(),
+  environment: z.enum(['production', 'demo', 'synthetic']).optional(),
 });
 
 // ─── Routes ────────────────────────────────────────────────────────────────
@@ -134,6 +138,17 @@ knowledgeRoutes.get('/', async (req, res) => {
       chunkCount: s._count.chunks,
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
+      // Sprint 40 — candidate flow + quality + provenance + environment.
+      isCandidate: s.isCandidate,
+      qualityScore: s.qualityScore,
+      qualityReasons: s.qualityReasonJson ? safeJson(s.qualityReasonJson) : [],
+      originType: s.originType,
+      environment: s.environment,
+      verifiedAt: s.verifiedAt,
+      publishedAt: s.publishedAt,
+      disabledReason: s.disabledReason,
+      retrievalCount: s.retrievalCount,
+      lastRetrievedAt: s.lastRetrievedAt,
     })),
   });
 });
@@ -279,6 +294,14 @@ knowledgeRoutes.patch(
     const existing = await prisma.knowledgeSource.findUnique({ where: { id: req.params.id } });
     if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
     const d = parsed.data;
+    // Sprint 40 — побочные эффекты по смене статуса:
+    //   • publish + admin/manager → isCandidate=false, verifiedAt=now, verifiedById=actor,
+    //     publishedAt=now. Это и есть «Подтвердить и опубликовать».
+    //   • disable → disabledReason сохраняется (если передан).
+    const now = new Date();
+    const actorId = getUser(req).id;
+    const isPublishing = d.status === 'published';
+    const isDisabling = d.status === 'disabled';
     const updated = await prisma.knowledgeSource.update({
       where: { id: existing.id },
       data: {
@@ -288,6 +311,16 @@ knowledgeRoutes.patch(
         ...(d.sourceType !== undefined ? { sourceType: d.sourceType } : {}),
         ...(d.tags !== undefined ? { tagsJson: d.tags.length ? JSON.stringify(d.tags) : null } : {}),
         ...(d.summary !== undefined ? { summary: d.summary } : {}),
+        ...(d.environment !== undefined ? { environment: d.environment } : {}),
+        ...(d.isCandidate !== undefined ? { isCandidate: d.isCandidate } : {}),
+        ...(isPublishing ? {
+          isCandidate: false,
+          verifiedAt: existing.verifiedAt ?? now,
+          verifiedById: existing.verifiedById ?? actorId,
+          publishedAt: existing.publishedAt ?? now,
+        } : {}),
+        ...(isDisabling && d.disabledReason !== undefined ? { disabledReason: d.disabledReason } : {}),
+        ...(d.status === 'draft' || d.status === 'published' ? { disabledReason: null } : {}),
       },
     });
     // Sprint 39 P2 — гранулярный audit. Спека просит публикацию/отключение

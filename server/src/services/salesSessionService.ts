@@ -218,10 +218,12 @@ function mockSummary(transcript: string, provider: 'openai' | 'mock' | 'anthropi
   };
 }
 
+// Sprint 40 — sharpen return type from unknown → SalesSession-like with id.
+// Route нужен id для captureCandidateFromSalesSession.
 export async function persistSession(
   input: CompleteSessionInput,
   summary: SessionSummary,
-): Promise<unknown> {
+): Promise<{ id: string } & Record<string, unknown>> {
   return prisma.salesSession.create({
     data: {
       projectId: input.projectId ?? null,

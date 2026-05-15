@@ -2,7 +2,34 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware } from '../auth.js';
 import { assertProjectOwnership, getActorRole, requireNotInvestor } from '../lib/ownership.js';
-import { analyzeSalesTurn, analyzeSalesTurnFast } from '../services/salesAssistantService.js';
+import { recordAudit } from '../lib/audit.js';
+import {
+  analyzeSalesTurn,
+  analyzeSalesTurnFast,
+  type KnowledgeRetrievalMeta,
+} from '../services/salesAssistantService.js';
+
+// Sprint 40 P0.6 — single point для retrieval audit. Metadata-only (sourceIds,
+// count, chunksScanned, totalChars), без transcript / prompt / chunk text.
+function recordRetrievalAudit(req: Parameters<typeof recordAudit>[0], projectId: string | null, meta: KnowledgeRetrievalMeta) {
+  if (meta.count === 0) {
+    // Пишем даже при пустом результате — это диагностический сигнал
+    // «AI спросил, но KB не помогла».
+  }
+  recordAudit(req, {
+    action: 'knowledge.retrieval',
+    targetType: 'KnowledgeRetrieval',
+    targetId: null,
+    payload: {
+      projectId,
+      feature: meta.feature,
+      sourceIds: meta.sourceIds,
+      count: meta.count,
+      chunksScanned: meta.chunksScanned,
+      totalChars: meta.totalChars,
+    },
+  }).catch(() => { /* recordAudit уже логирует ошибки */ });
+}
 
 export const salesAssistantRoutes = Router();
 salesAssistantRoutes.use(authMiddleware);
@@ -43,6 +70,7 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
       // Sprint 38 — роль нужна для KB retrieval (visibility + raw vs redacted).
       actorRole: getActorRole(req),
     });
+    recordRetrievalAudit(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
     res.json({ card });
   } catch (err) {
     console.error('[sales-assistant]', err);
@@ -75,6 +103,7 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
       // Sprint 38 — то же что и в /analyze.
       actorRole: getActorRole(req),
     });
+    recordRetrievalAudit(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
     res.json({ fast });
   } catch (err) {
     console.error('[sales-assistant:fast]', err);
