@@ -80,16 +80,20 @@ export interface TokenPayload {
    *  в токене лежит ссылка на реального оператора. Используется для UI
    *  баннера «Вы вошли как пользователь X» и audit-логов. */
   impersonatedBy?: { sub: string; email: string; role: TokenPayload['role'] };
+  /** Sprint 47 — short-lived QA token issued by SUPER_ADMIN only. */
+  smoke?: boolean;
+  issuedBy?: string;
+  expiresAt?: string;
 }
 
 const TOKEN_TTL_SEC = 7 * 24 * 60 * 60; // 7 дней
 const IMPERSONATION_TTL_SEC = 60 * 60;  // Sprint 25: 1 час для impersonation
 
-export function signToken(claims: Omit<TokenPayload, 'exp' | 'iat'>): string {
+export function signToken(claims: Omit<TokenPayload, 'exp' | 'iat'>, opts: { ttlSec?: number } = {}): string {
   const now = Math.floor(Date.now() / 1000);
   // Sprint 25: impersonation токен живёт 1 час (короче обычного 7-дневного),
   // чтобы admin не оставил себя «как пользователь X» надолго случайно.
-  const ttl = claims.impersonatedBy ? IMPERSONATION_TTL_SEC : TOKEN_TTL_SEC;
+  const ttl = opts.ttlSec ?? (claims.impersonatedBy ? IMPERSONATION_TTL_SEC : TOKEN_TTL_SEC);
   const payload: TokenPayload = { ...claims, iat: now, exp: now + ttl };
   const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const body = b64url(JSON.stringify(payload));

@@ -127,6 +127,74 @@ adminRoutes.patch('/users/:id/status', async (req, res) => {
   res.json({ user: updated });
 });
 
+const smokeTokenSchema = z.object({
+  role: ROLE,
+  userId: z.string().optional(),
+  ttlMinutes: z.number().int().positive().max(60).default(15),
+});
+
+// Sprint 47 — production QA smoke tokens. This endpoint is deliberately not
+// wired into regular UI: SUPER_ADMIN can mint a short-lived JWT for role-smoke
+// scripts without copying tokens from browser storage. Token itself is never
+// written to audit.
+adminRoutes.post('/smoke-token', async (req, res) => {
+  const me = getUser(req);
+  const myRole = getRole(req);
+  if (myRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'super_admin_required' });
+  }
+
+  const parsed = smokeTokenSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'validation_failed', issues: parsed.error.flatten().fieldErrors });
+  const { role, userId, ttlMinutes } = parsed.data;
+
+  const target = userId
+    ? await prisma.user.findUnique({ where: { id: userId } })
+    : await prisma.user.findFirst({
+        where: { role, workspaceStatus: 'active' },
+        orderBy: { createdAt: 'asc' },
+      });
+  if (!target) return res.status(404).json({ error: 'smoke_target_not_found' });
+  const targetRole = normalizeRole(target.role);
+  if (targetRole !== role) return res.status(400).json({ error: 'target_role_mismatch', targetRole });
+  if (target.workspaceStatus !== 'active') return res.status(409).json({ error: 'target_workspace_not_active' });
+
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+  const token = signToken({
+    sub: target.id,
+    email: target.email,
+    role: targetRole,
+    smoke: true,
+    issuedBy: me.id,
+    expiresAt: expiresAt.toISOString(),
+  }, { ttlSec: ttlMinutes * 60 });
+
+  await recordAudit(req, {
+    action: 'admin.smoke_token.create',
+    targetType: 'User',
+    targetId: target.id,
+    payload: {
+      targetUserId: target.id,
+      targetRole,
+      ttlMinutes,
+      issuedBy: me.id,
+    },
+  });
+
+  res.json({
+    token,
+    expiresAt: expiresAt.toISOString(),
+    user: {
+      id: target.id,
+      email: target.email,
+      name: target.name,
+      role: targetRole,
+      workspaceStatus: target.workspaceStatus,
+    },
+    smoke: true,
+  });
+});
+
 // Sprint 25 — Impersonation. SUPER_ADMIN или ADMIN могут «войти как» любой
 // другой пользователь (но не как SUPER_ADMIN — только super-admin может
 // impersonate super-admin'а).
