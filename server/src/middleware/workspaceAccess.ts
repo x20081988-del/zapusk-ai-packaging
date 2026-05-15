@@ -33,6 +33,7 @@ const WRITE_ALLOWED = new Set(['active']);
 // остаются заблокированы для demo через стандартный readonly guard.
 const DEMO_INFERENCE_ALLOW = new Set<string>([
   '/sales-assistant/analyze',
+  '/sales-assistant/analyze-fast', // Sprint 34В — fast tactical endpoint, тоже compute-only
 ]);
 
 interface AuthedRequest extends Request {

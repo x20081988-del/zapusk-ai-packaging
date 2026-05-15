@@ -343,6 +343,108 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   };
 }
 
+// Sprint 34В — двухэтапная генерация. Этап 1: ultra-fast tactical-only
+// ответ за 1-3 секунды, чтобы фаундер на живой встрече сразу получил
+// реплику. После рендера UI вызывает полный analyzeSalesTurn (этап 2) и
+// догенерирует analytics.
+export interface FastAssistantCard {
+  mainQuestion: string;
+  backupQuestions: string[];
+  selfSaleQuestions: string[];
+  spinStage: SpinStage;
+  // Telemetry
+  source: 'ai' | 'mock';
+  provider: 'anthropic' | 'openai' | 'mock';
+  model: string;
+  fellBackToMock: boolean;
+  promptSource: SalesPromptSource;
+  promptTemplateId: string | null;
+}
+
+const SALES_FAST_RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    mainQuestion: { type: 'string' },
+    backupQuestions: { type: 'array', items: { type: 'string' } },
+    selfSaleQuestions: { type: 'array', items: { type: 'string' } },
+    spinStage: { type: 'string', enum: ['S', 'P', 'I', 'N'] },
+  },
+  required: ['mainQuestion', 'backupQuestions', 'selfSaleQuestions', 'spinStage'],
+} as const;
+
+export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAssistantCard> {
+  const projectContext = await loadProjectContext(input.projectId ?? undefined);
+  const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
+  const previousAdvice = formatAdvice(input.previousAdvice);
+  const promptDecision = await resolveSalesPrompt();
+  console.log(`[sales-assistant:fast] prompt source=${promptDecision.source}`);
+
+  const user = [
+    'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ТАКТИЧЕСКАЯ ПОДСКАЗКА. Live AI co-pilot переговоров.',
+    'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
+    'Не повторяй previousAdvice и предыдущий mainQuestion дословно.',
+    '',
+    'Контекст проекта:',
+    projectContext,
+    '',
+    input.previousSpinStage ? `Предыдущий SPIN-этап: ${input.previousSpinStage}` : 'Предыдущий SPIN-этап: не задан',
+    '',
+    previousAdvice ? `Предыдущая подсказка:\n${previousAdvice}` : 'Предыдущая подсказка: нет',
+    '',
+    `Последний контекст разговора:\n${recentContext}`,
+    '',
+    [
+      'Задача (только 4 поля):',
+      '1. spinStage — текущий этап (S/P/I/N).',
+      '2. mainQuestion — конкретная реплика, которую фаундер скажет инвестору ПРЯМО СЕЙЧАС.',
+      '3. backupQuestions — 2-3 запасных вопроса.',
+      '4. selfSaleQuestions — 1-2 self-sale вопроса (только если этап S/P или инвестор пассивен; иначе []).',
+      'Верни строго JSON. Никакой аналитики, никаких объяснений.',
+    ].join('\n'),
+  ].join('\n');
+
+  const ai = await aiClient.generateJson({
+    system: promptDecision.system,
+    user,
+    feature: 'sales_assistant.analyze_fast',
+    modelRoute: 'fast', // gpt-4o-mini / claude-haiku — ~1-3s типичный latency
+    maxTokens: 600,
+    temperature: 0.3,
+    jsonSchema: {
+      name: 'sales_assistant_fast',
+      description: 'Ultra-fast tactical reply for live investor meeting.',
+      schema: SALES_FAST_RESPONSE_SCHEMA,
+      strict: true,
+    },
+  });
+
+  let parsed: Partial<FastAssistantCard> | null = null;
+  try {
+    parsed = JSON.parse(extractJson(ai.text)) as Partial<FastAssistantCard>;
+  } catch {
+    parsed = null;
+  }
+
+  const mainQuestion = String(parsed?.mainQuestion ?? '').trim() || 'Расскажите подробнее о вашем интересе к проекту.';
+  const backupQuestions = arrStrings(parsed?.backupQuestions, 4);
+  const selfSaleQuestions = arrStrings(parsed?.selfSaleQuestions, 4);
+  const stage = normalizeStage(parsed?.spinStage);
+
+  return {
+    mainQuestion,
+    backupQuestions: backupQuestions.length ? backupQuestions : ['Что для вас сейчас приоритет в инвестициях?'],
+    selfSaleQuestions,
+    spinStage: stage,
+    source: ai.provider === 'mock' ? 'mock' : (parsed?.mainQuestion ? 'ai' : 'mock'),
+    provider: ai.provider,
+    model: ai.model,
+    fellBackToMock: ai.fellBackToMock || !parsed?.mainQuestion,
+    promptSource: promptDecision.source,
+    promptTemplateId: promptDecision.templateId,
+  };
+}
+
 async function loadProjectContext(projectId?: string): Promise<string> {
   if (!projectId) return '— проект не выбран, работай как универсальный AI Sales Assistant Zapusk';
   const project = await prisma.project.findUnique({

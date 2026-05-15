@@ -355,7 +355,82 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 35-start: AI Brief prompt в template'е)_
+_(empty — Sprint 34В: транскрипция и AI-подсказка разделены + двухэтапная генерация)_
+
+---
+
+## Sprint 34В — 2026-05-15 — Разделение транскрипции и AI-подсказки + двухэтапная генерация
+
+Theme: **AI-копилот превращён из «timer-driven автоанализатора» в «ручной инструмент фаундера», который мгновенно подсказывает реплику.** Sprint 34A auto-refresh (каждые 75s / 2500 chars) убран по запросу: на живой встрече непредсказуемое автообновление сбивает с мысли. Плюс одна большая 5-15-секундная генерация разделена на два независимых вызова: ультра-fast тактический ответ (~1-3с) → потом полная аналитика (~5-15с) в фоне.
+
+### Backend (`server/src/services/salesAssistantService.ts` + `routes/salesAssistant.ts`)
+
+- **Новая функция `analyzeSalesTurnFast(input)`** — параллельно с `analyzeSalesTurn`. Использует ту же `sales_gpt` template (через `resolveSalesPrompt`), но:
+  - Tight user-prompt: только 4 задачи (spinStage, mainQuestion, backup, selfSale)
+  - Minimal JSON schema: 4 required keys
+  - `maxTokens: 600` (vs 2400)
+  - `modelRoute: 'fast'` (gpt-4o-mini / claude-haiku) — ~1-3s типичный latency
+  - `temperature: 0.3`
+- **Новый interface `FastAssistantCard`**: `{mainQuestion, backupQuestions, selfSaleQuestions, spinStage, source, provider, model, fellBackToMock, promptSource, promptTemplateId}`
+- **Новый route `POST /api/sales-assistant/analyze-fast`** возвращает `{ fast: FastAssistantCard }`. Зеркальный contract с `/analyze`.
+- Демо workspace allowlist уже покрывает оба endpoints через `DEMO_INFERENCE_ALLOW` (`/sales-assistant/analyze` + `/sales-assistant/analyze-fast`). Hotfix:
+
+### Frontend (`web/src/pages/SalesAssistant.tsx`)
+
+**Удалено** (Sprint 34A auto-refresh):
+- `autoRefreshTimerRef`, `setInterval(..., 5_000)`
+- `fullTranscriptChars()` helper
+- `AUTO_REFRESH_INTERVAL_MS`, `AUTO_REFRESH_CHARS_DELTA`, `MAX_BACKOFF_RETRIES`
+- `lastAnalyzeCharsRef`, `aiBackoffRetriesRef`
+- Auto-trigger ветка из `start()`, cleanup из `stop()/reset()/closeFinishModal()/unmount`
+- `opts.auto` параметр в `runAnalyze`
+
+**Добавлено**:
+- State `analyzePhase: 'fast' | 'full' | null` — текущий этап генерации
+- State `fastCard: FastCardShape | null` — partial карточка от fast endpoint
+- Interface `FastCardShape` — frontend mirror серверного `FastAssistantCard`
+- Двухэтапный `runAnalyze()`:
+  1. `setAnalyzePhase('fast')` → `POST /analyze-fast` → `setFastCard(r.fast)` (1-3с)
+  2. `setAnalyzePhase('full')` → `POST /analyze` → `setCard(r.card)` (5-15с)
+  3. На ошибке fast — показываем error, analytics не запускаем. На ошибке full — fast card остаётся на экране + предупреждение.
+- Лог: `[sales-assistant] phase=fast ok latencyMs=X spinStage=Y`, `phase=full ok latencyMs=Z`
+
+**AdviceCard component refactored**:
+- Принимает `{ card: AssistantCard | null, fastCard: FastCardShape | null, analyzePhase }`
+- Header badges: stage из `action.spinStage` (fast или full); tone/control/engagement только если `card` есть
+- Action zone: всегда из `action` (fastCard preferred over card)
+- Analytics zone: показывает skeleton (3 animated rows) если `card === null && analyzePhase`. После прихода card — нормальный рендер.
+- `EmotionalLayer`, `OBJECTIVE+DIRECTION`, `WHAT TO DO`, `Tone shift`, `MINI-PITCH`, `OBJECTION`, `DEAL NEXT STEP`, `Карта СПИН` — все гейтятся `card &&`.
+
+**Status row split**:
+- Дорожка «Транскрипция»: слов / реплик / `слушаю встречу` / `остановлено` / `ошибка микрофона`
+- Дорожка «AI-подсказка»: `AI готовит ответ…` (fast) / `AI анализирует диалог…` (full) / `подсказка ещё не запрашивалась` / `обновлена в HH:MM` / `шаблон из админки` / `fallback prompt`
+- `restarting` визуально по-прежнему «Слушаю встречу» (Sprint 34A smooth UX preserved)
+
+**Status text copy** (по спеку):
+- `listening` title `Слушает` → `Слушаю встречу`, hint про «паузы не сбрасывают»
+- `restarting` hint `Пауза в речи, продолжаю слушать. Транскрипция не прерывается.`
+
+### UX flow по спеку
+
+| Сценарий | Поведение |
+|---|---|
+| Говорить 2-3 мин без кнопки | Транскрипция растёт, подсказка не обновляется (нет таймера) |
+| Нажать «Обновить подсказку» | Action zone заполняется через ~1-3с (Главный вопрос/запасные/self-sale), под ним skeleton аналитики |
+| Подождать ещё ~5-15с | Skeleton сменяется полной аналитикой (Что происходит / Эмоциональный слой / Куда ведём / СПИН-карта) |
+| Пауза 30-60 сек в речи | Статус «Слушаю встречу» (не «перезапуск»), транскрипция продолжается |
+| AI fast endpoint падает | Error badge, транскрипция продолжается, кнопку можно нажать снова |
+| AI full endpoint падает | Action zone остаётся, аналитика показывает мягкое предупреждение |
+
+### Verification
+
+- [x] Local preview: `POST /analyze-fast` → 200 · 4 ключевых поля + provider+model+promptSource ✓
+- [x] mainQuestion реалистичный, 2 backup + 2 self-sale, spinStage='S' ✓
+- [x] promptSource=db (Sprint 34Б.2 sales_gpt template живой)
+- [x] 0 console errors
+- [x] `cd web && tsc --noEmit` clean
+- [x] `npm run build` OK
+- [ ] Прод-смок после deploy — проверить latency fast endpoint и UI two-phase rendering
 
 ---
 

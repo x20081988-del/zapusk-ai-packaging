@@ -89,6 +89,19 @@ interface AssistantCard {
   promptTemplateId?: string | null;
 }
 
+// Sprint 34В — fast тактический ответ (этап 1 двухэтапной генерации).
+interface FastCardShape {
+  mainQuestion: string;
+  backupQuestions: string[];
+  selfSaleQuestions: string[];
+  spinStage: AssistantCard['spinStage'];
+  provider: string;
+  model: string;
+  fellBackToMock: boolean;
+  promptSource?: 'db' | 'fallback';
+  promptTemplateId?: string | null;
+}
+
 type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
 type AdviceHistoryItem = Pick<
   AssistantCard,
@@ -204,17 +217,20 @@ export default function SalesAssistant() {
   const [interim, setInterim] = useState('');
   const [card, setCard] = useState<AssistantCard | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  // Sprint 34В — двухэтапная генерация:
+  //   • analyzePhase='fast'  — ждём ultra-fast tactical (~1-3 сек)
+  //   • analyzePhase='full'  — fast пришёл, ждём полную аналитику (~5-15 сек)
+  //   • analyzePhase=null    — idle
+  // fastCard рендерит action zone сразу после fast этапа. Analytics zone
+  // ждёт card (полную), пока показывает skeleton.
+  const [analyzePhase, setAnalyzePhase] = useState<'fast' | 'full' | null>(null);
+  const [fastCard, setFastCard] = useState<FastCardShape | null>(null);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
-  // Sprint 34A — realtime AI co-pilot fixes:
-  // • lastAnalyzeAt — таймстамп последнего успешного refresh подсказки
-  // • aiError — soft-shown ошибка («AI временно недоступен»), transcript продолжает идти
-  // • aiBackoffRetries — экспоненциальный backoff при serial failures
+  // Sprint 34A: lastAnalyzeAt / aiError для UX обратной связи.
+  // Sprint 34В: auto-refresh interval УБРАН — обновление только вручную.
   const [lastAnalyzeAt, setLastAnalyzeAt] = useState<number | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  const aiBackoffRetriesRef = useRef(0);
-  const lastAnalyzeCharsRef = useRef(0);
-  const autoRefreshTimerRef = useRef<number | null>(null);
   // Investor Meeting Memory: «Завершить встречу» → AI summary → сохраняем как SalesSession.
   const [finishing, setFinishing] = useState(false);
   const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
@@ -261,8 +277,6 @@ export default function SalesAssistant() {
     shouldListenRef.current = false;
     recognitionActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
-    // Sprint 34A — auto-refresh tick тоже должен останавливаться при unmount.
-    if (autoRefreshTimerRef.current) window.clearInterval(autoRefreshTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore unmount race */ }
   }, []);
 
@@ -282,22 +296,6 @@ export default function SalesAssistant() {
     return text.length > 6_000 ? text.slice(-6_000) : text;
   }
 
-  // Sprint 34A — общая длина final transcript'а в символах. Используется для
-  // auto-refresh: если выросло на >=AUTO_REFRESH_CHARS_DELTA, дёргаем analyze
-  // даже если timer ещё не сработал.
-  function fullTranscriptChars(): number {
-    let total = 0;
-    for (const t of transcriptLinesRef.current) {
-      if (t.final) total += t.text.length;
-    }
-    return total;
-  }
-
-  // Sprint 34A constants — баланс между «AI чувствуется live» и не-flood AI.
-  const AUTO_REFRESH_INTERVAL_MS = 75_000;
-  const AUTO_REFRESH_CHARS_DELTA = 2_500;
-  const MAX_BACKOFF_RETRIES = 4;
-
   function toAdviceHistoryItem(next: AssistantCard): AdviceHistoryItem {
     return {
       situation: next.situation,
@@ -313,73 +311,91 @@ export default function SalesAssistant() {
     };
   }
 
-  // Sprint 34A — analyze запрос с debug logs, error surface и exponential
-  // backoff. Не блокирует SpeechRecognition stream — transcript продолжает
-  // приходить независимо от того, что делает AI request.
-  // `auto=true` означает trigger из interval / chars-delta (тише в логах,
-  // не показываем permError если transcript ещё короткий — просто wait).
-  async function runAnalyze(opts: { auto?: boolean } = {}) {
+  // Sprint 34В — двухэтапная генерация. После клика «Обновить подсказку»:
+  //   Этап 1: /analyze-fast — за 1-3 секунды получаем mainQuestion +
+  //           backupQuestions + selfSaleQuestions. Action zone заполняется,
+  //           аналитика показывает skeleton.
+  //   Этап 2: /analyze — полная аналитика (5-15 сек), догоняет card.
+  // SpeechRecognition при этом не трогается — это полностью независимый поток.
+  async function runAnalyze() {
     if (analyzingRef.current) return;
     const transcriptText = fullTranscript();
     if (transcriptText.trim().length < 10) {
-      if (!opts.auto) setPermError('Сначала начните прослушивание и скажите несколько фраз.');
+      setPermError('Сначала начните прослушивание и скажите несколько фраз.');
       return;
     }
     analyzingRef.current = true;
     setAnalyzing(true);
-    // Sprint 34A — context window ужат с 32k до 8k chars. Достаточно для
-    // последних 5-7 минут разговора + recentContext (6k) даёт overlap.
-    // Так context не взрывается через 30+ минут встречи.
+    setAnalyzePhase('fast');
+    setAiError(null);
+    setFastCard(null);
+    // Rolling window: 8k chars + recentContext(6k) overlap. Не взрываемся на 30+ мин встречи.
     const windowed = transcriptText.slice(-8_000);
-    const startedAt = performance.now();
-    console.log(`[sales-assistant] analyze req chars=${windowed.length} total=${transcriptText.length} retries=${aiBackoffRetriesRef.current}`);
+    const previousAdvice = cardRef.current;
+    const previousSpinStage = cardRef.current?.spinStage ?? null;
+    const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
+    const tFastStart = performance.now();
+    console.log(`[sales-assistant] phase=fast chars=${windowed.length} total=${transcriptText.length}`);
+
+    // ── ЭТАП 1: ultra-fast tactical reply ───────────────────────────────
+    try {
+      const r = await api.post<{ fast: FastCardShape }>(
+        '/api/sales-assistant/analyze-fast',
+        {
+          transcript: windowed,
+          recentContext: recentContext(),
+          previousAdvice,
+          previousSpinStage,
+          adviceHistory: adviceHistorySnapshot,
+          projectId: projectId || null,
+        },
+      );
+      const latencyMs = Math.round(performance.now() - tFastStart);
+      console.log(`[sales-assistant] phase=fast ok latencyMs=${latencyMs} spinStage=${r.fast.spinStage}`);
+      setFastCard(r.fast);
+      setLastAnalyzeAt(Date.now());
+      setPermError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'unknown';
+      console.warn(`[sales-assistant] phase=fast error message="${message}"`);
+      if (message.includes('workspace_readonly') || message.includes('403')) {
+        setAiError('Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.');
+      } else {
+        setAiError('Не удалось обновить подсказку. Транскрипция продолжается. Попробуйте ещё раз.');
+      }
+      analyzingRef.current = false;
+      setAnalyzing(false);
+      setAnalyzePhase(null);
+      return;
+    }
+
+    // ── ЭТАП 2: полная аналитика (догоняет в фоне) ──────────────────────
+    setAnalyzePhase('full');
+    const tFullStart = performance.now();
     try {
       const r = await api.post<{ card: AssistantCard }>('/api/sales-assistant/analyze', {
         transcript: windowed,
         recentContext: recentContext(),
-        previousAdvice: cardRef.current,
-        previousSpinStage: cardRef.current?.spinStage ?? null,
-        adviceHistory: adviceHistoryRef.current.slice(-6),
+        previousAdvice,
+        previousSpinStage,
+        adviceHistory: adviceHistorySnapshot,
         projectId: projectId || null,
       });
-      const latencyMs = Math.round(performance.now() - startedAt);
-      console.log(`[sales-assistant] analyze ok latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
+      const latencyMs = Math.round(performance.now() - tFullStart);
+      console.log(`[sales-assistant] phase=full ok latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
       setCard(r.card);
       setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
       setLastAnalyzeAt(Date.now());
-      lastAnalyzeCharsRef.current = transcriptText.length;
       setAiError(null);
-      aiBackoffRetriesRef.current = 0;
-      if (!opts.auto) setPermError(null);
     } catch (err) {
-      // Sprint 34A — soft-fail: transcript keeps streaming, AI пытается заново
-      // с экспоненциальным backoff. После MAX_BACKOFF_RETRIES оставляем AI
-      // выключенным до следующего user action (или следующего interval tick).
       const message = err instanceof Error ? err.message : 'unknown';
-      console.warn(`[sales-assistant] analyze error message="${message}" retries=${aiBackoffRetriesRef.current}`);
-      // Sprint 34A.1 — детальное сообщение по типу ошибки. workspace_readonly
-      // (Sprint 22 invite-only) — это не «AI сломан», это «нужна активация
-      // аккаунта», retry не помогает.
-      if (message.includes('workspace_readonly') || message.includes('403')) {
-        setAiError('Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.');
-        aiBackoffRetriesRef.current = MAX_BACKOFF_RETRIES; // не делаем retry — нет смысла
-      } else {
-        setAiError('AI временно недоступен. Транскрипция продолжается, попробуем ещё раз.');
-        const retries = aiBackoffRetriesRef.current;
-        if (retries < MAX_BACKOFF_RETRIES) {
-          aiBackoffRetriesRef.current = retries + 1;
-          const delayMs = 1000 * Math.pow(2, retries);
-          console.log(`[sales-assistant] backoff retry in ${delayMs}ms (attempt ${retries + 1}/${MAX_BACKOFF_RETRIES})`);
-          window.setTimeout(() => {
-            if (shouldListenRef.current || !opts.auto) runAnalyze({ auto: opts.auto });
-          }, delayMs);
-        } else {
-          console.warn(`[sales-assistant] backoff exhausted — AI off until next user trigger`);
-        }
-      }
+      console.warn(`[sales-assistant] phase=full error message="${message}"`);
+      // Фаст-карточка уже на экране — мягкая ошибка про аналитику.
+      setAiError('Аналитика временно недоступна. Главный вопрос и запасные показаны. Попробуйте обновить подсказку.');
     } finally {
       analyzingRef.current = false;
       setAnalyzing(false);
+      setAnalyzePhase(null);
     }
   }
 
@@ -481,22 +497,11 @@ export default function SalesAssistant() {
     setPermError(null);
     if (!startedAtRef.current) startedAtRef.current = new Date().toISOString();
     startRecognition();
-    // Sprint 34A — auto-refresh interval. Каждые AUTO_REFRESH_INTERVAL_MS
-    // тик; ИЛИ если transcript вырос на AUTO_REFRESH_CHARS_DELTA с момента
-    // последнего успешного analyze — дёргаем сразу. AI чувствуется как
-    // «слушает непрерывно», без user action.
-    if (autoRefreshTimerRef.current) window.clearInterval(autoRefreshTimerRef.current);
-    autoRefreshTimerRef.current = window.setInterval(() => {
-      if (!shouldListenRef.current) return;
-      const chars = fullTranscriptChars();
-      const delta = chars - lastAnalyzeCharsRef.current;
-      const lastTickAgoMs = lastAnalyzeAt ? Date.now() - lastAnalyzeAt : Infinity;
-      const shouldRun = delta >= AUTO_REFRESH_CHARS_DELTA || lastTickAgoMs >= AUTO_REFRESH_INTERVAL_MS;
-      if (shouldRun && chars > 0) {
-        console.log(`[sales-assistant] auto-refresh trigger chars=${chars} delta=${delta} sinceLastMs=${lastTickAgoMs}`);
-        runAnalyze({ auto: true });
-      }
-    }, 5_000); // check every 5s — actual analyze gated by delta/interval
+    // Sprint 34В — auto-refresh ОТКЛЮЧЁН. Транскрипция и AI-подсказка теперь
+    // два независимых процесса:
+    //   • Транскрипция идёт сама непрерывно (SpeechRecognition + restart loop)
+    //   • AI-подсказка обновляется ТОЛЬКО по кнопке «Обновить подсказку»
+    // Пользователь сам управляет моментом анализа.
   }
 
   async function finishMeeting() {
@@ -536,11 +541,11 @@ export default function SalesAssistant() {
     startedAtRef.current = null;
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
-    // Sprint 34A — сбрасываем AI realtime state перед новой встречей.
+    // Sprint 34В — сброс AI state.
     setLastAnalyzeAt(null);
     setAiError(null);
-    lastAnalyzeCharsRef.current = 0;
-    aiBackoffRetriesRef.current = 0;
+    setFastCard(null);
+    setAnalyzePhase(null);
   }
 
   function stop() {
@@ -549,11 +554,6 @@ export default function SalesAssistant() {
     speechStatusRef.current = 'stopped';
     setSpeechStatus('stopped');
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
-    // Sprint 34A — останавливаем auto-refresh AI loop при ручной остановке.
-    if (autoRefreshTimerRef.current) {
-      window.clearInterval(autoRefreshTimerRef.current);
-      autoRefreshTimerRef.current = null;
-    }
     try { srRef.current?.stop(); } catch { /* ignore */ }
     srRef.current = null;
     recognitionActiveRef.current = false;
@@ -568,11 +568,11 @@ export default function SalesAssistant() {
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
     setPermError(null);
-    // Sprint 34A — сбрасываем AI state.
+    // Sprint 34В — сброс AI state.
     setLastAnalyzeAt(null);
     setAiError(null);
-    lastAnalyzeCharsRef.current = 0;
-    aiBackoffRetriesRef.current = 0;
+    setFastCard(null);
+    setAnalyzePhase(null);
   }
 
   const wordCount = useMemo(
@@ -585,21 +585,23 @@ export default function SalesAssistant() {
     [role, projects],
   );
 
+  // Sprint 34В — отдельные статусы транскрипции и AI-подсказки.
+  // Транскрипция идёт непрерывно; подсказка обновляется ТОЛЬКО по кнопке.
   const statusText: Record<SpeechStatus, { title: string; hint: string }> = {
     idle: {
       title: 'Готов к старту',
       hint: 'Нажмите «Начать прослушивание» и разрешите доступ к микрофону.',
     },
     listening: {
-      title: 'Слушает',
-      hint: 'Говорите естественно. Паузы не завершают встречу, распознавание перезапускается автоматически.',
+      title: 'Слушаю встречу',
+      hint: 'Говорите естественно. Паузы не сбрасывают транскрипцию. Подсказку обновите по кнопке, когда нужно.',
     },
-    // Sprint 34A — restarting рендерится как «Слушает», без отдельного title.
+    // Sprint 34A/В — restarting рендерится как «Слушаю встречу», без отдельного title.
     // Браузер делит speech на сегменты; для пользователя это должно выглядеть
-    // как непрерывное прослушивание, а не как «AI на секунду отвлёкся».
+    // как непрерывное прослушивание.
     restarting: {
-      title: 'Слушает',
-      hint: 'Говорите естественно. AI обновляет подсказки автоматически каждые ~75 секунд.',
+      title: 'Слушаю встречу',
+      hint: 'Пауза в речи, продолжаю слушать. Транскрипция не прерывается.',
     },
     stopped: {
       title: 'Остановлено пользователем',
@@ -685,26 +687,38 @@ export default function SalesAssistant() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-[11px] text-muted">
-            <span><span className="text-primary font-num text-sm">{wordCount}</span> слов</span>
-            <span><span className="text-primary font-num text-sm">{transcript.filter((t) => t.final).length}</span> реплик</span>
-            {/* Sprint 34A — 'restarting' визуально как 'listening' (smooth UX,
-                без жёлтого мигания между speech-сегментами). Реальная остановка
-                по user action отдельно. */}
-            {(speechStatus === 'listening' || speechStatus === 'restarting') && (
-              <StatusBadge tone="success" dot>слушает</StatusBadge>
-            )}
-            {speechStatus === 'stopped' && <StatusBadge tone="neutral" dot>остановлено</StatusBadge>}
-            {speechStatus === 'mic_error' && <StatusBadge tone="danger" dot>ошибка микрофона</StatusBadge>}
-            {/* Sprint 34A — «AI думает» индикатор + timestamp последнего refresh. */}
-            {analyzing && <StatusBadge tone="ai" dot>AI думает…</StatusBadge>}
-            {!analyzing && lastAnalyzeAt && (
-              <span className="text-muted">
-                AI обновил <span className="text-secondary">{new Date(lastAnalyzeAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-              </span>
-            )}
-            {aiError && <StatusBadge tone="warning" dot>AI временно недоступен</StatusBadge>}
-            {card && <StatusBadge tone={card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success'} dot>{providerLabel}</StatusBadge>}
+          {/* Sprint 34В — две независимые дорожки статуса:
+              ТРАНСКРИПЦИЯ (зелёная) идёт непрерывно;
+              AI-ПОДСКАЗКА (синяя) обновляется ТОЛЬКО по кнопке. */}
+          <div className="flex flex-col items-end gap-2 text-[11px] text-muted">
+            <div className="flex items-center gap-3 flex-wrap justify-end">
+              <span className="text-[9px] uppercase tracking-[0.12em] text-muted font-semibold">Транскрипция:</span>
+              <span><span className="text-primary font-num text-sm">{wordCount}</span> слов</span>
+              <span><span className="text-primary font-num text-sm">{transcript.filter((t) => t.final).length}</span> реплик</span>
+              {(speechStatus === 'listening' || speechStatus === 'restarting') && (
+                <StatusBadge tone="success" dot>слушаю встречу</StatusBadge>
+              )}
+              {speechStatus === 'stopped' && <StatusBadge tone="neutral" dot>остановлено</StatusBadge>}
+              {speechStatus === 'mic_error' && <StatusBadge tone="danger" dot>ошибка микрофона</StatusBadge>}
+            </div>
+            <div className="flex items-center gap-3 flex-wrap justify-end">
+              <span className="text-[9px] uppercase tracking-[0.12em] text-muted font-semibold">AI-подсказка:</span>
+              {analyzing && analyzePhase === 'fast' && (
+                <StatusBadge tone="ai" dot>AI готовит ответ…</StatusBadge>
+              )}
+              {analyzing && analyzePhase === 'full' && (
+                <StatusBadge tone="ai" dot>AI анализирует диалог…</StatusBadge>
+              )}
+              {!analyzing && !lastAnalyzeAt && (
+                <span className="text-muted">подсказка ещё не запрашивалась</span>
+              )}
+              {!analyzing && lastAnalyzeAt && (
+                <span className="text-muted">
+                  обновлена в <span className="text-secondary">{new Date(lastAnalyzeAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
+                </span>
+              )}
+              {aiError && <StatusBadge tone="warning" dot>{aiError.length > 60 ? 'Не удалось обновить' : aiError}</StatusBadge>}
+              {card && <StatusBadge tone={card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success'} dot>{providerLabel}</StatusBadge>}
             {/* Sprint 34Б.2 — источник prompt'а. 'db' = template из суперадминки
                 (правильно, prompt управляется без deploy). 'fallback' = hardcoded —
                 означает что template отсутствует/выключен и нужно вмешательство admin'а. */}
@@ -714,6 +728,7 @@ export default function SalesAssistant() {
             {card?.promptSource === 'fallback' && (
               <StatusBadge tone="warning" dot>fallback prompt — проверьте шаблон</StatusBadge>
             )}
+            </div>
           </div>
         </div>
         {permError && (
@@ -772,19 +787,28 @@ export default function SalesAssistant() {
 
         {/* AI ADVICE */}
         <div className="space-y-4">
-          {!card && (
+          {!card && !fastCard && (
             <Card padded className="text-center py-12">
               <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-ai/15 border border-ai/30 flex items-center justify-center text-ai-glow">
                 <Sparkles size={18} />
               </div>
               <h3 className="text-base font-semibold text-primary mb-1">Подсказки появятся здесь</h3>
               <p className="text-xs text-secondary max-w-sm mx-auto">
-                Скажите несколько фраз, затем нажмите «Обновить подсказку» — ассистент определит этап SPIN, тон и предложит следующую реплику.
+                Скажите несколько фраз, затем нажмите «Обновить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.
               </p>
             </Card>
           )}
 
-          {card && <AdviceCard card={card} />}
+          {/* Sprint 34В — fast tactical reply показывается СРАЗУ; полная
+              аналитика догоняет в фоне. Если есть только fastCard (этап 2
+              ещё в работе) — рендерим compact-карточку без analytics. */}
+          {(card || fastCard) && (
+            <AdviceCard
+              card={card}
+              fastCard={fastCard}
+              analyzePhase={analyzePhase}
+            />
+          )}
         </div>
       </div>
 
@@ -812,32 +836,60 @@ export default function SalesAssistant() {
   );
 }
 
-// Sprint 12: structured mini-brief. Каждая секция сканируется за 5 секунд,
-// никаких полотен текста — фаундер смотрит на это ВО ВРЕМЯ живой встречи.
-function AdviceCard({ card }: { card: AssistantCard }) {
+// Sprint 12: structured mini-brief. Каждая секция сканируется за 5 секунд.
+// Sprint 34В: двухэтапная отрисовка. fastCard (mainQuestion + backupQuestions +
+// selfSaleQuestions + spinStage) приходит за 1-3 сек, рендерится сразу.
+// card (полная аналитика) догоняет за 5-15 сек — до этого analytics zone
+// показывает skeleton. Если есть только fastCard — рендерим compact-view.
+function AdviceCard({
+  card,
+  fastCard,
+  analyzePhase,
+}: {
+  card: AssistantCard | null;
+  fastCard: FastCardShape | null;
+  analyzePhase: 'fast' | 'full' | null;
+}) {
+  // Sprint 34В — action zone использует fastCard (приходит первым) если он
+  // свежее card; analytics zone использует card (приходит вторым).
+  const action = fastCard ?? (card ? {
+    mainQuestion: card.mainQuestion,
+    backupQuestions: card.backupQuestions,
+    selfSaleQuestions: card.selfSaleQuestions,
+    spinStage: card.spinStage,
+    provider: card.provider,
+    model: card.model,
+    fellBackToMock: card.fellBackToMock,
+    promptSource: card.promptSource,
+    promptTemplateId: card.promptTemplateId,
+  } : null);
+  if (!action) return null;
+
   return (
-    <Card padded accent={card.tone === 'CLOSE' ? 'zapusk' : 'ai'}>
+    <Card padded accent={card?.tone === 'CLOSE' ? 'zapusk' : 'ai'}>
       {/* HEADER: SPIN stage · Tone · Engagement · Control · Confidence */}
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <StatusBadge tone="ai" dot>{STAGE_LABEL[card.spinStage]}</StatusBadge>
-          <StatusBadge tone={TONE_TONE[card.tone]} dot>Тон · {TONE_LABEL[card.tone]}</StatusBadge>
-          <StatusBadge tone={CONTROL_TONE[card.dealControlLevel]} dot>{CONTROL_LABEL[card.dealControlLevel]}</StatusBadge>
-          <StatusBadge tone={ENGAGEMENT_TONE[card.engagementSignal]} dot>{ENGAGEMENT_LABEL[card.engagementSignal]}</StatusBadge>
+          <StatusBadge tone="ai" dot>{STAGE_LABEL[action.spinStage]}</StatusBadge>
+          {card && <StatusBadge tone={TONE_TONE[card.tone]} dot>Тон · {TONE_LABEL[card.tone]}</StatusBadge>}
+          {card && <StatusBadge tone={CONTROL_TONE[card.dealControlLevel]} dot>{CONTROL_LABEL[card.dealControlLevel]}</StatusBadge>}
+          {card && <StatusBadge tone={ENGAGEMENT_TONE[card.engagementSignal]} dot>{ENGAGEMENT_LABEL[card.engagementSignal]}</StatusBadge>}
+          {!card && analyzePhase === 'full' && (
+            <StatusBadge tone="ai" dot>AI догенерирует аналитику…</StatusBadge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Gauge size={13} className="text-muted" />
-          <div className={`text-base font-bold font-num ${card.confidence >= 60 ? 'text-success' : card.confidence >= 35 ? 'text-zapusk-400' : 'text-warning'}`}>
-            {card.confidence}%
+          <div className={`text-base font-bold font-num ${(card?.confidence ?? 0) >= 60 ? 'text-success' : (card?.confidence ?? 0) >= 35 ? 'text-zapusk-400' : 'text-warning'}`}>
+            {card ? `${card.confidence}%` : '—'}
           </div>
         </div>
       </div>
-      <div className="text-[11px] text-muted mb-4">{STAGE_HINT[card.spinStage]}</div>
+      <div className="text-[11px] text-muted mb-4">{STAGE_HINT[action.spinStage]}</div>
 
-      {/* Sprint 34Б.1 — ГЛАВНАЯ ЗОНА ДЕЙСТВИЯ. Поднято в самый верх карточки.
-          Пользователь должен сразу видеть «что мне сейчас сказать», а не
-          аналитику разговора. Раньше эти 5 блоков жили после Situation,
-          EmotionalLayer, WhatToDo — поверх 200+ строк аналитики. */}
+      {/* Sprint 34В — ГЛАВНАЯ ЗОНА ДЕЙСТВИЯ. Использует action (fastCard или card).
+          Рендерится сразу после ultra-fast этапа — фаундер получает реплику
+          через 1-3 секунды, не дожидаясь полной аналитики. */}
       <div className="rounded-lg border border-ai/30 bg-ai/4 px-4 py-3">
         <div className="flex items-center gap-1.5 mb-3">
           <Zap size={13} className="text-ai-glow" />
@@ -850,18 +902,18 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         <div>
           <SectionLabel icon={<MessageSquare size={12} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
           <blockquote className="bg-canvas border border-ai/30 rounded-md px-4 py-3 text-[14.5px] leading-relaxed text-primary">
-            «{card.mainQuestion}»
+            «{action.mainQuestion}»
           </blockquote>
         </div>
 
         {/* BACKUP QUESTIONS */}
-        {card.backupQuestions.length > 0 && (
+        {action.backupQuestions.length > 0 && (
           <div className="mt-3">
             <SectionLabel icon={<HelpCircle size={12} className="text-muted" />}>
-              Запасные вопросы ({card.backupQuestions.length})
+              Запасные вопросы ({action.backupQuestions.length})
             </SectionLabel>
             <ul className="space-y-1.5">
-              {card.backupQuestions.map((q, i) => (
+              {action.backupQuestions.map((q, i) => (
                 <li key={i} className="text-[13px] text-secondary leading-relaxed border-l-2 border-line pl-3">
                   {q}
                 </li>
@@ -871,22 +923,21 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         )}
 
         {/* SELF-SALE QUESTIONS — separate purple-ish block */}
-        {card.selfSaleQuestions.length > 0 && (
+        {action.selfSaleQuestions.length > 0 && (
           <div className="mt-4 rounded-md border border-ai/30 bg-ai/8 px-3 py-2.5">
             <SectionLabel icon={<Sparkles size={12} className="text-ai-glow" />}>
               Self-sale: пусть он сам себе продаст
             </SectionLabel>
             <ul className="space-y-1">
-              {card.selfSaleQuestions.map((q, i) => (
+              {action.selfSaleQuestions.map((q, i) => (
                 <li key={i} className="text-[13px] text-primary leading-relaxed">• {q}</li>
               ))}
             </ul>
           </div>
         )}
 
-        {/* Sprint 13: EMOTIONAL RISKS — что может СЛОМАТЬ сделку прямо сейчас
-            (отличается от riskOrMissed: тот про процесс/SPIN, этот про доверие). */}
-        {card.emotionalRisks.length > 0 && (
+        {/* Sprint 13: EMOTIONAL RISKS — доступно только из полной аналитики. */}
+        {card && card.emotionalRisks.length > 0 && (
           <div className="mt-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2.5">
             <SectionLabel icon={<HeartCrack size={12} className="text-danger" />}>
               Что может сломать сделку
@@ -899,8 +950,8 @@ function AdviceCard({ card }: { card: AssistantCard }) {
           </div>
         )}
 
-        {/* WHAT NOT TO DO */}
-        {card.whatNotToDo.length > 0 && (
+        {/* WHAT NOT TO DO — из полной аналитики */}
+        {card && card.whatNotToDo.length > 0 && (
           <div className="mt-4 rounded-md border border-danger/25 bg-danger/8 px-3 py-2.5">
             <SectionLabel icon={<Ban size={12} className="text-danger" />}>Что НЕ делать сейчас</SectionLabel>
             <ul className="space-y-1">
@@ -912,25 +963,36 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         )}
       </div>
 
-      {/* Sprint 34Б.1 — АНАЛИТИКА. Что происходит / эмоции / куда ведём /
-          что делать / тон. Раньше было сверху, теперь под action zone. */}
+      {/* Sprint 34В — АНАЛИТИКА. Рендерится только после полного этапа (card).
+          Пока card=null и analyzePhase='full' (или 'fast') — показываем
+          skeleton, чтобы UI не выглядел зависшим. */}
       <div className="mt-5 pt-4 border-t border-hairline">
         <div className="flex items-center gap-1.5 mb-3">
           <Activity size={13} className="text-muted" />
           <span className="text-[10px] uppercase tracking-[0.14em] text-muted font-semibold">
             Аналитика разговора
           </span>
+          {!card && analyzePhase && (
+            <StatusBadge tone="ai" dot>AI анализирует диалог…</StatusBadge>
+          )}
         </div>
 
-        {/* SITUATION — one sentence */}
-        <Field icon={<Activity size={14} />} label="Что происходит">{card.situation}</Field>
+        {!card && (
+          <div className="space-y-2">
+            <div className="h-3 rounded bg-elevated/60 animate-pulse" />
+            <div className="h-3 rounded bg-elevated/60 animate-pulse w-5/6" />
+            <div className="h-3 rounded bg-elevated/60 animate-pulse w-3/4" />
+          </div>
+        )}
 
-        {/* Sprint 13: EMOTIONAL LAYER — compact subcard. Это то, что отличает AI
-            co-pilot от sales-скрипта: он считывает не текст, а психологию сделки. */}
-        <EmotionalLayer card={card} />
+        {card && <Field icon={<Activity size={14} />} label="Что происходит">{card.situation}</Field>}
+
+        {card && (
+          <EmotionalLayer card={card} />
+        )}
 
         {/* RISK / MISSED — warning banner if anything is off */}
-        {card.riskOrMissed && (
+        {card && card.riskOrMissed && (
           <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
             <ShieldAlert size={14} className="text-warning mt-0.5 shrink-0" />
             <div>
@@ -940,18 +1002,20 @@ function AdviceCard({ card }: { card: AssistantCard }) {
           </div>
         )}
 
-        {/* OBJECTIVE + DIRECTION — куда ведём */}
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <MiniBlock icon={<Target size={13} className="text-zapusk-400" />} label="Цель этапа">
-            {card.conversationObjective}
-          </MiniBlock>
-          <MiniBlock icon={<Compass size={13} className="text-ai-glow" />} label="Куда ведём">
-            {card.conversationDirection}
-          </MiniBlock>
-        </div>
+        {/* OBJECTIVE + DIRECTION — куда ведём (только полная аналитика) */}
+        {card && (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <MiniBlock icon={<Target size={13} className="text-zapusk-400" />} label="Цель этапа">
+              {card.conversationObjective}
+            </MiniBlock>
+            <MiniBlock icon={<Compass size={13} className="text-ai-glow" />} label="Куда ведём">
+              {card.conversationDirection}
+            </MiniBlock>
+          </div>
+        )}
 
         {/* WHAT TO DO */}
-        {card.whatToDo.length > 0 && (
+        {card && card.whatToDo.length > 0 && (
           <div className="mt-4">
             <SectionLabel icon={<Zap size={12} className="text-zapusk-400" />}>Что делать</SectionLabel>
             <ul className="space-y-1">
@@ -965,9 +1029,8 @@ function AdviceCard({ card }: { card: AssistantCard }) {
           </div>
         )}
 
-        {/* Sprint 13: TONE SHIFT GUIDANCE — мост между «что делать» и репликой.
-            Подсказывает, как изменить стиль/темп — это самый «co-pilot» блок. */}
-        {card.toneShiftGuidance && (
+        {/* TONE SHIFT GUIDANCE — мост между «что делать» и репликой. */}
+        {card && card.toneShiftGuidance && (
           <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-ai/8 border border-ai/25">
             <Wand2 size={13} className="text-ai-glow mt-0.5 shrink-0" />
             <div>
@@ -979,7 +1042,7 @@ function AdviceCard({ card }: { card: AssistantCard }) {
       </div>
 
       {/* MINI-PITCH — only if interest signal already detected */}
-      {card.miniPitch && (
+      {card && card.miniPitch && (
         <div className="mt-4 rounded-md border border-zapusk/30 bg-zapusk/8 px-3 py-2.5">
           <SectionLabel icon={<Megaphone size={12} className="text-zapusk-400" />}>Мини-питч</SectionLabel>
           <p className="text-sm text-primary leading-relaxed">{card.miniPitch}</p>
@@ -987,7 +1050,7 @@ function AdviceCard({ card }: { card: AssistantCard }) {
       )}
 
       {/* OBJECTION */}
-      {card.objection && (
+      {card && card.objection && (
         <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
           <AlertTriangle size={14} className="text-warning mt-0.5 shrink-0" />
           <div>
@@ -998,7 +1061,7 @@ function AdviceCard({ card }: { card: AssistantCard }) {
       )}
 
       {/* DEAL NEXT STEP */}
-      {card.dealNextStep && (
+      {card && card.dealNextStep && (
         <div className="mt-4 flex items-start gap-2 px-3 py-2.5 rounded-md bg-zapusk/8 border border-zapusk/25">
           <ChevronRight size={14} className="text-zapusk-400 mt-0.5 shrink-0" />
           <div>
@@ -1008,7 +1071,8 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         </div>
       )}
 
-      {/* Sprint 34Б.1 — ДОПОЛНИТЕЛЬНО. Карта SPIN — диагностика этапов разговора. */}
+      {/* Sprint 34В — ДОПОЛНИТЕЛЬНО. Карта СПИН видна только после полной аналитики. */}
+      {card && (
       <div className="mt-5 pt-4 border-t border-hairline">
         <div className="flex items-center gap-1.5 mb-3">
           <Target size={13} className="text-muted" />
@@ -1042,6 +1106,7 @@ function AdviceCard({ card }: { card: AssistantCard }) {
           })}
         </div>
       </div>
+      )}
     </Card>
   );
 }

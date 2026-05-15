@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware } from '../auth.js';
-import { analyzeSalesTurn } from '../services/salesAssistantService.js';
+import { analyzeSalesTurn, analyzeSalesTurnFast } from '../services/salesAssistantService.js';
 
 export const salesAssistantRoutes = Router();
 salesAssistantRoutes.use(authMiddleware);
@@ -32,5 +32,28 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
   } catch (err) {
     console.error('[sales-assistant]', err);
     res.status(500).json({ error: 'analyze_failed' });
+  }
+});
+
+// Sprint 34В — двухэтапная генерация. Этап 1: ultra-fast tactical reply
+// для живой встречи (1-3 секунды). UI должен звать сначала /analyze-fast,
+// рендерить главный вопрос/backup/self-sale, потом догнать через /analyze
+// для полной аналитики.
+salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
+  const parsed = analyzeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  try {
+    const fast = await analyzeSalesTurnFast({
+      transcript: parsed.data.transcript.trim(),
+      recentContext: parsed.data.recentContext ?? parsed.data.recent ?? undefined,
+      previousAdvice: parsed.data.previousAdvice ?? undefined,
+      previousSpinStage: parsed.data.previousSpinStage ?? undefined,
+      adviceHistory: parsed.data.adviceHistory ?? undefined,
+      projectId: parsed.data.projectId ?? null,
+    });
+    res.json({ fast });
+  } catch (err) {
+    console.error('[sales-assistant:fast]', err);
+    res.status(500).json({ error: 'analyze_fast_failed' });
   }
 });
