@@ -57,6 +57,22 @@ model InviteToken {
   @@index([usedAt])
 }
 
+// Sprint 37 P1 — Manager assignment (architecture note, NO migration yet).
+//
+// Сейчас MANAGER в коде проходит как admin-like (см. server/src/lib/ownership.ts:
+// isAdminLike). На уровне списков это значит «любой менеджер видит всех клиентов».
+// Это работает на MVP с 1-2 менеджерами, но плохо масштабируется.
+//
+// План Sprint 38+ (две альтернативы, выберем по факту):
+//   A) Добавить Project.managerId String? @null + relation на User. Простая
+//      one-to-one: один менеджер на проект. ManagerDashboard фильтрует по этому
+//      полю; admin/super_admin видят всё.
+//   B) Отдельная модель ProjectAssignment { projectId, managerId, role: 'lead'|'support', addedAt }
+//      Many-to-many. Покрывает кейс «лид-менеджер + ассистент» и историю передач.
+//
+// Решение откладывается до момента, когда MANAGER станет >2 человек. До того
+// admin-like read остаётся корректным MVP-поведением.
+
 model Project {
   id               String   @id @default(cuid())
   userId           String

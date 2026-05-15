@@ -13,9 +13,12 @@ import {
   snapshotBrief,
 } from '../services/briefService.js';
 import { recordAudit } from '../lib/audit.js';
+import { requireNotInvestor } from '../lib/ownership.js';
 
 export const briefRoutes = Router();
 briefRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не работает с founder-брифами.
+briefRoutes.use(requireNotInvestor());
 
 async function assertOwnership(userId: string, projectId: string) {
   return Boolean(await prisma.project.findFirst({ where: { id: projectId, userId } }));
@@ -52,6 +55,17 @@ briefRoutes.get('/:projectId', async (req, res) => {
     return res.status(404).json({ error: 'project_not_found' });
   }
   const brief = await prisma.projectBrief.findUnique({ where: { projectId: req.params.projectId } });
+  // Sprint 37 P0.3 — audit на чтение брифа. Бриф — это вся инвест-аналитика
+  // проекта (бизнес-резюме, монетизация, валидация). Любая утечка — серьёзный
+  // инцидент. Логируем только metadata (projectId + version), не сам текст.
+  if (brief) {
+    await recordAudit(req, {
+      action: 'brief.read',
+      targetType: 'ProjectBrief',
+      targetId: brief.id,
+      payload: { projectId: brief.projectId, version: brief.version },
+    });
+  }
   res.json({ brief });
 });
 

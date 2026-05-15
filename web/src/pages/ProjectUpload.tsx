@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Trash2, Link2, FileText } from 'lucide-react';
+import { ArrowLeft, Trash2, Link2, FileText, Download, ExternalLink } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { UploadZone } from '../components/ui/UploadZone';
 import { Button } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Input';
-import { api, type Project, type UploadedFile } from '../lib/api';
+import { api, downloadBlob, type Project, type UploadedFile } from '../lib/api';
 
 const CATEGORIES = [
   { value: 'pitch', label: 'Презентация' },
@@ -93,7 +93,9 @@ export default function ProjectUpload() {
           <p className="text-sm text-muted text-center py-6">Пока пусто</p>
         ) : (
           <ul className="space-y-2">
-            {project.files.map((f) => <Row key={f.id} file={f} onRemove={() => remove(f.id)} />)}
+            {project.files.map((f) => (
+              <Row key={f.id} projectId={id ?? ''} file={f} onRemove={() => remove(f.id)} />
+            ))}
           </ul>
         )}
       </Card>
@@ -101,7 +103,12 @@ export default function ProjectUpload() {
   );
 }
 
-function Row({ file, onRemove }: { file: UploadedFile; onRemove: () => void }) {
+// Sprint 37 P0.2 — добавили иконку «Скачать» к загруженным файлам. Раньше
+// после закрытия публичного /uploads (Sprint 36) у пользователя не было
+// способа достать собственный файл из UI вообще. Теперь file.path → проходит
+// через защищённый GET /api/files/:projectId/:fileId/download, file.url
+// (внешняя ссылка) открывается в новой вкладке.
+function Row({ projectId, file, onRemove }: { projectId: string; file: UploadedFile; onRemove: () => void }) {
   const isLink = Boolean(file.url);
   return (
     <li className="flex items-center gap-3 px-3 py-2.5 rounded-md bg-canvas/50 border border-hairline group">
@@ -114,7 +121,26 @@ function Row({ file, onRemove }: { file: UploadedFile; onRemove: () => void }) {
           {isLink ? file.url : `${Math.round(file.size / 1024)} КБ · ${file.category}`}
         </div>
       </div>
-      <button onClick={onRemove} className="text-muted hover:text-danger transition-colors">
+      {isLink ? (
+        <a
+          href={file.url ?? '#'}
+          target="_blank"
+          rel="noreferrer"
+          className="text-muted hover:text-primary transition-colors"
+          title="Открыть ссылку в новой вкладке"
+        >
+          <ExternalLink size={14} />
+        </a>
+      ) : (
+        <button
+          onClick={() => downloadBlob(`/api/files/${projectId}/${file.id}/download`, file.originalName)}
+          className="text-muted hover:text-primary transition-colors"
+          title="Скачать"
+        >
+          <Download size={14} />
+        </button>
+      )}
+      <button onClick={onRemove} className="text-muted hover:text-danger transition-colors" title="Удалить">
         <Trash2 size={14} />
       </button>
     </li>

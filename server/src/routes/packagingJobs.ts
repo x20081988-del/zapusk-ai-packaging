@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
+import { requireNotInvestor } from '../lib/ownership.js';
 
 // Sprint 15: история job'ов AI orchestrator'а. Каждый ход pipeline
 // (generatePrompt / generate-full-packaging) пишет сюда строку с
@@ -12,6 +13,8 @@ import { authMiddleware, getUser } from '../auth.js';
 
 export const packagingJobsRoutes = Router();
 packagingJobsRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не работает с packaging-pipeline.
+packagingJobsRoutes.use(requireNotInvestor());
 
 async function assertOwnership(userId: string, projectId: string): Promise<boolean> {
   const project = await prisma.project.findFirst({ where: { id: projectId, userId } });

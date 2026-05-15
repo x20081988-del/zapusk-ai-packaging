@@ -9,10 +9,12 @@ import { authMiddleware, getUser } from '../auth.js';
 import { storage } from '../services/storage.js';
 import { recordAudit } from '../lib/audit.js';
 import { env } from '../env.js';
-import { getActorRole, isAdminLike } from '../lib/ownership.js';
+import { getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 
 export const filesRoutes = Router();
 filesRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не имеет доступа к founder-files.
+filesRoutes.use(requireNotInvestor());
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -138,6 +140,23 @@ filesRoutes.get('/:projectId/:fileId/download', async (req, res) => {
   if (!fs.existsSync(absolute)) {
     return res.status(404).json({ error: 'file_missing_on_disk' });
   }
+
+  // Sprint 37 P0.3 — audit на чувствительные скачивания. Логируем только
+  // metadata (никаких контентов файла) — для расследования утечек: кто, что,
+  // когда скачал. recordAudit не падает на ошибках записи, так что не блокирует
+  // отдачу файла.
+  await recordAudit(req, {
+    action: 'file.download',
+    targetType: 'UploadedFile',
+    targetId: file.id,
+    payload: {
+      projectId: file.projectId,
+      originalName: file.originalName,
+      category: file.category,
+      size: file.size,
+      mimeType: file.mimeType,
+    },
+  });
 
   res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
   return res.download(absolute, file.originalName || path.basename(absolute));

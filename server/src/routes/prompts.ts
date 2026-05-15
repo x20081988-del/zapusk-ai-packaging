@@ -4,9 +4,12 @@ import { authMiddleware, getUser } from '../auth.js';
 import { generatePrompt, generateAllPrompts, ALL_PROMPT_KINDS, type PromptKind } from '../services/promptBuilders.js';
 import { generateFullPackaging } from '../services/packageService.js';
 import { recordAudit } from '../lib/audit.js';
+import { requireNotInvestor } from '../lib/ownership.js';
 
 export const promptsRoutes = Router();
 promptsRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не запускает packaging и не работает с founder-prompts.
+promptsRoutes.use(requireNotInvestor());
 
 promptsRoutes.post('/:projectId/generate-full-packaging', async (req, res) => {
   const user = getUser(req);

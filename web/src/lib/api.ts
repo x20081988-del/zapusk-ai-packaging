@@ -52,6 +52,76 @@ export const api = {
     request<T>(path, { method: 'POST', body: form, signal: opts?.signal }),
 };
 
+// Sprint 37 P0.1 — защищённое скачивание файлов с Bearer-токеном.
+//
+// Раньше UI делал `<a href="/api/projects/X/export.zip">` или
+// `window.open('/api/.../prompts/Y.md')` — браузер открывал URL без
+// Authorization header, ловил 401 и в проде падал на login. После закрытия
+// публичного /uploads в Sprint 36 единственный путь к файлу — этот helper.
+//
+// Логика:
+//   1. fetch с авторизацией;
+//   2. response.blob() → создаём object-URL;
+//   3. триггерим <a download="..."> программно;
+//   4. revokeObjectURL чтобы не утекали URL'ы в текущей вкладке.
+//
+// filename: если задан явно — используется; иначе пытаемся вытянуть из
+// Content-Disposition; иначе берём последний сегмент URL.
+export async function downloadBlob(
+  path: string,
+  filename?: string,
+  opts?: ApiRequestOptions,
+): Promise<void> {
+  const auth = getAuth();
+  const headers: Record<string, string> = {
+    ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+    ...(auth ? { 'x-user-email': auth.email } : {}),
+    ...(auth ? { 'x-user-role': auth.role } : {}),
+  };
+  const res = await fetch(`${BASE}${path}`, { headers, signal: opts?.signal });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${res.statusText}: ${text}`);
+  }
+  const blob = await res.blob();
+  const resolvedName =
+    filename ||
+    parseFilenameFromContentDisposition(res.headers.get('content-disposition')) ||
+    path.split('/').filter(Boolean).pop() ||
+    'download';
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = resolvedName;
+    // Не вставляем в DOM навсегда — клик работает и без append на современных
+    // браузерах, но Firefox старее требовал DOM-присоединения. Делаем безопасный
+    // append + remove чтобы не было различий.
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // revoke даём микротик — Safari иначе теряет blob раньше времени.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+}
+
+function parseFilenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  // Сначала RFC 5987 filename*=UTF-8''… (приоритетный — поддерживает не-ASCII).
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (utf8Match?.[1]) {
+    try { return decodeURIComponent(utf8Match[1]); } catch { /* ignore */ }
+  }
+  // Старый формат filename="..." без кодировки.
+  const quoted = /filename="([^"]+)"/i.exec(header);
+  if (quoted?.[1]) return quoted[1];
+  const bare = /filename=([^;]+)/i.exec(header);
+  if (bare?.[1]) return bare[1].trim();
+  return null;
+}
+
 // ─── typed surface ───────────────────────────────────────────
 
 // Sprint 21: формат привлечения инвестиций для проекта. null = не выбран.

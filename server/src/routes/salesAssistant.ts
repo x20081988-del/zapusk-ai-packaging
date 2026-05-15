@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware } from '../auth.js';
-import { assertProjectOwnership } from '../lib/ownership.js';
+import { assertProjectOwnership, requireNotInvestor } from '../lib/ownership.js';
 import { analyzeSalesTurn, analyzeSalesTurnFast } from '../services/salesAssistantService.js';
 
 export const salesAssistantRoutes = Router();
 salesAssistantRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не использует sales co-pilot.
+salesAssistantRoutes.use(requireNotInvestor());
 
 const analyzeSchema = z.object({
   transcript: z.string().trim().min(1).max(32_000),

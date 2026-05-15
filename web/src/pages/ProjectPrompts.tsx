@@ -6,7 +6,7 @@ import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
-import { api, type GeneratedPrompt } from '../lib/api';
+import { api, downloadBlob, type GeneratedPrompt } from '../lib/api';
 import { PROMPT_KIND_LABELS, formatDate } from '../lib/format';
 import { sanitizePublicText } from '../lib/publicText';
 
@@ -102,7 +102,10 @@ export default function ProjectPrompts() {
                       size="sm"
                       variant="ghost"
                       iconLeft={<Download size={12} />}
-                      onClick={() => window.open(`/api/projects/${id}/prompts/${current.id}.md`)}
+                      onClick={() => downloadBlob(
+                        `/api/projects/${id}/prompts/${current.id}.md`,
+                        `prompt-${current.kind}-v${current.version}.md`,
+                      )}
                     >
                       Текстовый файл для команды
                     </Button>

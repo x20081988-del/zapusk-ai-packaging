@@ -355,7 +355,102 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Hotfix 2026-05-15: AI-ассистент больше не зависает после повторных кликов)_
+_(empty — Sprint 37: auth-downloads + audit on sensitive reads + INVESTOR hardening)_
+
+---
+
+## Sprint 37 — 2026-05-15 — Secure Files + Audit + Access Hardening
+
+Theme: **закрыли инфраструктурные хвосты после Sprint 35-36** — UI теперь умеет скачивать файлы через Bearer-токен, чувствительные read-операции пишут в audit, INVESTOR заблокирован на всех founder-flow routes, lowercase legacy `role === 'admin'` заменён на нормализованный `isAdminLike`.
+
+### P0.1 — Auth download helper
+
+- **`web/src/lib/api.ts`** — новый `downloadBlob(path, filename?, opts?)`. fetch + Bearer header → `response.blob()` → программный клик по `<a download>` → `URL.revokeObjectURL`. Принимает `AbortSignal`. Filename берётся из аргумента → Content-Disposition (RFC 5987 / quoted / bare) → последнего сегмента URL. Также экспортирован `ApiRequestOptions { signal? }`.
+
+### P0.2 — Все user-facing downloads через auth-helper
+
+Раньше UI делал `<a href="/api/projects/X/export.zip">` или `window.open(...)` — браузер не отправлял Authorization и ловил 401. Закрыто:
+
+- **`web/src/pages/ProjectCockpit.tsx`** — кнопки «Скачать комплект» (ZIP) и «Данные проекта» (JSON) переведены на `downloadBlob`.
+- **`web/src/pages/ProjectPrompts.tsx`** — «Текстовый файл для команды» (markdown prompt) на `downloadBlob`.
+- **`web/src/pages/ProjectDocuments.tsx`** — `onDownload` (markdown document) на `downloadBlob`.
+- **`web/src/pages/ProjectUpload.tsx`** — добавлена кнопка-иконка «Скачать» к каждому загруженному файлу (вместе с «Открыть ссылку» для link-files). Это первый раз, когда после закрытия публичного `/uploads` в Sprint 36 у фаундера есть путь к собственному файлу из UI.
+
+### P0.3 — Audit events на чувствительные чтения
+
+Добавили 5 новых audit-actions. Metadata-only — никаких контентов файлов / transcript'ов / тел брифов. Все падения audit-записи изолированы (recordAudit ловит и логирует, не блокирует).
+
+| Action | Where | When |
+|---|---|---|
+| `file.download` | [server/src/routes/files.ts](server/src/routes/files.ts) GET /:projectId/:fileId/download | каждое скачивание |
+| `brief.read` | [server/src/routes/brief.ts](server/src/routes/brief.ts) GET /:projectId | только если brief существует |
+| `conversation_analysis.read` | [server/src/routes/conversationAnalysis.ts](server/src/routes/conversationAnalysis.ts) GET /:id | каждое открытие карточки |
+| `sales_session.read` | [server/src/routes/salesSessions.ts](server/src/routes/salesSessions.ts) GET /:id | каждое открытие |
+| `project.read_sensitive` | [server/src/routes/projects.ts](server/src/routes/projects.ts) GET /:id | только когда admin-like читает НЕ свой проект (иначе audit взорвётся от штатных просмотров) |
+
+NOT audited: list-endpoints, `/health`, dashboards, /api/projects (list), просмотр своего проекта владельцем — по спеке.
+
+### P0.4 — Role hardening
+
+- **`server/src/lib/ownership.ts`** — новый helper `requireNotInvestor()`. Возвращает `403 investor_forbidden` с понятным сообщением для INVESTOR. SUPER_ADMIN / ADMIN / MANAGER / FOUNDER проходят.
+- **Lowercase `user.role === 'admin'` → `isAdminLike(normalizeRole(...))`** в [server/src/routes/projects.ts](server/src/routes/projects.ts) (две точки — list endpoint, detail endpoint). Раньше под этим чеком проходил только legacy lowercase 'admin'; SUPER_ADMIN / ADMIN (uppercase, нормализованный JWT-формат) — НЕТ. Теперь все admin-like корректно получают cross-project view.
+- **`requireNotInvestor()` применён** к founder-flow модулям после `authMiddleware`:
+  - `/api/projects` (projects.ts)
+  - `/api/files` (files.ts)
+  - `/api/brief` (brief.ts)
+  - `/api/prompts` (prompts.ts)
+  - `/api/packaging-jobs` (packagingJobs.ts)
+  - `/api/sales-assistant` (salesAssistant.ts)
+  - `/api/sales-sessions` (salesSessions.ts)
+  - `/api/conversation-analysis` (conversationAnalysis.ts)
+  - `/api/ai-leads` (aiLeads.ts)
+  - `/api/reviews` (reviews.ts)
+  - `/api/projects/.../export` (exportRoute.ts)
+
+### P1 — Manager assignment (architecture only)
+
+- **`server/prisma/schema.prisma`** — комментарий перед `model Project`: две альтернативы для будущего (Project.managerId vs ProjectAssignment). Решение откладывается до момента, когда MANAGER станет >2 человек. До того admin-like read остаётся корректным MVP-поведением.
+
+### P1 — Demo assets
+
+- `/web/public/demo-assets/` содержит ~200 МБ реалистично-выглядящих файлов клиентов (cafe-spb, forrest-wedding, glavsnab, luce-silva, planeta — PDF/XLSX/DOCX). **Не удалял** без подтверждения пользователя — есть риск порвать demo UI (demoMaterials.ts ссылается на конкретные filenames). Требует ручного review каждого файла: какие — синтетические, какие содержат реальные финансы/контакты. См. ниже «Что осталось на Sprint 38».
+
+### P2 — Cleanup policy (TODO)
+
+- **`server/src/lib/audit.ts`** — добавлен большой комментарий-roadmap: hard-delete archived UploadedFile старше 30 дней, retention для старых generated versions, retention для audit-log самого, реализация cron-задачей через `scripts/cleanup.ts` с dry-run-фазой. Не реализовано в Sprint 37 — данных пока мало.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-Dx_zcSb2.js`.
+- **Local preview smoke** (zapusk-api + zapusk-web):
+  - FOUNDER → POST /api/auth/demo → 200, token issued.
+  - INVESTOR → 5 founder-routes (`GET /api/projects`, `POST /api/projects`, `POST /api/sales-assistant/analyze-fast`, `GET /api/ai-leads`, `POST /api/conversation-analysis/text`) → **все 403 `investor_forbidden`** с русским сообщением.
+  - FOUNDER → те же routes на чтение → 200.
+  - ADMIN → POST /api/auth/demo → 200; открывает чужой project → `project.read_sensitive` audit fired с `actorRole: ADMIN`.
+  - FOUNDER → upload + download через `/api/files/.../download` → 200, файл `'x'` отдан, audit `file.download` fired с `actorRole: FOUNDER`.
+  - Console — 0 ошибок.
+
+### Какие риски закрыты
+
+1. **/uploads/ закрыт публично (Sprint 36), но UI не умел скачивать** — закрыто helper'ом.
+2. **Чувствительные read-операции без следов в audit** — закрыто 5 новыми audit-actions.
+3. **Lowercase `role === 'admin'` пропускал uppercase JWT-роли** — закрыто через isAdminLike.
+4. **INVESTOR проходил во все founder-flow routes** — закрыто requireNotInvestor() на 11 модулях.
+
+### Файлы (16)
+
+- Server: `prisma/schema.prisma`, `lib/audit.ts`, `lib/ownership.ts`, `routes/projects.ts`, `routes/files.ts`, `routes/brief.ts`, `routes/prompts.ts`, `routes/packagingJobs.ts`, `routes/salesAssistant.ts`, `routes/salesSessions.ts`, `routes/conversationAnalysis.ts`, `routes/aiLeads.ts`, `routes/reviews.ts`, `routes/exportRoute.ts`.
+- Web: `lib/api.ts`, `pages/ProjectCockpit.tsx`, `pages/ProjectPrompts.tsx`, `pages/ProjectDocuments.tsx`, `pages/ProjectUpload.tsx`.
+
+### Что осталось на Sprint 38
+
+- **Demo-assets review** — пройтись по каждому из ~12 файлов в `/web/public/demo-assets/`: удалить реальные финмодели или заменить redacted-версиями. Это требует контента самих файлов от пользователя.
+- **Manager assignment** — реализовать одну из двух схем (Project.managerId или ProjectAssignment) когда менеджеров >2.
+- **Hard-cleanup cron** — `scripts/cleanup.ts` для archived rows старше 30 дней (см. audit.ts комментарий).
+- **Investor-side routes** — пустая половина MVP. Когда появится UX (Opportunities, Portfolio, Secondary) — на отдельный prefix `/api/investor/*` с requireRole(['INVESTOR','ADMIN','SUPER_ADMIN']).
+- **Backend AbortSignal** — пробросить `req.signal` от Express до aiClient.generateJson, чтобы frontend-abort реально резал запрос к OpenAI (см. Hotfix 2026-05-15).
 
 ---
 

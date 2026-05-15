@@ -1,4 +1,4 @@
-import type { Request } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '../db.js';
 import { getRole, getUser, normalizeRole, type UserRole } from '../auth.js';
 
@@ -14,6 +14,28 @@ import { getRole, getUser, normalizeRole, type UserRole } from '../auth.js';
 
 export function isAdminLike(role: UserRole): boolean {
   return role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER';
+}
+
+// Sprint 37 P0.4 — гейт «не-investor». INVESTOR — это инвестор-side роль,
+// её UX состоит из read-only списков и собственного портфеля. Она ДОЛЖНА
+// быть отрезана от founder-flow routes: create/edit/delete projects, uploads,
+// brief generate, prompts, packaging jobs, sales-assistant, sales-sessions,
+// conversation-analysis ingest. SUPER_ADMIN/ADMIN/MANAGER/FOUNDER — пропускаем.
+//
+// Не используем requireRole(['FOUNDER','MANAGER','ADMIN','SUPER_ADMIN'])
+// напрямую потому, что хочется явный 403 invest_forbidden, а не общий
+// 'forbidden' — фронту удобнее отрисовать таргетированную плашку.
+export function requireNotInvestor() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const role = getActorRole(req);
+    if (role === 'INVESTOR') {
+      return res.status(403).json({
+        error: 'investor_forbidden',
+        message: 'Эта операция доступна только фаундерам и команде платформы.',
+      });
+    }
+    return next();
+  };
 }
 
 export function getActorRole(req: Request): UserRole {

@@ -3,12 +3,16 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { authMiddleware, getUser } from '../auth.js';
+import { authMiddleware, getUser, normalizeRole } from '../auth.js';
 import { storage } from '../services/storage.js';
 import { recordAudit } from '../lib/audit.js';
+import { isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 
 export const projectsRoutes = Router();
 projectsRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR-роль не имеет доступа к founder-проектам.
+// Их UX (когда появится) живёт на отдельных investor-роутах.
+projectsRoutes.use(requireNotInvestor());
 
 // Sprint 21: формат привлечения инвестиций. nullable — пользователь может
 // ещё не выбрать (по умолчанию TrackPicker предложит на главной странице
@@ -38,9 +42,13 @@ projectsRoutes.get('/', async (req, res) => {
   // Sprint 24 — разделение demo и active workspace'ов:
   //   • demo — видит только глобальные показательные проекты (isDemo=true)
   //   • active — видит только свои реальные проекты (own userId + isDemo=false)
-  //   • admin — видит всё для аудита
+  //   • admin/manager/super_admin — видят всё для аудита
   const isDemo = user.workspaceStatus === 'demo';
-  const isAdmin = user.role === 'admin';
+  // Sprint 37 P0.4 — было `user.role === 'admin'` (lowercase legacy). Это
+  // не покрывало SUPER_ADMIN, MANAGER и не работало после нормализации в
+  // 'ADMIN'. Теперь через isAdminLike(normalizeRole(...)) — единая точка
+  // правды для admin-like прав.
+  const isAdmin = isAdminLike(normalizeRole(user.role));
   // Sprint 30: filter out archived projects from regular GET. Admin restore
   // pulls via /api/admin/audit + /api/admin/restore.
   const where = isAdmin
@@ -106,7 +114,10 @@ projectsRoutes.post('/', async (req, res) => {
 projectsRoutes.get('/:id', async (req, res) => {
   const user = getUser(req) as { id: string; workspaceStatus?: string; role?: string };
   const isDemo = user.workspaceStatus === 'demo';
-  const isAdmin = user.role === 'admin';
+  // Sprint 37 P0.4 — было `user.role === 'admin'` (lowercase legacy). Заменили
+  // на isAdminLike(normalizeRole(...)) — теперь SUPER_ADMIN/ADMIN/MANAGER все
+  // получают админ-доступ к чужим проектам.
+  const isAdmin = isAdminLike(normalizeRole(user.role));
 
   // Sprint 24: demo users могут читать только isDemo проекты, active — только
   // свои own. Admin видит всё.
@@ -129,6 +140,24 @@ projectsRoutes.get('/:id', async (req, res) => {
     },
   });
   if (!project) return res.status(404).json({ error: 'not_found' });
+
+  // Sprint 37 P0.3 — audit «admin посмотрел чужой проект». Это самый
+  // чувствительный read-сценарий: владелец платформы / менеджер открыл
+  // карточку клиента (включая бриф, файлы, генерации). Для owner-самого-себя
+  // НЕ логируем — иначе таблица за неделю взорвётся от штатных просмотров.
+  if (isAdmin && project.userId !== user.id) {
+    await recordAudit(req, {
+      action: 'project.read_sensitive',
+      targetType: 'Project',
+      targetId: project.id,
+      payload: {
+        projectName: project.name,
+        ownerUserId: project.userId,
+        isDemo: project.isDemo,
+      },
+    });
+  }
+
   res.json({ project });
 });
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
-import { assertProjectOwnership, getActorRole, isAdminLike } from '../lib/ownership.js';
+import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 import {
   completeSession,
   persistSession,
@@ -14,6 +14,8 @@ import {
 
 export const salesSessionsRoutes = Router();
 salesSessionsRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не имеет доступа к встречам founder'а.
+salesSessionsRoutes.use(requireNotInvestor());
 
 const completeSchema = z.object({
   projectId: z.string().optional().nullable(),
@@ -73,6 +75,20 @@ salesSessionsRoutes.get('/:id', async (req, res) => {
     const ownership = await assertProjectOwnership(req, session.projectId ?? null);
     if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
   }
+
+  // Sprint 37 P0.3 — audit на чтение карточки встречи. Содержит transcript,
+  // оценку вероятности, инфу об инвесторе. Metadata-only — не пишем transcript.
+  await recordAudit(req, {
+    action: 'sales_session.read',
+    targetType: 'SalesSession',
+    targetId: session.id,
+    payload: {
+      projectId: session.projectId,
+      investorName: session.investorName,
+      probabilityScore: session.probabilityScore,
+      tone: session.tone,
+    },
+  });
 
   res.json({ session });
 });

@@ -6,7 +6,7 @@ import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { DocumentCard } from '../components/ui/DocumentCard';
 import { EmptyState } from '../components/ui/EmptyState';
-import { api, type Project } from '../lib/api';
+import { api, downloadBlob, type Project } from '../lib/api';
 
 export default function ProjectDocuments() {
   const { id } = useParams<{ id: string }>();
@@ -40,7 +40,10 @@ export default function ProjectDocuments() {
               <DocumentCard
                 key={d.id}
                 doc={d}
-                onDownload={() => window.open(`/api/projects/${id}/documents/${d.id}.md`)}
+                onDownload={() => downloadBlob(
+                  `/api/projects/${id}/documents/${d.id}.md`,
+                  `${d.kind}-v${d.version}.md`,
+                )}
               />
             ))}
           </ul>

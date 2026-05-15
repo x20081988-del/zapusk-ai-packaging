@@ -2,10 +2,13 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
+import { requireNotInvestor } from '../lib/ownership.js';
 import { leadProvider, type ProjectForAILeads } from '../services/aiLeadsService.js';
 
 export const aiLeadsRoutes = Router();
 aiLeadsRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не имеет AI-leads (это founder-side инструмент).
+aiLeadsRoutes.use(requireNotInvestor());
 
 aiLeadsRoutes.get('/', async (req, res) => {
   const user = getUser(req);

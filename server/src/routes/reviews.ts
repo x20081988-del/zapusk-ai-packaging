@@ -3,9 +3,12 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
+import { requireNotInvestor } from '../lib/ownership.js';
 
 export const reviewsRoutes = Router();
 reviewsRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — artefact reviews — founder/manager workflow. INVESTOR no.
+reviewsRoutes.use(requireNotInvestor());
 
 async function ownsProject(userId: string, projectId: string) {
   return Boolean(await prisma.project.findFirst({ where: { id: projectId, userId } }));

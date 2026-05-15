@@ -15,7 +15,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
 import { UploadZone } from '../components/ui/UploadZone';
-import { api, type ArtefactReview, type InvestmentTrack, type PackagingJob, type Project, type UploadedFile } from '../lib/api';
+import { api, downloadBlob, type ArtefactReview, type InvestmentTrack, type PackagingJob, type Project, type UploadedFile } from '../lib/api';
 import {
   formatMoney, formatPercent, formatDate, parseObj,
   STAGE_LABELS, INVESTOR_TYPE_LABELS,
@@ -207,16 +207,26 @@ export default function ProjectCockpit() {
           <Link to="/personal-manager">
             <Button variant="secondary" size="sm" iconLeft={<MessageCircle size={14} />}>Менеджер</Button>
           </Link>
-          <a href={`/api/projects/${id}/export/zip`}>
-            <Button variant="secondary" size="sm" iconLeft={<Package size={14} />}>
-              Скачать комплект
-            </Button>
-          </a>
-          <a href={`/api/projects/${id}/export`} target="_blank" rel="noreferrer">
-            <Button variant="ghost" size="sm" iconLeft={<Download size={14} />}>
-              Данные проекта
-            </Button>
-          </a>
+          {/* Sprint 37 P0.2 — auth-download. <a href=API_URL> в новой вкладке
+              не отправлял Bearer-токен; с invite-only архитектурой это давало
+              401. downloadBlob делает fetch с Authorization, забирает blob и
+              триггерит <a download> программно. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            iconLeft={<Package size={14} />}
+            onClick={() => downloadBlob(`/api/projects/${id}/export/zip`, `${project?.name ?? 'project'}.zip`)}
+          >
+            Скачать комплект
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            iconLeft={<Download size={14} />}
+            onClick={() => downloadBlob(`/api/projects/${id}/export`, `${project?.name ?? 'project'}.json`)}
+          >
+            Данные проекта
+          </Button>
         </div>
       }
     >

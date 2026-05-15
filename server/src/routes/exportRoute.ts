@@ -1,12 +1,16 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
+import { requireNotInvestor } from '../lib/ownership.js';
 import { streamProjectZip } from '../services/packageService.js';
 import { sanitizePublicText } from '../services/publicText.js';
 import { titleForKind } from '../services/promptBuilders.js';
 
 export const exportRoutes = Router();
 exportRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — экспорт project ZIP / JSON / prompts / documents — это
+// founder-data. INVESTOR блокируется.
+exportRoutes.use(requireNotInvestor());
 
 exportRoutes.get('/:projectId/export/zip', async (req, res) => {
   const user = getUser(req);

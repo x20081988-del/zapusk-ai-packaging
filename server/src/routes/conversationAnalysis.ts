@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
-import { assertProjectOwnership, getActorRole, isAdminLike } from '../lib/ownership.js';
+import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 import {
   ingestConversation,
   listAnalyses,
@@ -13,6 +13,8 @@ import {
 
 export const conversationAnalysisRoutes = Router();
 conversationAnalysisRoutes.use(authMiddleware);
+// Sprint 37 P0.4 — INVESTOR не работает с founder-conversation-analysis.
+conversationAnalysisRoutes.use(requireNotInvestor());
 
 // 60 MB cap — handles ~2 hours of compressed audio on most codecs.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
@@ -109,6 +111,21 @@ conversationAnalysisRoutes.get('/:id', async (req, res) => {
     const ownership = await assertProjectOwnership(req, row.projectId ?? null);
     if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
   }
+
+  // Sprint 37 P0.3 — audit на чтение анализа. Содержит transcript разговора
+  // фаундера с инвестором — высокочувствительный контент. Metadata-only:
+  // projectId + investorName + spinStage + aiScore.
+  await recordAudit(req, {
+    action: 'conversation_analysis.read',
+    targetType: 'ConversationAnalysis',
+    targetId: row.id,
+    payload: {
+      projectId: row.projectId,
+      investorName: row.investorName,
+      spinStage: row.spinStage,
+      aiScore: row.aiScore,
+    },
+  });
 
   res.json({ analysis: row });
 });
