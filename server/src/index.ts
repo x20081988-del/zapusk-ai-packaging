@@ -26,6 +26,7 @@ import { assistantOutcomesRoutes } from './routes/assistantOutcomes.js';
 import { assistantLearningRoutes } from './routes/assistantLearning.js';
 import { managerRoutes } from './routes/manager.js';
 import { aiReliabilityRoutes } from './routes/aiReliability.js';
+import { realtimeRoutes } from './routes/realtime.js';
 
 const app = express();
 
@@ -142,6 +143,9 @@ app.use('/api/assistant-outcomes', assistantOutcomesRoutes);
 app.use('/api/assistant-learning', assistantLearningRoutes);
 // Sprint 48 — AI reliability ledger/dashboard.
 app.use('/api/ai-reliability', aiReliabilityRoutes);
+// Sprint 49 — OpenAI Realtime ephemeral session bootstrap для WebRTC live
+// транскрипции в браузере. Основной OPENAI_API_KEY никогда не уходит клиенту.
+app.use('/api/realtime', realtimeRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

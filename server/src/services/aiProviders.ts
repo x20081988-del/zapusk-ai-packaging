@@ -19,7 +19,8 @@ export type AIToolId =
   | 'claude-opus'
   | 'claude-code'
   | 'lovable-web'
-  | 'claude-design-pdf';
+  | 'claude-design-pdf'
+  | 'gpt-realtime-transcribe';
 
 export type OutputTypeId =
   | 'investor_summary'
@@ -31,7 +32,8 @@ export type OutputTypeId =
   | 'calculator'
   | 'faq'
   | 'sales_assistant'
-  | 'ai_visibility_report'; // Sprint 20
+  | 'ai_visibility_report' // Sprint 20
+  | 'transcription'; // Sprint 49
 
 export interface ProviderMeta {
   id: AIProviderId;
@@ -118,6 +120,15 @@ export const TOOLS: Record<AIToolId, ToolMeta> = {
     label: 'Claude Design PDF',
     description: 'Pitch deck PDF с снап-слайдами под скриншот.',
   },
+  // Sprint 49: Realtime live transcription (WebRTC) и request-based transcribe
+  // загруженных файлов. Один и тот же шаблон с словарём терминов используется
+  // в обоих режимах.
+  'gpt-realtime-transcribe': {
+    id: 'gpt-realtime-transcribe',
+    provider: 'openai',
+    label: 'GPT Realtime Transcribe',
+    description: 'Live транскрипция переговоров через WebRTC + транскрипция загруженных файлов.',
+  },
 };
 
 export const OUTPUT_TYPES: Record<OutputTypeId, OutputTypeMeta> = {
@@ -183,6 +194,12 @@ export const OUTPUT_TYPES: Record<OutputTypeId, OutputTypeMeta> = {
     label: 'AI Discoverability Report',
     description: 'Аудит готовности материалов к AI-search и answer engines.',
     category: 'summary',
+  },
+  transcription: {
+    id: 'transcription',
+    label: 'Транскрипция',
+    description: 'Live + request-based транскрипция русской речи с словарём бизнес-терминов.',
+    category: 'transcription',
   },
 };
 
@@ -271,6 +288,15 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
     tool: 'gpt-4.1',
     model: null,
     outputType: 'ai_visibility_report',
+  },
+  // Sprint 49 — Realtime transcription. model=null → env.OPENAI_MODEL_REALTIME_TRANSCRIBE
+  // для live WebRTC канала / env.OPENAI_MODEL_TRANSCRIBE для request-based
+  // транскрипции файлов. Конкретный pick зависит от route, шаблон один.
+  realtime_transcription: {
+    provider: 'openai',
+    tool: 'gpt-realtime-transcribe',
+    model: null,
+    outputType: 'transcription',
   },
 };
 

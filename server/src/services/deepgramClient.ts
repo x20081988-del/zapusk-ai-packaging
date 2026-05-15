@@ -10,7 +10,9 @@ import { env } from '../env.js';
 
 export interface TranscriptionResult {
   text: string;
-  provider: 'deepgram' | 'mock';
+  // Sprint 49 — добавили 'openai' (gpt-4o-transcribe) как primary provider
+  // загруженных файлов. Deepgram остаётся fallback'ом для legacy/dev сетапов.
+  provider: 'openai' | 'deepgram' | 'mock';
   model: string;
   durationSec: number | null;
   fellBackToMock: boolean;

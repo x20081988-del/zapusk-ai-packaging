@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { aiClient } from '../ai/client.js';
 import { transcribeAudio, type TranscriptionResult } from './deepgramClient.js';
+import { transcribeAudioOpenAI } from './openaiTranscribe.js';
 
 // AI Conversation Intelligence — превращает запись разговора (или paste'нутый
 // transcript) в structured AI-feedback. Фокус — не на summary, а на «что
@@ -208,7 +209,15 @@ export async function ingestConversation(input: IngestInput) {
   let transcript = (input.pastedTranscript ?? '').trim();
 
   if (input.audioBuffer) {
-    transcription = await transcribeAudio(input.audioBuffer, { mimeType: input.audioMime ?? undefined });
+    // Sprint 49 — primary path: OpenAI gpt-4o-transcribe с словарём терминов
+    // (realtime_transcription template). Deepgram остаётся fallback'ом, если
+    // OpenAI не сконфигурирован / упал — так legacy/demo сетапы продолжают
+    // работать.
+    const openai = await transcribeAudioOpenAI(input.audioBuffer, {
+      mimeType: input.audioMime ?? undefined,
+      fileName: input.originalFileName ?? undefined,
+    });
+    transcription = openai ?? await transcribeAudio(input.audioBuffer, { mimeType: input.audioMime ?? undefined });
     if (!transcript) transcript = transcription.text;
   } else if (input.audioUrl) {
     // MVP: запоминаем URL, но не качаем — это снизит сложность и затраты.

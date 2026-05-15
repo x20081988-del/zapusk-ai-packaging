@@ -89,6 +89,12 @@ export const env = {
   OPENAI_MODEL_MAIN: process.env.OPENAI_MODEL_MAIN ?? process.env.OPENAI_MODEL ?? 'gpt-4o',
   OPENAI_MODEL_FAST: process.env.OPENAI_MODEL_FAST ?? 'gpt-4o-mini',
   OPENAI_MODEL_REALTIME: process.env.OPENAI_MODEL_REALTIME ?? 'gpt-4o-realtime-preview',
+  // Sprint 49 — OpenAI Realtime live transcription (WebRTC) и server-side
+  // pre-recorded transcription для загруженных аудиофайлов. Realtime даёт
+  // живые intermediate deltas в браузер, transcribe-модель используется для
+  // request-based транскрипции файлов и не требует WebRTC канала.
+  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-4o-mini-transcribe',
+  OPENAI_MODEL_TRANSCRIBE: process.env.OPENAI_MODEL_TRANSCRIBE ?? 'gpt-4o-transcribe',
 
   // Deepgram pre-recorded transcription. nova-2 supports Russian + diarization.
   // Without a key the conversation analyzer falls back to a deterministic mock

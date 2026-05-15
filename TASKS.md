@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-15 (Sprint 48: AI reliability + technical DD hardening).
+Last updated: 2026-05-15 (Sprint 49: Realtime transcription upgrade).
 
 ---
 
@@ -27,7 +27,76 @@ zapusk-ai-packaging/
 
 ---
 
-## Completed (this sprint — AI reliability + technical DD hardening 2026-05-15)
+## Completed (this sprint — Realtime transcription upgrade 2026-05-15)
+
+- [x] Added `realtime_transcription` PromptTemplate (seed + orchestration): system-prompt и словарь
+  бизнес-имён (ZAPUSK AI, DLFY, Delphi, Главснаб, Чио Чио и др.) + терминов (СПИН/SPIN, IRR, due diligence
+  и т.п.). Шаблон редактируется суперадмином без redeploy.
+- [x] Added `POST /api/realtime/transcription-session` — выписывает ephemeral client secret для
+  WebRTC канала к OpenAI Realtime. Основной `OPENAI_API_KEY` никогда не уходит в браузер. Любая
+  ошибка чтения шаблона / OpenAI 5xx возвращает 503 без падения процесса.
+- [x] Replaced server-side audio file transcription primary path: `gpt-4o-transcribe` (request-based)
+  с тем же словарём терминов как `prompt`. Deepgram остался fallback'ом для legacy/dev сетапов
+  без OpenAI ключа. Realtime сознательно не используется для файлов (60-сек ephemeral key короче
+  типичной длины записи).
+- [x] Replaced Web Speech API primary path в SalesAssistant: OpenAI Realtime live transcription
+  через WebRTC. На любом сбое (нет ключа, 503 от backend, WebRTC заблокирован, mic-permission
+  reject) — автоматический fallback на Web Speech, чтобы пользователь не оставался без
+  транскрипции.
+- [x] Added UI badge «OpenAI Realtime» / «резервная браузерная» в status row — фаундер видит,
+  какой движок реально слушает встречу. Tooltip badge'а показывает реальную модель (например
+  `gpt-4o-mini-transcribe`) для admin/manager диагностики.
+- [x] Added env vars `OPENAI_MODEL_REALTIME_TRANSCRIBE` (default `gpt-4o-mini-transcribe`) и
+  `OPENAI_MODEL_TRANSCRIBE` (default `gpt-4o-transcribe`).
+- [x] Manual «Получить подсказку» button + transcript аккумуляция остались без изменений —
+  auto-refresh AI-подсказок намеренно НЕ возвращён. Транскрипция и анализ — два независимых
+  процесса.
+
+**Files changed**
+- `server/prisma/schema.prisma` — без изменений (schema не трогаем; PromptTemplate уже есть).
+- `server/src/env.ts`
+- `server/src/index.ts`
+- `server/src/routes/realtime.ts` (new)
+- `server/src/services/aiProviders.ts`
+- `server/src/services/templateSeeds.ts`
+- `server/src/services/openaiTranscribe.ts` (new)
+- `server/src/services/deepgramClient.ts`
+- `server/src/services/conversationAnalysisService.ts`
+- `web/src/lib/realtimeTranscription.ts` (new)
+- `web/src/pages/SalesAssistant.tsx`
+- `.env.example`
+- `TASKS.md`
+
+**Checks**
+- `cd server && npx tsc --noEmit` → green.
+- `cd web && npx tsc --noEmit` → green.
+- `npm run build` → green (только существующие vite chunk/dynamic-import warnings).
+- `POST /api/realtime/transcription-session` (FOUNDER token, OpenAI key set, template отсутствует
+  в local DB из-за Sprint 48 миграционного пробела) → 503 `transcription_template_missing`,
+  процесс не падает.
+- SalesAssistant page рендерится без console errors в preview.
+
+**Known risks / ограничения**
+- OpenAI Realtime transcription API ещё в beta; точная форма событий и параметры
+  `turn_detection.server_vad` могут поменяться. WebRTC handshake URL зафиксирован на
+  `/v1/realtime?model=…`.
+- Local dev.db в этом workspace всё ещё не мигрирован после Sprint 48 (column
+  `PromptTemplate.version` отсутствует) — `npm run db:seed` падает с P2022, и шаблон
+  `realtime_transcription` нельзя посадить локально, пока миграция не пройдёт. На Render
+  автоматическая миграция при старте сидирует таблицу.
+- Fallback на Web Speech не работает в Firefox (`webkitSpeechRecognition` отсутствует) —
+  это документировано в hint'е `permError` и не регрессирует относительно прошлой версии.
+- Endpoint выдаёт ephemeral token любому неинвестору; rate-limit на саму выписку — TODO
+  (защищён cost guardrail'ами Sprint 48 только на анализ, не на token issuance).
+
+**Next recommended task**
+- Sprint 50: rate-limit `POST /api/realtime/transcription-session` (per actor/window),
+  репарация local dev.db миграционного state, end-to-end test того, что DLFY/Delphi/Zapusk/
+  Главснаб реально распознаются точнее по сравнению с Web Speech baseline.
+
+---
+
+## Completed (previous sprint — AI reliability + technical DD hardening 2026-05-15)
 
 - [x] Added metadata-only `AiRequestLedger` for AI calls: feature, provider, model, request type, actor/project ids, success/fallback/timeout, latency, token/cost estimates and char counts. Prompts, transcripts, chunks and raw AI outputs are not stored.
 - [x] Added AI request/cost/time guardrails via env:

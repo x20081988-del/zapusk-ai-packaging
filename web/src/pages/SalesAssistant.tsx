@@ -19,6 +19,7 @@ import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 import { completeMeeting, type CompleteResult } from '../lib/salesSessions';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
+import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
 interface SRResultLike { transcript: string; isFinal?: boolean }
@@ -288,6 +289,15 @@ export default function SalesAssistant() {
   const restartTimerRef = useRef<number | null>(null);
   const shouldListenRef = useRef(false);
   const recognitionActiveRef = useRef(false);
+  // Sprint 49 — OpenAI Realtime live transcription через WebRTC. Если сессия
+  // успешно открывается, srRef остаётся пустым и Web Speech не используется.
+  // Если realtime упал (нет ключа / 5xx / WebRTC заблокирован) — фронт
+  // переключается на Web Speech как fallback, чтобы транскрипция всё равно
+  // работала. Пользователь видит бейдж того, что реально слушает встречу.
+  const realtimeRef = useRef<RealtimeSession | null>(null);
+  type TranscriptionProvider = 'realtime' | 'web-speech';
+  const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider | null>(null);
+  const [realtimeModel, setRealtimeModel] = useState<string | null>(null);
   // Hotfix 2026-05-15 — sequence-id + AbortController:
   //   • analysisRequestIdRef растёт на каждый клик. Ответы старых запросов
   //     игнорируются (stale-guard) — даже если abort не сработал.
@@ -331,6 +341,12 @@ export default function SalesAssistant() {
     recognitionActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore unmount race */ }
+    // Sprint 49 — закрываем WebRTC канал при unmount, иначе mic-tracks
+    // остаются активными после ухода со страницы.
+    if (realtimeRef.current) {
+      try { realtimeRef.current.stop(); } catch { /* ignore */ }
+      realtimeRef.current = null;
+    }
     // Hotfix 2026-05-15 — отменяем висящий AI-запрос при размонтировании.
     if (analysisAbortRef.current) {
       try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
@@ -639,14 +655,56 @@ export default function SalesAssistant() {
     }
   }
 
-  function start() {
+  async function start() {
     shouldListenRef.current = true;
     setPermError(null);
     if (!startedAtRef.current) startedAtRef.current = new Date().toISOString();
-    startRecognition();
+    // Sprint 49 — primary path: OpenAI Realtime через WebRTC. Если бэкенд
+    // не выдаёт ephemeral token (нет API key / нет шаблона) или WebRTC
+    // не доступен — переключаемся на резервный Web Speech API. Пользователь
+    // не остаётся без транскрипции при сбое.
+    try {
+      const session = await startRealtimeTranscription({
+        onInterim: (text) => setInterim(text),
+        onFinal: (text) => {
+          setTranscript((prev) => [...prev, { ts: Date.now(), final: true, text }]);
+          setInterim('');
+        },
+        onError: (err) => {
+          console.warn('[sales-assistant] realtime error, falling back to web-speech:', err.message);
+          try { realtimeRef.current?.stop(); } catch { /* ignore */ }
+          realtimeRef.current = null;
+          if (!shouldListenRef.current) return;
+          setTranscriptionProvider('web-speech');
+          setRealtimeModel(null);
+          startRecognition();
+        },
+        onClose: () => {
+          // Закрытие со стороны OpenAI — сбрасываем provider только если
+          // пользователь всё ещё в режиме listening и нет fallback'а.
+          if (shouldListenRef.current && !srRef.current) {
+            setListening(false);
+            setSpeechStatus('stopped');
+            speechStatusRef.current = 'stopped';
+          }
+        },
+      });
+      realtimeRef.current = session;
+      setTranscriptionProvider('realtime');
+      setRealtimeModel(session.info.model);
+      setListening(true);
+      speechStatusRef.current = 'listening';
+      setSpeechStatus('listening');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      console.warn('[sales-assistant] realtime unavailable, falling back to web-speech:', msg);
+      setTranscriptionProvider('web-speech');
+      setRealtimeModel(null);
+      startRecognition();
+    }
     // Sprint 34В — auto-refresh ОТКЛЮЧЁН. Транскрипция и AI-подсказка теперь
     // два независимых процесса:
-    //   • Транскрипция идёт сама непрерывно (SpeechRecognition + restart loop)
+    //   • Транскрипция идёт сама непрерывно (Realtime / Web Speech restart loop)
     //   • AI-подсказка обновляется ТОЛЬКО по кнопке «Обновить подсказку»
     // Пользователь сам управляет моментом анализа.
   }
@@ -697,6 +755,9 @@ export default function SalesAssistant() {
     setAiError(null);
     setFastCard(null);
     setAnalyzePhase('idle');
+    // Sprint 49 — следующая встреча заново выбирает provider.
+    setTranscriptionProvider(null);
+    setRealtimeModel(null);
     // Sprint 43 — сброс advice tracking при новом meeting'е.
     setAdviceEventIds([]);
     setAdviceEventLast(null);
@@ -711,6 +772,13 @@ export default function SalesAssistant() {
     try { srRef.current?.stop(); } catch { /* ignore */ }
     srRef.current = null;
     recognitionActiveRef.current = false;
+    // Sprint 49 — закрываем WebRTC канал; mic-track release происходит внутри
+    // realtimeRef.stop(). Без этого индикатор записи в браузере остаётся
+    // включённым после нажатия «Остановить».
+    if (realtimeRef.current) {
+      try { realtimeRef.current.stop(); } catch { /* ignore */ }
+      realtimeRef.current = null;
+    }
     setInterim('');
   }
 
@@ -722,6 +790,10 @@ export default function SalesAssistant() {
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
     setPermError(null);
+    // Sprint 49 — сброс provider state, чтобы следующий start() заново выбрал
+    // realtime vs web-speech по текущей доступности backend.
+    setTranscriptionProvider(null);
+    setRealtimeModel(null);
     // Sprint 34В — сброс AI state.
     setLastAnalyzeAt(null);
     setAiError(null);
@@ -857,6 +929,17 @@ export default function SalesAssistant() {
               <span className="text-[9px] uppercase tracking-[0.12em] text-muted font-semibold">Транскрипция:</span>
               <span><span className="text-primary font-num text-sm">{wordCount}</span> слов</span>
               <span><span className="text-primary font-num text-sm">{transcript.filter((t) => t.final).length}</span> реплик</span>
+              {/* Sprint 49 — какой движок реально слушает встречу. Realtime —
+                  OpenAI WebRTC со словарём терминов; web-speech — резервный
+                  браузерный путь (Chrome/Edge/Safari) с худшей точностью. */}
+              {transcriptionProvider === 'realtime' && (
+                <span title={realtimeModel ?? undefined}>
+                  <StatusBadge tone="ai" dot>OpenAI Realtime</StatusBadge>
+                </span>
+              )}
+              {transcriptionProvider === 'web-speech' && (
+                <StatusBadge tone="warning" dot>резервная браузерная</StatusBadge>
+              )}
               {(speechStatus === 'listening' || speechStatus === 'restarting') && (
                 <StatusBadge tone="success" dot>слушаю встречу</StatusBadge>
               )}
