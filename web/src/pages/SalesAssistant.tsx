@@ -811,125 +811,149 @@ function AdviceCard({ card }: { card: AssistantCard }) {
       </div>
       <div className="text-[11px] text-muted mb-4">{STAGE_HINT[card.spinStage]}</div>
 
-      {/* SITUATION — one sentence */}
-      <Field icon={<Activity size={14} />} label="Что происходит">{card.situation}</Field>
-
-      {/* Sprint 13: EMOTIONAL LAYER — compact subcard. Это то, что отличает AI
-          co-pilot от sales-скрипта: он считывает не текст, а психологию сделки. */}
-      <EmotionalLayer card={card} />
-
-      {/* RISK / MISSED — warning banner if anything is off */}
-      {card.riskOrMissed && (
-        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
-          <ShieldAlert size={14} className="text-warning mt-0.5 shrink-0" />
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.1em] text-warning font-semibold mb-0.5">Что упускаем</div>
-            <div className="text-sm text-primary leading-relaxed">{card.riskOrMissed}</div>
-          </div>
+      {/* Sprint 34Б.1 — ГЛАВНАЯ ЗОНА ДЕЙСТВИЯ. Поднято в самый верх карточки.
+          Пользователь должен сразу видеть «что мне сейчас сказать», а не
+          аналитику разговора. Раньше эти 5 блоков жили после Situation,
+          EmotionalLayer, WhatToDo — поверх 200+ строк аналитики. */}
+      <div className="rounded-lg border border-ai/30 bg-ai/4 px-4 py-3">
+        <div className="flex items-center gap-1.5 mb-3">
+          <Zap size={13} className="text-ai-glow" />
+          <span className="text-[10px] uppercase tracking-[0.14em] text-ai-glow font-semibold">
+            Что сказать прямо сейчас
+          </span>
         </div>
-      )}
 
-      {/* OBJECTIVE + DIRECTION — куда ведём */}
-      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <MiniBlock icon={<Target size={13} className="text-zapusk-400" />} label="Цель этапа">
-          {card.conversationObjective}
-        </MiniBlock>
-        <MiniBlock icon={<Compass size={13} className="text-ai-glow" />} label="Куда ведём">
-          {card.conversationDirection}
-        </MiniBlock>
+        {/* MAIN QUESTION — flagship live phrase */}
+        <div>
+          <SectionLabel icon={<MessageSquare size={12} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
+          <blockquote className="bg-canvas border border-ai/30 rounded-md px-4 py-3 text-[14.5px] leading-relaxed text-primary">
+            «{card.mainQuestion}»
+          </blockquote>
+        </div>
+
+        {/* BACKUP QUESTIONS */}
+        {card.backupQuestions.length > 0 && (
+          <div className="mt-3">
+            <SectionLabel icon={<HelpCircle size={12} className="text-muted" />}>
+              Запасные вопросы ({card.backupQuestions.length})
+            </SectionLabel>
+            <ul className="space-y-1.5">
+              {card.backupQuestions.map((q, i) => (
+                <li key={i} className="text-[13px] text-secondary leading-relaxed border-l-2 border-line pl-3">
+                  {q}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* SELF-SALE QUESTIONS — separate purple-ish block */}
+        {card.selfSaleQuestions.length > 0 && (
+          <div className="mt-4 rounded-md border border-ai/30 bg-ai/8 px-3 py-2.5">
+            <SectionLabel icon={<Sparkles size={12} className="text-ai-glow" />}>
+              Self-sale: пусть он сам себе продаст
+            </SectionLabel>
+            <ul className="space-y-1">
+              {card.selfSaleQuestions.map((q, i) => (
+                <li key={i} className="text-[13px] text-primary leading-relaxed">• {q}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Sprint 13: EMOTIONAL RISKS — что может СЛОМАТЬ сделку прямо сейчас
+            (отличается от riskOrMissed: тот про процесс/SPIN, этот про доверие). */}
+        {card.emotionalRisks.length > 0 && (
+          <div className="mt-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2.5">
+            <SectionLabel icon={<HeartCrack size={12} className="text-danger" />}>
+              Что может сломать сделку
+            </SectionLabel>
+            <ul className="space-y-1">
+              {card.emotionalRisks.map((line, i) => (
+                <li key={i} className="text-[13px] text-primary leading-relaxed">⚠ {line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* WHAT NOT TO DO */}
+        {card.whatNotToDo.length > 0 && (
+          <div className="mt-4 rounded-md border border-danger/25 bg-danger/8 px-3 py-2.5">
+            <SectionLabel icon={<Ban size={12} className="text-danger" />}>Что НЕ делать сейчас</SectionLabel>
+            <ul className="space-y-1">
+              {card.whatNotToDo.map((line, i) => (
+                <li key={i} className="text-[13px] text-primary leading-relaxed">— {line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
-      {/* WHAT TO DO */}
-      {card.whatToDo.length > 0 && (
-        <div className="mt-4">
-          <SectionLabel icon={<Zap size={12} className="text-zapusk-400" />}>Что делать</SectionLabel>
-          <ul className="space-y-1">
-            {card.whatToDo.map((line, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-primary leading-relaxed">
-                <ChevronRight size={14} className="text-zapusk-400 mt-0.5 shrink-0" />
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
+      {/* Sprint 34Б.1 — АНАЛИТИКА. Что происходит / эмоции / куда ведём /
+          что делать / тон. Раньше было сверху, теперь под action zone. */}
+      <div className="mt-5 pt-4 border-t border-hairline">
+        <div className="flex items-center gap-1.5 mb-3">
+          <Activity size={13} className="text-muted" />
+          <span className="text-[10px] uppercase tracking-[0.14em] text-muted font-semibold">
+            Аналитика разговора
+          </span>
         </div>
-      )}
 
-      {/* Sprint 13: TONE SHIFT GUIDANCE — мост между «что делать» и репликой.
-          Подсказывает, как изменить стиль/темп — это самый «co-pilot» блок. */}
-      {card.toneShiftGuidance && (
-        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-ai/8 border border-ai/25">
-          <Wand2 size={13} className="text-ai-glow mt-0.5 shrink-0" />
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.1em] text-ai-glow font-semibold mb-0.5">Как изменить тон</div>
-            <div className="text-sm text-primary leading-relaxed">{card.toneShiftGuidance}</div>
+        {/* SITUATION — one sentence */}
+        <Field icon={<Activity size={14} />} label="Что происходит">{card.situation}</Field>
+
+        {/* Sprint 13: EMOTIONAL LAYER — compact subcard. Это то, что отличает AI
+            co-pilot от sales-скрипта: он считывает не текст, а психологию сделки. */}
+        <EmotionalLayer card={card} />
+
+        {/* RISK / MISSED — warning banner if anything is off */}
+        {card.riskOrMissed && (
+          <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30">
+            <ShieldAlert size={14} className="text-warning mt-0.5 shrink-0" />
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.1em] text-warning font-semibold mb-0.5">Что упускаем</div>
+              <div className="text-sm text-primary leading-relaxed">{card.riskOrMissed}</div>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* MAIN QUESTION — flagship live phrase */}
-      <div className="mt-4">
-        <SectionLabel icon={<MessageSquare size={12} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
-        <blockquote className="bg-canvas border border-ai/30 rounded-md px-4 py-3 text-[14.5px] leading-relaxed text-primary">
-          «{card.mainQuestion}»
-        </blockquote>
+        {/* OBJECTIVE + DIRECTION — куда ведём */}
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <MiniBlock icon={<Target size={13} className="text-zapusk-400" />} label="Цель этапа">
+            {card.conversationObjective}
+          </MiniBlock>
+          <MiniBlock icon={<Compass size={13} className="text-ai-glow" />} label="Куда ведём">
+            {card.conversationDirection}
+          </MiniBlock>
+        </div>
+
+        {/* WHAT TO DO */}
+        {card.whatToDo.length > 0 && (
+          <div className="mt-4">
+            <SectionLabel icon={<Zap size={12} className="text-zapusk-400" />}>Что делать</SectionLabel>
+            <ul className="space-y-1">
+              {card.whatToDo.map((line, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-primary leading-relaxed">
+                  <ChevronRight size={14} className="text-zapusk-400 mt-0.5 shrink-0" />
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Sprint 13: TONE SHIFT GUIDANCE — мост между «что делать» и репликой.
+            Подсказывает, как изменить стиль/темп — это самый «co-pilot» блок. */}
+        {card.toneShiftGuidance && (
+          <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-ai/8 border border-ai/25">
+            <Wand2 size={13} className="text-ai-glow mt-0.5 shrink-0" />
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.1em] text-ai-glow font-semibold mb-0.5">Как изменить тон</div>
+              <div className="text-sm text-primary leading-relaxed">{card.toneShiftGuidance}</div>
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* BACKUP QUESTIONS */}
-      {card.backupQuestions.length > 0 && (
-        <div className="mt-3">
-          <SectionLabel icon={<HelpCircle size={12} className="text-muted" />}>
-            Запасные вопросы ({card.backupQuestions.length})
-          </SectionLabel>
-          <ul className="space-y-1.5">
-            {card.backupQuestions.map((q, i) => (
-              <li key={i} className="text-[13px] text-secondary leading-relaxed border-l-2 border-line pl-3">
-                {q}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* SELF-SALE QUESTIONS — separate purple-ish block */}
-      {card.selfSaleQuestions.length > 0 && (
-        <div className="mt-4 rounded-md border border-ai/30 bg-ai/8 px-3 py-2.5">
-          <SectionLabel icon={<Sparkles size={12} className="text-ai-glow" />}>
-            Self-sale: пусть он сам себе продаст
-          </SectionLabel>
-          <ul className="space-y-1">
-            {card.selfSaleQuestions.map((q, i) => (
-              <li key={i} className="text-[13px] text-primary leading-relaxed">• {q}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Sprint 13: EMOTIONAL RISKS — что может СЛОМАТЬ сделку прямо сейчас
-          (отличается от riskOrMissed: тот про процесс/SPIN, этот про доверие). */}
-      {card.emotionalRisks.length > 0 && (
-        <div className="mt-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2.5">
-          <SectionLabel icon={<HeartCrack size={12} className="text-danger" />}>
-            Что может сломать сделку
-          </SectionLabel>
-          <ul className="space-y-1">
-            {card.emotionalRisks.map((line, i) => (
-              <li key={i} className="text-[13px] text-primary leading-relaxed">⚠ {line}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* WHAT NOT TO DO */}
-      {card.whatNotToDo.length > 0 && (
-        <div className="mt-4 rounded-md border border-danger/25 bg-danger/8 px-3 py-2.5">
-          <SectionLabel icon={<Ban size={12} className="text-danger" />}>Что НЕ делать сейчас</SectionLabel>
-          <ul className="space-y-1">
-            {card.whatNotToDo.map((line, i) => (
-              <li key={i} className="text-[13px] text-primary leading-relaxed">— {line}</li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {/* MINI-PITCH — only if interest signal already detected */}
       {card.miniPitch && (
@@ -961,8 +985,14 @@ function AdviceCard({ card }: { card: AssistantCard }) {
         </div>
       )}
 
-      {/* SPIN GAPS — visualize which stages are still open */}
-      <div className="mt-4 pt-3 border-t border-hairline">
+      {/* Sprint 34Б.1 — ДОПОЛНИТЕЛЬНО. Карта SPIN — диагностика этапов разговора. */}
+      <div className="mt-5 pt-4 border-t border-hairline">
+        <div className="flex items-center gap-1.5 mb-3">
+          <Target size={13} className="text-muted" />
+          <span className="text-[10px] uppercase tracking-[0.14em] text-muted font-semibold">
+            Дополнительно
+          </span>
+        </div>
         <SectionLabel icon={<Target size={12} className="text-muted" />}>
           Карта SPIN — какие этапы ещё открыты
         </SectionLabel>
