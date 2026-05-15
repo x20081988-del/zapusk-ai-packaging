@@ -355,7 +355,30 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 34A AI co-pilot stability shipped)_
+_(empty — Sprint 34A + 34A.1 hotfix shipped: AI-copilot stable for active+demo)_
+
+---
+
+## Sprint 34A.1 hotfix — 2026-05-15 — AI analyze разрешён для demo workspace
+
+Theme: **Прод-юзер `demo-founder` нажал «Обновить подсказку» → 403 → UI показал «AI временно недоступен».** Причина: глобальный `requireActiveWorkspace` middleware (Sprint 22 invite-only architecture) блокирует **все** non-GET для demo workspace, включая `POST /api/sales-assistant/analyze`. Но это **inference compute, не DB write** — demo юзер должен видеть AI-копилот в работе, это и есть demo value.
+
+### Изменения
+
+- **`server/src/middleware/workspaceAccess.ts`** — новый `DEMO_INFERENCE_ALLOW = new Set(['/sales-assistant/analyze'])`. В `requireActiveWorkspace` write attempts для demo workspace проходят, если path в allowlist. Логика: `analyzeSalesTurn` не делает ни одного `prisma.create/update/upsert/delete` — это pure compute. Реальные writes (project create, conversation-analysis upload, brief regenerate) остаются заблокированы.
+- **`web/src/pages/SalesAssistant.tsx`** — `runAnalyze` catch теперь различает `workspace_readonly` / 403 от других ошибок. Для workspace_readonly показывает специфичное «Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.» и **не делает retry** (бессмысленно — статус не изменится). Обычные ошибки получают backoff 1s→2s→4s→8s как в Sprint 34A.
+
+### Verification
+
+- [x] Local: demo workspace user → POST /api/sales-assistant/analyze → 200, card.spinStage='S' ✓
+- [x] Local: demo workspace user → POST /api/projects → 403 workspace_readonly ✓ (still blocked)
+- [x] Local: demo workspace user → POST /api/conversation-analysis/text → 403 ✓ (still blocked)
+- [x] Type-check both sides clean
+- [x] Build OK
+
+### Принцип
+
+Sprint 22 invite-only — для **защиты данных**. AI inference не пишет данные клиента, значит безопасен для demo. Любой будущий inference-endpoint (без DB write) можно добавить в `DEMO_INFERENCE_ALLOW`. Сейчас только sales-assistant — есть осознанно: brief regenerate / packaging generate / conversation analysis ВСЕ создают DB rows, должны оставаться заблокированы для demo.
 
 ---
 

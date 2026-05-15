@@ -343,17 +343,25 @@ export default function SalesAssistant() {
       // выключенным до следующего user action (или следующего interval tick).
       const message = err instanceof Error ? err.message : 'unknown';
       console.warn(`[sales-assistant] analyze error message="${message}" retries=${aiBackoffRetriesRef.current}`);
-      setAiError('AI временно недоступен. Транскрипция продолжается, попробуем ещё раз.');
-      const retries = aiBackoffRetriesRef.current;
-      if (retries < MAX_BACKOFF_RETRIES) {
-        aiBackoffRetriesRef.current = retries + 1;
-        const delayMs = 1000 * Math.pow(2, retries);
-        console.log(`[sales-assistant] backoff retry in ${delayMs}ms (attempt ${retries + 1}/${MAX_BACKOFF_RETRIES})`);
-        window.setTimeout(() => {
-          if (shouldListenRef.current || !opts.auto) runAnalyze({ auto: opts.auto });
-        }, delayMs);
+      // Sprint 34A.1 — детальное сообщение по типу ошибки. workspace_readonly
+      // (Sprint 22 invite-only) — это не «AI сломан», это «нужна активация
+      // аккаунта», retry не помогает.
+      if (message.includes('workspace_readonly') || message.includes('403')) {
+        setAiError('Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.');
+        aiBackoffRetriesRef.current = MAX_BACKOFF_RETRIES; // не делаем retry — нет смысла
       } else {
-        console.warn(`[sales-assistant] backoff exhausted — AI off until next user trigger`);
+        setAiError('AI временно недоступен. Транскрипция продолжается, попробуем ещё раз.');
+        const retries = aiBackoffRetriesRef.current;
+        if (retries < MAX_BACKOFF_RETRIES) {
+          aiBackoffRetriesRef.current = retries + 1;
+          const delayMs = 1000 * Math.pow(2, retries);
+          console.log(`[sales-assistant] backoff retry in ${delayMs}ms (attempt ${retries + 1}/${MAX_BACKOFF_RETRIES})`);
+          window.setTimeout(() => {
+            if (shouldListenRef.current || !opts.auto) runAnalyze({ auto: opts.auto });
+          }, delayMs);
+        } else {
+          console.warn(`[sales-assistant] backoff exhausted — AI off until next user trigger`);
+        }
       }
     } finally {
       analyzingRef.current = false;

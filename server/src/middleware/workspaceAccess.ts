@@ -24,6 +24,17 @@ import { authMiddleware } from '../auth.js';
 const READ_ALLOWED = new Set(['active', 'demo', 'approved', 'awaiting_payment']);
 const WRITE_ALLOWED = new Set(['active']);
 
+// Sprint 34A — допуск AI-inference endpoints для demo workspace.
+// Эти POST-ы не пишут в БД клиента, это compute-only:
+//   • /sales-assistant/analyze — анализ transcript'а, возвращает карточку
+//     SPIN, никаких prisma.create/update.
+// Демо-юзер должен видеть AI-копилот в действии — это и есть demo value.
+// Реальные write-операции (brief generate, file upload, packaging job)
+// остаются заблокированы для demo через стандартный readonly guard.
+const DEMO_INFERENCE_ALLOW = new Set<string>([
+  '/sales-assistant/analyze',
+]);
+
 interface AuthedRequest extends Request {
   user?: { id: string; email: string; role?: string; workspaceStatus?: string };
 }
@@ -44,8 +55,9 @@ export function requireActiveWorkspace(req: AuthedRequest, res: Response, next: 
   if (status === 'active') return next();
 
   if (READ_ALLOWED.has(status)) {
-    // Write attempt от demo/approved/awaiting_payment → 403 readonly.
-    if (isWrite) {
+    // Write attempt от demo/approved/awaiting_payment → 403 readonly,
+    // КРОМЕ inference-endpoints из DEMO_INFERENCE_ALLOW (Sprint 34A).
+    if (isWrite && !DEMO_INFERENCE_ALLOW.has(req.path)) {
       return res.status(403).json({
         error: 'workspace_readonly',
         workspaceStatus: status,
