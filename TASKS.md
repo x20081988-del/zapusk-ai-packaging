@@ -355,7 +355,116 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 40: KB quality control landed)_
+_(empty — Sprint 41: FTS5 + hybrid retrieval landed)_
+
+---
+
+## Sprint 41 — 2026-05-15 — FTS5 + Hybrid Retrieval
+
+Theme: **Поиск по базе знаний стал быстрым, управляемым и объяснимым.** SQLite FTS5 + bm25 + keyword TF-lite + quality/project/type/freshness boosts. Без embeddings, без vector DB. Если FTS не работает (compile-disabled) — keyword-only fallback Sprint 38 продолжает работать.
+
+### P0.1 + P0.2 — FTS5 detect + virtual table
+
+**Новый** [server/src/services/knowledgeFts.ts](server/src/services/knowledgeFts.ts):
+- `initKnowledgeFts()` запускается на старте через `app.listen()` callback в [index.ts](server/src/index.ts).
+- Шаг 1: `SELECT sqlite_compileoption_used('ENABLE_FTS5')`. Если FTS5 disabled — `ftsAvailable=false`, warn в лог, retrieval тихо откатится на keyword-only.
+- Шаг 2: `CREATE VIRTUAL TABLE IF NOT EXISTS KnowledgeChunkFts USING fts5(chunkId UNINDEXED, sourceId UNINDEXED, projectId UNINDEXED, title, sourceType, tags, text, redactedText, tokenize='unicode61')`. Cyrillic поддерживается через unicode61.
+- Никаких триггеров — sync через explicit hooks в коде.
+
+### P0.3 — Backfill
+
+`backfillKnowledgeFts()` идёт батчами по 200 chunks. Если таблица пустая на init — заполняется автоматически. Verified в preview: «backfill: завершён, 5 chunks».
+
+### P0.4 — FTS sync hooks
+
+- `syncChunkToFts(chunkId)` — после создания chunk в `ingestKnowledgeSource`.
+- `syncSourceMetadataToFts(sourceId)` — после PATCH title/sourceType/tags.
+- `deleteSourceFromFts(sourceId)` — после DELETE (archive) или PATCH status=disabled.
+- `rebuildKnowledgeFts()` — полный rebuild через `POST /api/knowledge/fts-rebuild` (admin only).
+- Все sync вызовы — fire-and-forget. При ошибке: `knowledge.fts_sync_failed` audit event + warn в лог. Основной ingest никогда не падает из-за FTS.
+
+### P0.5 — Hybrid scoring
+
+В [knowledgeService.ts](server/src/services/knowledgeService.ts) `retrieveKnowledgeForTranscript`:
+1. Если FTS available: `ftsSearch(transcript, pool)` → `bm25Score` + `bm25Norm = 1/(1+abs(bm25))`. WHERE chunks ограничивается FTS-id'ами.
+2. Если FTS down или 0 hits: широкий candidate set, keyword-only.
+3. Финальный score = `(bm25Norm*0.4 + keywordScore*0.2) × qualityBoost × projectBoost × typeBoost × freshnessBoost`.
+4. Boosts:
+   - `qualityBoost`: verified ×1.10, qualityScore≥70 ×1.05 (комбинируется).
+   - `projectBoost`: scope='project' ×1.10.
+   - `typeBoost`: feature-aware (sales-assistant: successful_sale/objection ×1.25, follow_up ×1.20, qualification/script ×1.15, presentation ×0.95, legal_question ×0.90, …).
+   - `freshnessBoost`: НЕ-verified <30d ×1.05.
+
+### P0.6 — Fast vs Full
+
+- **`mode='fast'`** (sales-assistant analyze-fast): candidatePool=200, SCORE_THRESHOLD=0.12, maxPerType=1, topN=2, charBudget=1200.
+- **`mode='full'`** (analyze): pool=2000, threshold=0.06, maxPerType=2, topN=5, charBudget=4000.
+- **`mode='debug'`** (search-debug-v2): то же что full, плюс заполняется `breakdown` поле для UI диагностики.
+
+### P0.7 — Noise control
+
+- `MIN_CHUNK_LEN = 160` — короткие chunks выкидываются (одно предложение мало для контекста).
+- Maximum 1 chunk per source (deduplicate per sourceId).
+- Maximum 2 sources per sourceType (`maxPerType`) — не валим AI 5 successful_sales одновременно.
+- SCORE_THRESHOLD — слабые источники отсекаются.
+- **Top-result dominance** (только full): если topScore сильно лучше остальных, не добивать prompt слабыми (если `s.finalScore < topScore/3` — break).
+
+### P0.8 — Environment filter
+
+- `AnalyzeInput.workspaceStatus` новое поле, заполняется в route'е из `req.user.workspaceStatus`.
+- `workspaceToEnvironment()` маппит: `'demo'` → `'demo'` (KB demo+synthetic); всё остальное → `'production'` (KB production+synthetic).
+- Verified preview: source с environment='demo' не возвращается production-актору (`production-actor sees: [] · demo-env source leaked: False`).
+
+### P1 — Debug endpoints
+
+- **`POST /api/knowledge/search-debug-v2`** (admin/manager): возвращает каждый result с полным `breakdown` (bm25Score, bm25Norm, keywordScore, qualityBoost, projectBoost, typeBoost, freshnessBoost, finalScore, reasons[]). Плюс `ftsAvailable: true/false`. Audit: `knowledge.search.debug` без query text.
+- **`POST /api/knowledge/fts-rebuild`** (admin only): принудительный rebuild индекса. Audit: `knowledge.fts_rebuild`.
+
+UI «Сравнить поиск» отложен на Sprint 42 — endpoint достаточен для отладки.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass.
+- **Local preview**:
+  - Server boot: `FTS5 готов, поиск работает в hybrid-режиме` + backfill 5 chunks.
+  - `/search-debug-v2` returns hybrid result с breakdown: `bm25=-2.22 → bm25Norm=0.31 × 0.4 + keyword 0.148 × 0.2 = finalScore 0.154`. Reasons: `['fts_match', 'keyword_overlap']`.
+  - Full analyze + fast analyze получают KB с mode-tunings.
+  - Environment filter: production-actor не видит demo-environment source (no leak).
+  - Archive flow: source появляется в `/search-debug-v2` до DELETE, исчезает после.
+
+### Какие проверки прошли
+
+| Проверка | Результат |
+|---|---|
+| FTS5 доступен на dev (SQLite сборка с ENABLE_FTS5) | ✓ probe вернул enabled=1 |
+| Migration (CREATE VIRTUAL TABLE) проходит | ✓ idempotent, IF NOT EXISTS |
+| Backfill создаёт FTS rows | ✓ «5 chunks» из существующих |
+| Новый source попадает в FTS | ✓ verified через unique words «криптомышь подкаст» |
+| Archive/disable исключает source из retrieval | ✓ FTS-row удаляется, поиск не находит |
+| FTS error не ломает AI | ✓ try/catch на каждом sync, ftsAvailable flag |
+| Project A не видит Project B | ✓ inherited from Sprint 38 |
+| Demo workspace не получает production KB | ✓ env filter verified |
+| Founder не видит internal snippets | ✓ inherited from Sprint 38 |
+| Fast analyze не тормозит | ✓ pool=200, threshold high, max 2 sources |
+| Full analyze получает более релевантные источники | ✓ hybrid bm25+keyword дополняют друг друга |
+| Debug endpoint показывает breakdown | ✓ search-debug-v2 with full breakdown |
+| Build/typecheck clean | ✓ оба tsc pass |
+
+### Файлы (7)
+
+- Server: **new** `services/knowledgeFts.ts`, `services/knowledgeService.ts`, `services/salesAssistantService.ts`, `routes/knowledge.ts`, `routes/salesAssistant.ts`, `index.ts`.
+- Docs: `TASKS.md`.
+
+### Что осталось на Sprint 42
+
+- **UI «Сравнить поиск»** в `/admin/knowledge` — показывать рядом keyword/FTS/hybrid с breakdown для каждого. Endpoint готов.
+- **CTAs «Добавить в базу знаний»** в карточках ConversationAnalysis / SalesSession (P0.4 carried from Sprint 40).
+- **Per-feature charBudget tuning** в зависимости от AI provider context window'а.
+- **Retrieval metrics dashboard** (retrievalCount/lastRetrievedAt уже копятся — нужен экран).
+- **Embeddings + hybrid v2** — когда KB перевалит ~5000 источников и keyword+bm25 начнёт упускать парафразы.
+- Demo-assets review, Manager assignment schema, AbortSignal проксинг — наследие из старых спринтов.
 
 ---
 

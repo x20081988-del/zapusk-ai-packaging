@@ -14,6 +14,7 @@ import {
   type KnowledgeStatus,
   type KnowledgeVisibility,
 } from '../services/knowledgeService.js';
+import { deleteSourceFromFts, syncSourceMetadataToFts, isFtsAvailable, rebuildKnowledgeFts } from '../services/knowledgeFts.js';
 
 // Sprint 38 — Knowledge Base API.
 //
@@ -342,6 +343,18 @@ knowledgeRoutes.patch(
         previousStatus: existing.status,
       },
     });
+
+    // Sprint 41 P0.4 — FTS sync:
+    //   • title / sourceType / tags поменялись → перезаписываем FTS-строки
+    //   • status стал disabled/archived → удаляем (retrieval отсечёт по WHERE,
+    //     но и FTS-индекс пусть не засоряется)
+    const needsResync = d.title !== undefined || d.sourceType !== undefined || d.tags !== undefined;
+    if (d.status === 'disabled') {
+      deleteSourceFromFts(existing.id).catch(() => { /* logged */ });
+    } else if (needsResync) {
+      syncSourceMetadataToFts(existing.id).catch(() => { /* logged */ });
+    }
+
     res.json({ source: { id: updated.id, status: updated.status, visibility: updated.visibility } });
   },
 );
@@ -425,6 +438,7 @@ knowledgeRoutes.post(
       projectId: d.projectId ?? null,
       role,
       topN: d.topN ?? 8,
+      mode: 'full',
     });
     await recordAudit(req, {
       action: 'knowledge.search.debug',
@@ -455,6 +469,80 @@ knowledgeRoutes.post(
   },
 );
 
+// Sprint 41 P1 — search-debug-v2. Расширенная диагностика: возвращает breakdown
+// по каждому result'у (bm25, keyword, qualityBoost, projectBoost, typeBoost,
+// freshnessBoost, finalScore + reasons). FTS состояние тоже включаем.
+// Также показывает чистый keyword-результат и чистый FTS-результат отдельно —
+// чтобы видеть, как каждый источник сигнала влияет.
+knowledgeRoutes.post(
+  '/search-debug-v2',
+  requireRole(['ADMIN', 'MANAGER']),
+  async (req, res) => {
+    const parsed = searchDebugSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const d = parsed.data;
+    const role = getActorRole(req);
+
+    const hybrid = await retrieveKnowledgeForTranscript(d.query, {
+      projectId: d.projectId ?? null,
+      role,
+      topN: d.topN ?? 12,
+      mode: 'debug', // эксклюзивно для debug — заполняем breakdown
+    });
+
+    await recordAudit(req, {
+      action: 'knowledge.search.debug',
+      targetType: 'KnowledgeSearch',
+      targetId: null,
+      payload: {
+        projectId: d.projectId ?? null,
+        queryLength: d.query.length,
+        hitCount: hybrid.sources.length,
+        chunksScanned: hybrid.totalChunksScanned,
+        mode: 'v2',
+        // Сам query не пишем (transcript-leak risk).
+      },
+    });
+
+    res.json({
+      ftsAvailable: isFtsAvailable(),
+      hybridResults: hybrid.sources.map((s) => ({
+        sourceId: s.sourceId,
+        chunkId: s.chunkId,
+        title: s.title,
+        sourceType: s.sourceType,
+        scope: s.scope,
+        visibility: s.visibility,
+        summary: s.summary,
+        snippet: s.snippetText.slice(0, 400),
+        finalScore: Number(s.score.toFixed(4)),
+        breakdown: s.breakdown,
+      })),
+      totalChunksScanned: hybrid.totalChunksScanned,
+    });
+  },
+);
+
+// POST /api/knowledge/fts-rebuild — Sprint 41. Принудительный rebuild FTS-индекса.
+// Полезно после массового импорта или если индекс рассинхронизировался с DB.
+knowledgeRoutes.post(
+  '/fts-rebuild',
+  requireRole(['ADMIN']),
+  async (req, res) => {
+    if (!isFtsAvailable()) {
+      return res.status(503).json({ error: 'fts_unavailable' });
+    }
+    const out = await rebuildKnowledgeFts();
+    await recordAudit(req, {
+      action: 'knowledge.fts_rebuild',
+      targetType: 'KnowledgeChunkFts',
+      targetId: null,
+      payload: { rebuilt: out.rebuilt },
+    });
+    res.json({ ok: true, ...out });
+  },
+);
+
 // DELETE /api/knowledge/:id — soft-delete. Chunks остаются, но source
 // помечается archivedAt и retrieval его уже не учтёт.
 knowledgeRoutes.delete(
@@ -473,6 +561,9 @@ knowledgeRoutes.delete(
       targetId: existing.id,
       payload: { title: existing.title, sourceType: existing.sourceType, scope: existing.scope },
     });
+    // Sprint 41 P0.4 — убираем из FTS-индекса. Retrieval всё равно отсечёт
+    // по archivedAt, но индекс не должен раздуваться мёртвыми записями.
+    deleteSourceFromFts(existing.id).catch(() => { /* logged */ });
     res.json({ ok: true, archivedAt: new Date().toISOString() });
   },
 );

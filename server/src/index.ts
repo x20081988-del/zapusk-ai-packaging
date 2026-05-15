@@ -21,6 +21,7 @@ import { salesSessionsRoutes } from './routes/salesSessions.js';
 import { conversationAnalysisRoutes } from './routes/conversationAnalysis.js';
 import { aiLeadsRoutes } from './routes/aiLeads.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
+import { initKnowledgeFts } from './services/knowledgeFts.js';
 import { managerRoutes } from './routes/manager.js';
 
 const app = express();
@@ -151,6 +152,10 @@ app.listen(env.PORT, () => {
   console.log(`[zapusk-api] env=${env.NODE_ENV} · isProd=${isProd} · demo=${env.DEMO_MODE} · ai=${env.AI_PROVIDER}`);
   console.log(`[zapusk-api] cwd=${process.cwd()}`);
   console.log(`[zapusk-api] running file dir=${here}`);
+  // Sprint 41 P0.1 — FTS5 lazy init. Не блокирует listen() — fire-and-forget.
+  // Если FTS не работает (compile-time disabled или CREATE упал) — keyword
+  // retrieval продолжает работать как раньше.
+  initKnowledgeFts().catch((err) => console.warn('[knowledge-fts] startup init crashed', err));
   if (webDistPath) {
     console.log(`[zapusk-api] serving SPA from ${webDistPath}`);
   } else {

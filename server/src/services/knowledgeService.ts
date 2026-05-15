@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { prisma } from '../db.js';
 import { extractFromUploadedFile } from './fileParser.js';
+import { ftsSearch, isFtsAvailable, syncChunkToFts, deleteSourceFromFts, syncSourceMetadataToFts } from './knowledgeFts.js';
 
 // Sprint 38 — Knowledge Base сервис.
 //
@@ -76,6 +77,7 @@ export interface IngestResult {
 
 export interface RetrievedSource {
   sourceId: string;
+  chunkId?: string;
   title: string;
   sourceType: string;
   scope: KnowledgeScope;
@@ -86,6 +88,8 @@ export interface RetrievedSource {
   snippetText: string;
   snippetRedacted: string | null;
   score: number;
+  // Sprint 41 — заполняется только в mode='debug'. В production-flow null.
+  breakdown?: RetrievalScoreBreakdown;
 }
 
 export interface KnowledgeRetrievalResult {
@@ -250,7 +254,7 @@ export async function ingestKnowledgeSource(input: IngestSourceInput): Promise<I
   let chunkCount = 0;
   for (const [idx, text] of chunks.entries()) {
     if (idx >= MAX_CHUNKS_PER_SOURCE) break;
-    await prisma.knowledgeChunk.create({
+    const created = await prisma.knowledgeChunk.create({
       data: {
         sourceId: source.id,
         projectId: source.projectId,
@@ -261,6 +265,10 @@ export async function ingestKnowledgeSource(input: IngestSourceInput): Promise<I
         tagsJson: source.tagsJson,
       },
     });
+    // Sprint 41 P0.4 — FTS sync hook. Fire-and-forget; если FTS недоступен
+    // или sync упал — основной ingest продолжает работу. Audit пишется
+    // в knowledgeFts.ts при ошибке.
+    syncChunkToFts(created.id).catch(() => { /* logged internally */ });
     chunkCount++;
   }
 
@@ -290,8 +298,28 @@ export interface RetrievalOptions {
   // Sprint 40 — feature-фид для bonus scoring'а. AI-ассистенту приоритетны
   // successful_sale / objection / follow_up / qualification.
   feature?: 'sales_assistant.analyze' | 'sales_assistant.analyze_fast' | 'other';
+  // Sprint 41 P0.6 — режим работы:
+  //   • 'fast'  — максимум 1-2 source'а, high-confidence-only, low latency.
+  //   • 'full'  — 3-7 sources, шире candidate set, hybrid rerank.
+  //   • 'debug' — возвращаем breakdown по каждому result'у (для search-debug-v2).
+  mode?: 'fast' | 'full' | 'debug';
 }
 
+// Sprint 41 P1 — детальная разбивка score'а для admin debug endpoint'а.
+export interface RetrievalScoreBreakdown {
+  bm25Score: number;        // raw FTS bm25 (отрицательное; меньше = лучше)
+  bm25Norm: number;         // нормализованный 0..1 — 1/(1+abs(bm25))
+  keywordScore: number;     // TF-lite keyword overlap, 0..~0.3
+  qualityBoost: number;     // multiplier ≥1 если verified+qualityScore высокий
+  projectBoost: number;     // 1.0 или 1.1
+  typeBoost: number;        // featureBoosts[sourceType] ?? 1.0
+  freshnessBoost: number;   // 1.0 или 1.05
+  finalScore: number;       // композитный
+  reasons: string[];        // человекочитаемые причины («fts_match», «verified», …)
+}
+
+// Sprint 41 — hybrid retrieve. Объединяет FTS5 bm25 + keyword scoring + bonus'ы.
+// Fallback на keyword-only режим Sprint 38 если FTS недоступен.
 export async function retrieveKnowledgeForTranscript(
   transcript: string,
   options: RetrievalOptions,
@@ -301,16 +329,12 @@ export async function retrieveKnowledgeForTranscript(
     return { sources: [], totalChunksScanned: 0 };
   }
 
-  // Sprint 38 P0 Security + Sprint 40 P0.5:
-  //   • status='published' И isCandidate=false — иначе material недостаточно
-  //     проверен. Auto-capture'ы и draft'ы НЕ попадают в retrieval.
+  // Sprint 38 P0 Security + Sprint 40 P0.5 + Sprint 41 P0.8:
+  //   • status='published' И isCandidate=false
   //   • archivedAt=null
-  //   • global + own-project, никогда чужой project
+  //   • global + own-project (никогда чужой project)
   //   • visibility-filter по роли
-  //   • environment-filter по workspace вызывающего:
-  //       production-actor → production + synthetic
-  //       demo-actor       → demo + synthetic
-  //       synthetic        → синтетика безопасна везде
+  //   • environment-filter по workspaceStatus вызывающего
   const visibilityFilter = visibilityFor(options.role);
   const projectFilter = options.projectId
     ? [{ scope: 'global' }, { scope: 'project', projectId: options.projectId }]
@@ -323,85 +347,176 @@ export async function retrieveKnowledgeForTranscript(
       ? ['synthetic']
       : ['production', 'synthetic'];
 
-  const chunks = await prisma.knowledgeChunk.findMany({
-    where: {
-      source: {
-        status: 'published',
-        isCandidate: false,
-        archivedAt: null,
-        visibility: { in: visibilityFilter },
-        environment: { in: envFilter },
-        OR: projectFilter,
-      },
+  const sharedWhere = {
+    source: {
+      status: 'published',
+      isCandidate: false,
+      archivedAt: null,
+      visibility: { in: visibilityFilter },
+      environment: { in: envFilter },
+      OR: projectFilter,
     },
+  } as const;
+
+  const mode = options.mode ?? 'full';
+  // P0.6 — fast / full ограничения:
+  //   • fast — узкий candidate pool (200), только короткий рерanking
+  //   • full — широкий (2000), полный rerank
+  const candidatePool = mode === 'fast' ? 200 : 2000;
+  // P0.7 — порог финального score'а. Слабые источники не добавляем — лучше
+  // отдать AI пустой блок, чем шум.
+  const SCORE_THRESHOLD = mode === 'fast' ? 0.12 : 0.06;
+  // P0.7 — короткие чанки бесполезны для retrieval (одно предложение редко
+  // даёт смысловой контекст). Фильтруем.
+  const MIN_CHUNK_LEN = 160;
+  // P0.7 — максимум 1 chunk на source (уже было) и максимум 2 source'а на
+  // один materialType. Это балансирует «AI получил много кейсов разных типов»
+  // против «AI завалили только successful_sale'ами».
+  const MAX_PER_TYPE = mode === 'fast' ? 1 : 2;
+
+  // ── Шаг 1. FTS-кандидаты (если FTS доступен). ──────────────────────────
+  // bm25 → bm25Norm = 1/(1+abs(bm25)), нормализуем в 0..1.
+  type FtsHitInfo = { chunkId: string; bm25: number; bm25Norm: number };
+  const ftsMap = new Map<string, FtsHitInfo>();
+  if (isFtsAvailable()) {
+    const ftsRows = await ftsSearch(transcript, candidatePool);
+    for (const r of ftsRows) {
+      ftsMap.set(r.chunkId, {
+        chunkId: r.chunkId,
+        bm25: r.bm25,
+        bm25Norm: 1 / (1 + Math.abs(r.bm25)),
+      });
+    }
+  }
+
+  // ── Шаг 2. Достаём chunks по WHERE + (если есть) ограничиваем FTS-id'ами.
+  // Если FTS пуст — берём широкий candidate set и работаем keyword-only.
+  const chunkWhere = ftsMap.size > 0
+    ? { ...sharedWhere, id: { in: Array.from(ftsMap.keys()) } }
+    : sharedWhere;
+  const chunks = await prisma.knowledgeChunk.findMany({
+    where: chunkWhere,
     include: {
       source: {
         select: {
           id: true, title: true, sourceType: true, scope: true,
           visibility: true, summary: true, projectId: true,
-          // Sprint 40 — поля для scoring bonus'а.
-          verifiedAt: true, publishedAt: true,
+          verifiedAt: true, publishedAt: true, qualityScore: true,
         },
       },
     },
-    take: 2000,
+    take: candidatePool,
   });
 
   if (chunks.length === 0) {
-    // Sprint 40 P0.6 — retrieval event пишем даже при пустом результате,
-    // это важная диагностика «AI спросил, но не нашёл».
     return { sources: [], totalChunksScanned: 0 };
   }
 
-  // Sprint 40 P0.5 — scoring: keyword TF-lite + bonus'ы.
-  //   • verified source (verifiedAt!=null) → ×1.15
-  //   • project source → ×1.1 над global (в контексте проекта релевантнее)
-  //   • feature-bonus: sales-assistant приоритезирует sale/objection/follow_up/qualification
-  //   • свежие <30 дней → +5%; verified scripts не штрафуются за возраст.
+  // ── Шаг 3. Hybrid scoring. ─────────────────────────────────────────────
   const featureBoost = featureBoosts(options.feature);
   const now = Date.now();
   const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
-  type ScoredChunk = (typeof chunks)[number] & { score: number };
-  const scored: ScoredChunk[] = chunks
+  type Scored = {
+    chunkId: string;
+    sourceId: string;
+    chunkText: string;
+    redacted: string | null;
+    source: typeof chunks[number]['source'];
+    breakdown: RetrievalScoreBreakdown;
+  };
+
+  const scored: Scored[] = chunks
+    .filter((c) => c.text && c.text.length >= MIN_CHUNK_LEN)
     .map((c) => {
-      let score = scoreChunkAgainstKeywords(c.text, keywords);
-      if (score <= 0) return { ...c, score: 0 };
+      const fts = ftsMap.get(c.id);
+      const bm25Score = fts?.bm25 ?? 0;
+      const bm25Norm = fts?.bm25Norm ?? 0;
+      const keywordScore = scoreChunkAgainstKeywords(c.text, keywords);
       const src = c.source;
-      if (src.verifiedAt) score *= 1.15;
-      if (src.scope === 'project') score *= 1.1;
-      const typeBonus = featureBoost[src.sourceType] ?? 1.0;
-      score *= typeBonus;
-      // Свежесть: только для НЕ-verified источников. Скрипты, проверенные
-      // менеджером, не должны проигрывать просто потому, что им год.
+
+      // Weighted hybrid: 40% bm25, 20% keyword, 15% quality, 10% project,
+      // 10% materialType, 5% freshness. Если FTS недоступен — bm25Norm=0,
+      // вес перетекает на keyword (керы фактически дают весь сигнал).
+      const reasons: string[] = [];
+      if (fts) reasons.push('fts_match');
+      if (keywordScore > 0) reasons.push('keyword_overlap');
+
+      // qualityBoost: verified + qualityScore высокий = +1.15.
+      let qualityBoost = 1.0;
+      if (src.verifiedAt) { qualityBoost *= 1.10; reasons.push('verified'); }
+      if (typeof src.qualityScore === 'number' && src.qualityScore >= 70) {
+        qualityBoost *= 1.05;
+        reasons.push(`quality_${src.qualityScore}`);
+      }
+
+      const projectBoost = src.scope === 'project' ? 1.10 : 1.0;
+      if (projectBoost > 1) reasons.push('project_source');
+
+      const typeBoost = featureBoost[src.sourceType] ?? 1.0;
+      if (typeBoost !== 1.0) reasons.push(`type_${src.sourceType}`);
+
+      let freshnessBoost = 1.0;
       if (!src.verifiedAt && src.publishedAt) {
         const age = now - new Date(src.publishedAt).getTime();
-        if (age < THIRTY_DAYS) score *= 1.05;
+        if (age < THIRTY_DAYS) { freshnessBoost = 1.05; reasons.push('fresh_<30d'); }
       }
-      return { ...c, score };
-    })
-    .filter((c) => c.score > 0)
-    .sort((a, b) => b.score - a.score);
 
+      const baseHybrid = (bm25Norm * 0.4) + (keywordScore * 0.2);
+      const finalScore = baseHybrid * qualityBoost * projectBoost * typeBoost * freshnessBoost;
+
+      return {
+        chunkId: c.id,
+        sourceId: src.id,
+        chunkText: c.text,
+        redacted: c.redactedText,
+        source: src,
+        breakdown: {
+          bm25Score, bm25Norm,
+          keywordScore: Number(keywordScore.toFixed(4)),
+          qualityBoost: Number(qualityBoost.toFixed(3)),
+          projectBoost,
+          typeBoost,
+          freshnessBoost,
+          finalScore: Number(finalScore.toFixed(4)),
+          reasons,
+        },
+      };
+    })
+    .filter((s) => s.breakdown.finalScore >= SCORE_THRESHOLD)
+    .sort((a, b) => b.breakdown.finalScore - a.breakdown.finalScore);
+
+  // ── Шаг 4. Dedupe per-source + per-type cap + topN. ─────────────────────
   const sourcesById = new Map<string, RetrievedSource>();
-  for (const chunk of scored) {
-    if (sourcesById.has(chunk.source.id)) continue;
-    sourcesById.set(chunk.source.id, {
-      sourceId: chunk.source.id,
-      title: chunk.source.title,
-      sourceType: chunk.source.sourceType,
-      scope: chunk.source.scope as KnowledgeScope,
-      visibility: chunk.source.visibility as KnowledgeVisibility,
-      summary: chunk.source.summary,
-      snippetText: chunk.text,
-      snippetRedacted: chunk.redactedText,
-      score: chunk.score,
+  const perTypeCount = new Map<string, number>();
+  const targetN = options.topN ?? DEFAULT_TOP_N;
+  // P0.7 — top-result-dominance: если top score сильно лучше остальных,
+  // не добивать prompt слабыми источниками. «Сильно лучше» = в 3× выше N-го.
+  const topScore = scored[0]?.breakdown.finalScore ?? 0;
+  for (const s of scored) {
+    if (sourcesById.has(s.sourceId)) continue;
+    const typeCount = perTypeCount.get(s.source.sourceType) ?? 0;
+    if (typeCount >= MAX_PER_TYPE) continue;
+    // Dominance check (только для full mode — fast и так берёт max 1-2).
+    if (mode === 'full' && sourcesById.size > 0 && s.breakdown.finalScore < topScore / 3) break;
+    sourcesById.set(s.sourceId, {
+      sourceId: s.source.id,
+      chunkId: s.chunkId,
+      title: s.source.title,
+      sourceType: s.source.sourceType,
+      scope: s.source.scope as KnowledgeScope,
+      visibility: s.source.visibility as KnowledgeVisibility,
+      summary: s.source.summary,
+      snippetText: s.chunkText,
+      snippetRedacted: s.redacted,
+      score: s.breakdown.finalScore,
+      breakdown: mode === 'debug' ? s.breakdown : undefined,
     });
-    if (sourcesById.size >= (options.topN ?? DEFAULT_TOP_N)) break;
+    perTypeCount.set(s.source.sourceType, typeCount + 1);
+    if (sourcesById.size >= targetN) break;
   }
 
-  // Sprint 40 — bump retrievalCount / lastRetrievedAt для выигравших sources.
-  // Async fire-and-forget — не блокируем AI-ответ.
+  // ── Шаг 5. Bump retrievalCount + lastRetrievedAt. ───────────────────────
   const usedIds = Array.from(sourcesById.keys());
   if (usedIds.length > 0) {
     prisma.knowledgeSource.updateMany({

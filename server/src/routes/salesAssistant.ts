@@ -69,6 +69,8 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
       projectId: parsed.data.projectId ?? null,
       // Sprint 38 — роль нужна для KB retrieval (visibility + raw vs redacted).
       actorRole: getActorRole(req),
+      // Sprint 41 P0.8 — workspaceStatus для environment-фильтра.
+      workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
     });
     recordRetrievalAudit(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
     res.json({ card });

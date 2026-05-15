@@ -68,6 +68,11 @@ export interface AnalyzeInput {
   // Sprint 38 — роль актора нужна для KB retrieval (visibility-фильтр,
   // raw vs redacted snippet). Передаётся route'ом из getActorRole(req).
   actorRole?: string;
+  // Sprint 41 P0.8 — workspaceStatus актора. demo workspace получает только
+  // demo+synthetic KB; production — production+synthetic. Без этого demo-user
+  // может случайно достать production-кейсы. Передаётся route'ом из
+  // req.user.workspaceStatus.
+  workspaceStatus?: string | null;
 }
 
 // Sprint 38 — KB-источники, использованные в AI-подсказке. Возвращаем их
@@ -252,9 +257,15 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     role: input.actorRole ?? 'FOUNDER',
     topN: 5,
     feature: 'sales_assistant.analyze',
+    // Sprint 41 P0.6 — full mode: широкий candidate set + hybrid rerank.
+    mode: 'full',
+    // Sprint 41 P0.8 — environment-filter из workspaceStatus.
+    environment: workspaceToEnvironment(input.workspaceStatus),
   });
-  // Sprint 40 P0.5 — full analyze: до 2500 символов KB-контекста.
-  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 2500 });
+  // Sprint 40 P0.5 — full analyze: до 4000 символов (Sprint 41 P0.6 поднял с 2500
+  // ради hybrid'ного шире-canditate'а; top-result-dominance проверка не даст
+  // prompt'у наполниться шумом).
+  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 4000 });
   const knowledgeForUi = formatKnowledgeForUi(knowledge, input.actorRole ?? 'FOUNDER');
   const knowledgeRetrievalMeta: KnowledgeRetrievalMeta = {
     feature: 'sales_assistant.analyze',
@@ -464,11 +475,14 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
-    topN: 3,
+    // Sprint 41 P0.6 — fast mode: 1-2 sources max, high-threshold-only.
+    topN: 2,
     feature: 'sales_assistant.analyze_fast',
+    mode: 'fast',
+    environment: workspaceToEnvironment(input.workspaceStatus),
   });
-  // Sprint 40 P0.5 — fast analyze: жёсткий 1000-character budget.
-  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 1000 });
+  // Sprint 41 P0.6 — fast analyze: жёсткий 1200-character budget (раньше 1000).
+  const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 1200 });
   const knowledgeForUi = formatKnowledgeForUi(knowledge, input.actorRole ?? 'FOUNDER');
   const knowledgeRetrievalMeta: KnowledgeRetrievalMeta = {
     feature: 'sales_assistant.analyze_fast',
@@ -577,6 +591,17 @@ function safeParse(raw: string | null | undefined, fallback: unknown) {
 
 function tail(text: string, max: number): string {
   return text.length > max ? text.slice(-max) : text;
+}
+
+// Sprint 41 P0.8 — маппинг workspaceStatus → KB environment.
+//   • demo workspace → demo (получит demo + synthetic KB)
+//   • остальные (active / approved / awaiting_payment / lead) → production
+//     (получит production + synthetic).
+// Это гарантирует, что demo-user никогда не достанет реальный production-кейс,
+// а active-user не получит синтетику для тренировок.
+function workspaceToEnvironment(ws: string | null | undefined): 'production' | 'demo' | 'synthetic' {
+  if (ws === 'demo') return 'demo';
+  return 'production';
 }
 
 function formatAdvice(raw: unknown): string {
