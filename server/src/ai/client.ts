@@ -340,7 +340,11 @@ async function callOpenAIResponses(client: unknown, model: string, opts: Prepare
   }).responses.create({
     model,
     instructions: opts.system,
-    input: opts.user,
+    // OpenAI Responses JSON mode validates the user `input` itself and rejects
+    // `text.format=json_object` unless that input contains the word "json".
+    // Many existing Zapusk prompts put the JSON instruction in `system`, so add
+    // a tiny compatibility sentinel without changing the business prompt.
+    input: opts.asJSON && !/\bjson\b/i.test(opts.user) ? `${opts.user}\n\nReturn valid JSON.` : opts.user,
     max_output_tokens: opts.maxTokens,
     temperature: opts.temperature ?? 0.4,
     text: opts.asJSON ? { format: openAITextFormat(opts) } : undefined,
