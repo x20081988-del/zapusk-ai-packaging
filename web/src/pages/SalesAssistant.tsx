@@ -105,11 +105,20 @@ type AdviceHistoryItem = Pick<
   | 'nextStep'
 >;
 
+// Sprint 34Б.3 — русские лейблы вместо S/P/I/N. Внутренние enum-значения
+// остаются англоязычными (контракт с AI и БД), но интерфейс показывает русскую
+// букву + полное название этапа СПИН.
 const STAGE_LABEL: Record<AssistantCard['spinStage'], string> = {
-  S: 'S — Situation',
-  P: 'P — Problem',
-  I: 'I — Implication',
-  N: 'N — Need-Payoff',
+  S: 'С — Ситуация',
+  P: 'П — Проблема',
+  I: 'У — Усиление',
+  N: 'Р — Решение',
+};
+// Sprint 34Б.3 — для лейбла тона в badge.
+const TONE_LABEL: Record<AssistantCard['tone'], string> = {
+  SOFT: 'мягкий',
+  CONTROL: 'контроль',
+  CLOSE: 'закрытие',
 };
 const STAGE_HINT: Record<AssistantCard['spinStage'], string> = {
   S: 'Раскрываем контекст инвестора',
@@ -128,9 +137,9 @@ const CONTROL_TONE: Record<AssistantCard['dealControlLevel'], 'danger' | 'warnin
   HIGH: 'success',
 };
 const CONTROL_LABEL: Record<AssistantCard['dealControlLevel'], string> = {
-  LOW: 'Контроль · LOW',
-  MEDIUM: 'Контроль · MED',
-  HIGH: 'Контроль · HIGH',
+  LOW: 'Контроль · низкий',
+  MEDIUM: 'Контроль · средний',
+  HIGH: 'Контроль · высокий',
 };
 const ENGAGEMENT_TONE: Record<AssistantCard['engagementSignal'], 'success' | 'warning' | 'danger'> = {
   active: 'success',
@@ -165,9 +174,9 @@ const STATE_TONE: Record<AssistantCard['investorState'], 'success' | 'info' | 'w
   DISCONNECTED: 'danger',
 };
 const TEMP_LABEL: Record<AssistantCard['conversationTemperature'], string> = {
-  COLD: 'COLD · холодно',
-  WARM: 'WARM · тепло',
-  HOT: 'HOT · горячо',
+  COLD: 'Холодный контакт',
+  WARM: 'Тёплый контакт',
+  HOT: 'Горячий контакт',
 };
 const TEMP_TONE: Record<AssistantCard['conversationTemperature'], 'info' | 'warning' | 'danger' | 'success'> = {
   COLD: 'info',
@@ -786,7 +795,7 @@ export default function SalesAssistant() {
             <div className="flex items-start gap-3 p-3 rounded-md bg-success/10 border border-success/30">
               <CheckCircle2 size={16} className="text-success mt-0.5 shrink-0" />
               <div className="text-sm text-primary">
-                Встреча сохранена в Память встреч. Готовы карточка сделки, next step и follow-up — можно отправлять инвестору.
+                Встреча сохранена в Память встреч. Готовы карточка сделки, следующий шаг и продолжение общения — можно отправлять инвестору.
               </div>
             </div>
             <MeetingCard session={finishResult.session} />
@@ -812,7 +821,7 @@ function AdviceCard({ card }: { card: AssistantCard }) {
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
           <StatusBadge tone="ai" dot>{STAGE_LABEL[card.spinStage]}</StatusBadge>
-          <StatusBadge tone={TONE_TONE[card.tone]} dot>Тон · {card.tone}</StatusBadge>
+          <StatusBadge tone={TONE_TONE[card.tone]} dot>Тон · {TONE_LABEL[card.tone]}</StatusBadge>
           <StatusBadge tone={CONTROL_TONE[card.dealControlLevel]} dot>{CONTROL_LABEL[card.dealControlLevel]}</StatusBadge>
           <StatusBadge tone={ENGAGEMENT_TONE[card.engagementSignal]} dot>{ENGAGEMENT_LABEL[card.engagementSignal]}</StatusBadge>
         </div>
@@ -1008,12 +1017,14 @@ function AdviceCard({ card }: { card: AssistantCard }) {
           </span>
         </div>
         <SectionLabel icon={<Target size={12} className="text-muted" />}>
-          Карта SPIN — какие этапы ещё открыты
+          Карта этапов СПИН — какие этапы ещё открыты
         </SectionLabel>
         <div className="flex items-center gap-1.5">
           {(['S', 'P', 'I', 'N'] as const).map((stage) => {
             const isOpen = card.spinGaps.includes(stage);
             const isCurrent = card.spinStage === stage;
+            // Sprint 34Б.3 — русские буквы в карте этапов: С / П / У / Р.
+            const ruLetter = stage === 'S' ? 'С' : stage === 'P' ? 'П' : stage === 'I' ? 'У' : 'Р';
             return (
               <div
                 key={stage}
@@ -1025,7 +1036,7 @@ function AdviceCard({ card }: { card: AssistantCard }) {
                       : 'bg-surface border-line text-muted line-through'}`}
                 title={isCurrent ? 'Текущий этап' : isOpen ? 'Этап ещё открыт' : 'Этап закрыт'}
               >
-                {stage}
+                {ruLetter}
               </div>
             );
           })}

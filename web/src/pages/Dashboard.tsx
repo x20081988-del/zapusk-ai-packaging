@@ -114,13 +114,13 @@ export default function Dashboard() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
-                AI Search Ready · собственная инфраструктура
+                Готов к AI-поиску · собственная инфраструктура
               </div>
               <h2 className="text-base font-semibold text-primary">AI-ready упаковка проекта</h2>
               <p className="text-xs text-secondary mt-1 leading-relaxed max-w-2xl">
-                Лендинги, презентации и one-pager'ы собираются с semantic structure и AEO-слоем — их
-                видят и могут процитировать ChatGPT, Claude, Perplexity и другие AI answer engines.
-                Каждый проект получает собственный AI Discoverability Score.
+                Лендинги, презентации и one-pager'ы собираются с семантической структурой и AI-слоем —
+                их видят и могут процитировать ChatGPT, Claude, Perplexity и другие AI-поисковики.
+                Каждый проект получает собственный балл видимости в AI-поиске.
               </p>
             </div>
           </div>

@@ -31,14 +31,14 @@ export default function DemoCabinet() {
               </div>
               <h1 className="text-3xl md:text-4xl font-bold text-primary tracking-tight">Главснаб</h1>
               <p className="text-sm text-secondary mt-3 max-w-3xl leading-relaxed">
-                Идеальный demo cabinet: заполненный бриф, AI-ready упаковка с semantic structure под
-                AI-search, готовая презентация, финансовая модель, посадочная страница, AI-лиды,
-                запись разговора и следующий юридический этап.
+                Идеальный демо-кабинет: заполненный бриф, AI-готовая упаковка с семантической
+                структурой для AI-поиска, готовая презентация, финансовая модель, посадочная страница,
+                AI-лиды, запись разговора и следующий юридический этап.
               </p>
               <div className="flex flex-wrap items-center gap-2 mt-3">
-                <StatusBadge tone="ai" dot>AI Search Ready</StatusBadge>
-                <StatusBadge tone="success" dot>AEO-ready structure</StatusBadge>
-                <StatusBadge tone="zapusk" dot>AI Discoverable</StatusBadge>
+                <StatusBadge tone="ai" dot>Готово к AI-поиску</StatusBadge>
+                <StatusBadge tone="success" dot>Структура для AI-поиска</StatusBadge>
+                <StatusBadge tone="zapusk" dot>Виден AI-поиску</StatusBadge>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
                 <Metric icon={<Wallet size={14} />} label="Чек инвестора" value="от 1 млн ₽" />

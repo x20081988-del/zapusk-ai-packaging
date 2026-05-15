@@ -103,7 +103,7 @@ export default function ConversationAnalysis() {
       <Card padded className="mb-6">
         <CardHeader
           title="Загрузите разговор — получите AI-разбор"
-          subtitle="Запись из Zoom, Telegram, диктофона или WhatsApp. AI сделает транскрипцию, найдёт ошибки и предложит next step."
+          subtitle="Запись из Zoom, Telegram, диктофона или WhatsApp. AI сделает расшифровку разговора, найдёт ошибки и предложит следующий шаг."
         />
 
         {/* Mode tabs */}
@@ -381,7 +381,7 @@ function ResultBlocks({ card }: { card: ConversationAnalysisCard }) {
 
       <Card padded accent="ai">
         <CardHeader
-          title="Готовый follow-up"
+          title="Готовое продолжение общения"
           subtitle="Текст для мессенджера — можно отправить инвестору"
           action={
             <Button size="sm" variant="ghost" iconLeft={copied ? <Check size={12} /> : <Copy size={12} />} onClick={copyFollowUp}>

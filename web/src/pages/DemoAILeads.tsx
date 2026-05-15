@@ -98,7 +98,7 @@ export default function DemoAILeads() {
 
           <aside className="space-y-4">
             <Card padded accent="ai">
-              <CardHeader title="AI работает сейчас" subtitle="Демо-режим live pipeline" />
+              <CardHeader title="AI работает сейчас" subtitle="Демо-режим: поток лидов в реальном времени" />
               <div className="space-y-3">
                 <LiveStatus icon={<PhoneCall size={14} />} label="AI-прозвон базы" value="43 звонка сегодня" active />
                 <LiveStatus icon={<MessageSquare size={14} />} label="Мессенджеры" value="128 сообщений" active />

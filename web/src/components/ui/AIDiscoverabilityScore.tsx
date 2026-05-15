@@ -37,11 +37,11 @@ interface ScoreSegment {
 }
 
 const SEGMENTS: ScoreSegment[] = [
-  { key: 'readability', label: 'AI Readability', icon: <Eye size={13} />, hint: 'Насколько структуру страницы понимают AI crawlers' },
-  { key: 'keywords', label: 'Investor Keywords', icon: <Hash size={13} />, hint: 'Покрытие investor-intent ключевых слов' },
-  { key: 'faq', label: 'FAQ Quality', icon: <FileText size={13} />, hint: 'Готовность FAQ-блоков к AI-цитированию' },
-  { key: 'structure', label: 'Semantic Structure', icon: <Sparkles size={13} />, hint: 'Иерархия H1/H2/H3 и structured summaries' },
-  { key: 'citation', label: 'Citation Readiness', icon: <Quote size={13} />, hint: 'Могут ли AI answer engines цитировать страницу' },
+  { key: 'readability', label: 'Читаемость для AI', icon: <Eye size={13} />, hint: 'Насколько структуру страницы понимают AI-краулеры' },
+  { key: 'keywords', label: 'Инвестиционные ключевые слова', icon: <Hash size={13} />, hint: 'Покрытие ключевых слов, важных для инвесторов' },
+  { key: 'faq', label: 'Качество FAQ', icon: <FileText size={13} />, hint: 'Готовность FAQ-блоков к AI-цитированию' },
+  { key: 'structure', label: 'Семантическая структура', icon: <Sparkles size={13} />, hint: 'Иерархия H1/H2/H3 и структурированные резюме' },
+  { key: 'citation', label: 'Готовность к цитированию', icon: <Quote size={13} />, hint: 'Могут ли AI-поисковики цитировать страницу' },
 ];
 
 interface Scores {
@@ -85,8 +85,8 @@ export function AIDiscoverabilityScore({ projectId, onGenerate }: Props) {
   return (
     <Card padded accent="ai">
       <CardHeader
-        title="AI Discoverability"
-        subtitle="Готовность проекта к AI-search и answer engines"
+        title="Видимость в AI-поиске"
+        subtitle="Готовность проекта к AI-поиску и AI-поисковикам"
         action={
           scores?.source === 'baseline' ? (
             <Button
@@ -119,14 +119,14 @@ export function AIDiscoverabilityScore({ projectId, onGenerate }: Props) {
             <span className="text-sm text-muted font-num">/100</span>
             {!loading && scores && (
               <StatusBadge tone={overallTone} dot>
-                {scores.overall >= 75 ? 'AI Search Ready'
-                  : scores.overall >= 50 ? 'AEO в работе'
+                {scores.overall >= 75 ? 'Готов к AI-поиску'
+                  : scores.overall >= 50 ? 'Подготовка в работе'
                     : 'нужны улучшения'}
               </StatusBadge>
             )}
           </div>
           <p className="text-xs text-muted mt-1 leading-snug">
-            Метрика собственной инфраструктуры ZAPUSK AI · видимость в AI answer engines
+            Метрика собственной инфраструктуры ZAPUSK AI · видимость в AI-поисковиках
           </p>
         </div>
       </div>

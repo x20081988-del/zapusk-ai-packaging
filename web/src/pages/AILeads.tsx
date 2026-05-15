@@ -207,11 +207,11 @@ export default function AILeads() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                   <div className="text-[10px] uppercase tracking-[0.14em] text-ai-glow font-semibold mb-1">
-                    AI Investment Operating System
+                    Операционная система привлечения инвестиций
                   </div>
                   <h2 className="text-xl font-semibold text-primary tracking-tight">Поток AI-лидов</h2>
                   <p className="text-sm text-secondary mt-1 max-w-2xl">
-                    AI изучает проект, собирает briefing, запускает сценарии коммуникации и передаёт команде только заинтересованных инвесторов.
+                    AI изучает проект, собирает бриф, запускает сценарии коммуникации и передаёт команде только заинтересованных инвесторов.
                   </p>
                 </div>
                 <div className="w-full md:w-72">
@@ -274,7 +274,7 @@ export default function AILeads() {
                 кабинете её нет, она живёт в /demo/ai-leads. */}
             {dashboard?.mode === 'demo' && (
               <Card padded accent="ai">
-                <CardHeader title="AI работает сейчас" subtitle="Демо-режим live pipeline" />
+                <CardHeader title="AI работает сейчас" subtitle="Демо-режим: поток лидов в реальном времени" />
                 <div className="space-y-3">
                   <LiveStatus icon={<PhoneCall size={14} />} label="AI-прозвон базы" value="43 звонка сегодня" active />
                   <LiveStatus icon={<MessageSquare size={14} />} label="Мессенджеры" value="128 сообщений" active />
@@ -288,7 +288,7 @@ export default function AILeads() {
                 <CardHeader title="Что произойдёт после запуска" subtitle="AI-каналы откроются после согласования упаковки" />
                 <div className="space-y-3 text-xs text-secondary">
                   <PendingLine icon={<PhoneCall size={13} />} label="AI-прозвон базы инвесторов" />
-                  <PendingLine icon={<MessageSquare size={13} />} label="Мессенджеры и follow-up" />
+                  <PendingLine icon={<MessageSquare size={13} />} label="Мессенджеры и продолжение общения" />
                   <PendingLine icon={<UserCheck size={13} />} label="Квалификация и передача горячих лидов" />
                   <PendingLine icon={<Radio size={13} />} label="Записи разговоров и контекст" />
                 </div>
@@ -372,7 +372,7 @@ function LeadProductHero({
               )}
               {!launchEnabled && !briefStatus && (
                 <span className="text-xs text-muted">
-                  Создайте проект, чтобы AI собрал briefing и запустил поиск инвесторов.
+                  Создайте проект, чтобы AI собрал бриф и запустил поиск инвесторов.
                 </span>
               )}
             </div>
@@ -383,16 +383,16 @@ function LeadProductHero({
               <div>
                 <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">Статус</div>
                 <div className="text-base font-semibold text-primary mt-1">
-                  {dashboard?.readiness.criticalReady ? 'AI начал поиск инвесторов' : 'AI готовит briefing'}
+                  {dashboard?.readiness.criticalReady ? 'AI начал поиск инвесторов' : 'AI готовит бриф'}
                 </div>
               </div>
               <StatusBadge tone={dashboard?.readiness.criticalReady ? 'success' : 'warning'} dot>
-                {dashboard?.readiness.criticalReady ? 'ready' : 'briefing'}
+                {dashboard?.readiness.criticalReady ? 'готов' : 'подготовка'}
               </StatusBadge>
             </div>
             <div className="mt-5 space-y-3">
               <PipelineStep done label="Материалы изучены" />
-              <PipelineStep done={Boolean(dashboard?.readiness.percent && dashboard.readiness.percent > 45)} label="Investor profile собран" />
+              <PipelineStep done={Boolean(dashboard?.readiness.percent && dashboard.readiness.percent > 45)} label="Профиль инвестора собран" />
               <PipelineStep done={Boolean(dashboard?.readiness.criticalReady)} label="Сценарии коммуникации готовы" />
               <PipelineStep done={launched} label="AI-лидогенерация активна" live={launched} />
             </div>
@@ -431,7 +431,7 @@ function OnboardingCard({
                 {stateLabel(dashboard.readiness.state)}
               </StatusBadge>
               <span className="text-xs text-muted">
-                {selectedProject ? `Проект: ${selectedProject.name}` : 'Создайте проект, чтобы AI начал briefing'}
+                {selectedProject ? `Проект: ${selectedProject.name}` : 'Создайте проект, чтобы AI начал подготовку'}
               </span>
             </div>
           </div>
@@ -464,7 +464,7 @@ function BriefingAnalyzer({
   return (
     <Card padded>
       <CardHeader
-        title="AI Brief Analyzer"
+        title="AI-анализ брифа"
         subtitle="AI изучает материалы проекта и задаёт только недостающие вопросы"
         action={<StatusBadge tone={dashboard.readiness.criticalReady ? 'success' : 'warning'} dot>{dashboard.readiness.percent}%</StatusBadge>}
       />
@@ -472,7 +472,7 @@ function BriefingAnalyzer({
         <div className="space-y-5">
           <div>
             <ProgressBar value={dashboard.readiness.percent} accent="ai" />
-            <div className="text-xs text-muted mt-2">Investment readiness</div>
+            <div className="text-xs text-muted mt-2">Готовность проекта к инвестициям</div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -491,7 +491,7 @@ function BriefingAnalyzer({
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div>
-              <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-2">Auto-fill briefing</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-2">AI-заполнение брифа</div>
               <div className="space-y-2">
                 {dashboard.readiness.extracted.map((item) => (
                   <div key={item.label} className="flex items-center justify-between gap-3 rounded-md border border-hairline bg-canvas/45 px-3 py-2">
@@ -604,12 +604,12 @@ function LiveFeed({ leads, locked }: { leads: AILead[]; locked: boolean }) {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-ai opacity-60" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-ai" />
           </span>
-          <span className="text-xs text-ai-glow font-medium">AI processing…</span>
+          <span className="text-xs text-ai-glow font-medium">AI обрабатывает…</span>
         </div>
       </div>
       {locked && (
         <div className="mb-4 rounded-md border border-warning/25 bg-warning/8 px-4 py-3 text-sm text-warning">
-          Feed показан как demo preview. Реальный запуск станет доступен после завершения briefing.
+          Лента показана как демо-превью. Реальный запуск станет доступен после готовности брифа.
         </div>
       )}
       <div className="space-y-3">

@@ -285,7 +285,7 @@ function buildPackagingStage(ctx: Context): Stage {
       {
         id: 'landing',
         title: 'Посадочная страница',
-        hint: 'Лендинг с investor blocks и AI Discoverability.',
+        hint: 'Лендинг с инвесторскими блоками и видимостью в AI-поиске.',
         by: 'команда_упаковки',
         status: jobStatus(ctx, ['landing']),
       },
@@ -305,8 +305,8 @@ function buildPackagingStage(ctx: Context): Stage {
       },
       {
         id: 'ai_discoverability',
-        title: 'AI Discoverability',
-        hint: 'Видимость материалов проекта в AI search engines.',
+        title: 'Видимость в AI-поиске',
+        hint: 'Видимость материалов проекта в AI-поисковиках.',
         by: 'AI',
         status: jobStatus(ctx, ['ai_visibility_report']),
       },
@@ -397,7 +397,7 @@ function buildAILeadsStage(ctx: Context): Stage {
       { id: 'bloggers', title: 'Работа с блогерами', hint: 'Эфиры и обзоры у тематических авторов.', by: 'PR_специалист', status: 'не_начато' },
       { id: 'streams', title: 'Прямые эфиры', hint: 'Эфир по базе инвесторов с фаундером.', by: 'менеджер', status: 'не_начато' },
       { id: 'investor_clubs', title: 'Инвестклубы', hint: 'Презентации проекта в закрытых клубах инвесторов.', by: 'менеджер', status: 'не_начато' },
-      { id: 'investor_base', title: 'Работа с базой инвесторов', hint: 'Холодные касания и follow-up по тёплым контактам.', by: 'менеджер', status: 'не_начато' },
+      { id: 'investor_base', title: 'Работа с базой инвесторов', hint: 'Холодные касания и продолжение общения по тёплым контактам.', by: 'менеджер', status: 'не_начато' },
     ],
   };
 }

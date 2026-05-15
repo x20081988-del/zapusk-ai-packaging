@@ -95,7 +95,7 @@ export function MeetingCard({ session, compact }: { session: SalesSession; compa
       {!compact && session.followUpMessage && (
         <div className="rounded-md border border-ai/25 bg-ai/8 p-3 mb-3">
           <div className="flex items-center justify-between gap-2 mb-1.5">
-            <div className="text-[10px] uppercase tracking-[0.1em] text-ai-glow font-semibold">Готовый follow-up</div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-ai-glow font-semibold">Готовое продолжение общения</div>
             <Button size="sm" variant="ghost" iconLeft={copied ? <Check size={12} /> : <Copy size={12} />} onClick={copyFollowUp}>
               {copied ? 'Скопировано' : 'Скопировать'}
             </Button>

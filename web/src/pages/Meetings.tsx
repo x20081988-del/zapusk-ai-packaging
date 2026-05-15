@@ -37,7 +37,7 @@ export default function Meetings() {
       <Card padded className="mb-6">
         <CardHeader
           title="Память встреч"
-          subtitle="Каждая завершённая встреча превращается в карточку сделки с next step и готовым follow-up"
+          subtitle="Каждая завершённая встреча превращается в карточку сделки со следующим шагом и готовым продолжением общения"
           action={
             <div className="w-72">
               <Select
@@ -57,7 +57,7 @@ export default function Meetings() {
           <EmptyState
             icon={<Sparkles size={20} />}
             title="Встреч пока нет"
-            description="Запустите AI-ассистента, проведите встречу и нажмите «Завершить встречу» — она появится здесь как карточка сделки с готовым follow-up."
+            description="Запустите AI-ассистента, проведите встречу и нажмите «Завершить встречу» — она появится здесь как карточка сделки с готовым продолжением общения."
             action={
               <Link to="/sales-assistant">
                 <Button iconLeft={<Headphones size={14} />}>Провести первую встречу</Button>

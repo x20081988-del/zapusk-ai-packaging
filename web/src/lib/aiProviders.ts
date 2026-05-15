@@ -67,11 +67,10 @@ export const OUTPUT_TYPE_UI: Record<string, OutputTypeUiMeta> = {
   landing: { label: 'Landing Page', description: 'Веб-страница проекта.', tone: 'zapusk' },
   financial_model: { label: 'Financial Model', description: 'P&L, сценарии, IRR.', tone: 'success' },
   calculator: { label: 'Investor Calculator', description: 'Производная от финмодели.', tone: 'success' },
-  faq: { label: 'Investor FAQ', description: 'Снятие возражений.', tone: 'ai' },
-  sales_assistant: { label: 'AI Sales Assistant', description: 'Live co-pilot по SPIN.', tone: 'ai' },
-  // Sprint 20: AEO / AI search discoverability audit. Тон ai-glow, чтобы
-  // визуально совпадал с другими AI-блоками в UI.
-  ai_visibility_report: { label: 'AI Discoverability', description: 'Готовность к AI-search.', tone: 'ai' },
+  faq: { label: 'FAQ для инвестора', description: 'Снятие возражений.', tone: 'ai' },
+  sales_assistant: { label: 'AI-ассистент продаж', description: 'Живой co-pilot по СПИН.', tone: 'ai' },
+  // Sprint 34Б.3 — русские лейблы для видимости в AI-поиске.
+  ai_visibility_report: { label: 'Видимость в AI-поиске', description: 'Готовность к AI-поиску.', tone: 'ai' },
 };
 
 export function providerLabel(provider: string | null | undefined): string {

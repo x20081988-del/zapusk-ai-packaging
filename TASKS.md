@@ -355,7 +355,103 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 34Б.2 dynamic prompt template shipped)_
+_(empty — Sprint 34Б.3 русификация интерфейса shipped)_
+
+---
+
+## Sprint 34Б.3 update — 2026-05-15 — Русификация интерфейса и AI-карточек
+
+Theme: **«Русский интерфейс + случайные англицизмы» → цельный русский B2B SaaS.** До Sprint 34Б.3 в UI оставались десятки англоязычных строк (`S — Situation`, `Тон · SOFT`, `COLD · холодно`, `briefing`, `live pipeline`, `next step`, `follow-up`, `AI Search Ready`, `AI Discoverability`, `cheat-sheet`, `read-only режим`). Это ломало премиальное ощущение продукта для русскоязычного предпринимателя.
+
+### Разрешённые англицизмы (по спеку)
+
+`AI`, `ZAPUSK AI`, `self-sale`, `СПИН`. Всё остальное — на короткий живой русский.
+
+### Что переведено
+
+**SalesAssistant** (главное):
+- `S — Situation` / `P — Problem` / `I — Implication` / `N — Need-Payoff` → **`С — Ситуация` / `П — Проблема` / `У — Усиление` / `Р — Решение`**
+- `Тон · SOFT/CONTROL/CLOSE` → **`Тон · мягкий/контроль/закрытие`** (новый `TONE_LABEL`)
+- `Контроль · LOW/MED/HIGH` → **`Контроль · низкий/средний/высокий`**
+- `COLD · холодно` / `WARM · тепло` / `HOT · горячо` → **`Холодный/Тёплый/Горячий контакт`**
+- `Карта SPIN` → **`Карта этапов СПИН`** + русские буквы С/П/У/Р в визуализации
+- `next step и follow-up` → **`следующий шаг и продолжение общения`**
+
+**AILeads**:
+- `AI Investment Operating System` → **`Операционная система привлечения инвестиций`**
+- `AI собирает briefing` / `AI готовит briefing` / `AI начал briefing` → **`AI собирает бриф` / `AI готовит бриф` / `AI начал подготовку`**
+- `Демо-режим live pipeline` → **`Демо-режим: поток лидов в реальном времени`**
+- `Investor profile собран` → **`Профиль инвестора собран`**
+- `ready` / `briefing` бейджи → **`готов` / `подготовка`**
+- `Investment readiness` → **`Готовность проекта к инвестициям`**
+- `Auto-fill briefing` → **`AI-заполнение брифа`**
+- `AI Brief Analyzer` → **`AI-анализ брифа`**
+- `AI processing…` → **`AI обрабатывает…`**
+- `Feed показан как demo preview ... briefing` → **`Лента показана как демо-превью ... брифа`**
+- `Мессенджеры и follow-up` → **`Мессенджеры и продолжение общения`**
+
+**ConversationAnalysis + DemoConversationAnalysis + Meetings + PersonalManager**:
+- `транскрипцию ... next step` → **`расшифровку разговора ... следующий шаг`**
+- `Готовый follow-up` (в MeetingCard + ConversationAnalysis) → **`Готовое продолжение общения`**
+- `cheat-sheet по инвестору` → **`краткая памятка по инвестору`**
+- `с next step и готовым follow-up` → **`со следующим шагом и готовым продолжением общения`**
+- `разберёт записи разговоров и next steps` → **`разберёт записи разговоров и следующие шаги`**
+
+**DemoCabinet + Dashboard**:
+- `demo cabinet: ... AI-ready упаковка с semantic structure под AI-search` → **`демо-кабинет: ... AI-готовая упаковка с семантической структурой для AI-поиска`**
+- `AI Search Ready` / `AEO-ready structure` / `AI Discoverable` → **`Готов к AI-поиску` / `Структура для AI-поиска` / `Виден AI-поиску`**
+- `semantic structure и AEO-слоем ... AI answer engines ... AI Discoverability Score` → **`семантической структурой и AI-слоем ... AI-поисковики ... балл видимости в AI-поиске`**
+
+**AIDiscoverabilityScore** (компонент):
+- Title `AI Discoverability` → **`Видимость в AI-поиске`**
+- Сегменты: `AI Readability / Investor Keywords / FAQ Quality / Semantic Structure / Citation Readiness` → **`Читаемость для AI / Инвестиционные ключевые слова / Качество FAQ / Семантическая структура / Готовность к цитированию`**
+- `AEO в работе` / `nужны улучшения` → **`Подготовка в работе`**
+
+**Admin + Templates labels** (`web/src/lib/aiProviders.ts`):
+- `Demo — read-only режим` → **`Демо — только просмотр`**
+- `Investor FAQ` → **`FAQ для инвестора`**
+- `AI Sales Assistant` (label) → **`AI-ассистент продаж`**
+- `AI Discoverability` (label) → **`Видимость в AI-поиске`**
+
+**investmentTrack labels**:
+- `Лендинг с investor blocks и AI Discoverability` → **`Лендинг с инвесторскими блоками и видимостью в AI-поиске`**
+- `AI Discoverability` стадия → **`Видимость в AI-поиске`**
+- `AI search engines` (в hint'е) → **`AI-поисковики`**
+- `Холодные касания и follow-up` → **`Холодные касания и продолжение общения`**
+
+### Что НЕ трогали
+
+- **Code identifiers** (`transcript`, `readiness`, `criticalReady`, `dealControlLevel`, type union values `LOW/MED/HIGH/SOFT/CONTROL/...`, prisma fields). Они часть API contract.
+- **AI prompt internals** (`SYSTEM_BRIEF_EXTRACTOR`, `SALES_ASSISTANT_SYSTEM`) — это language для модели, не для UI.
+- Имена брендов: `ChatGPT`, `Claude`, `Perplexity`, `Zoom`, `Telegram`, `WhatsApp` — это правильно.
+- Технические термины: `H1/H2/H3`, `SPIN` (внутри `СПИН` уже), формат файлов.
+
+### Verification
+
+- [x] `cd web && tsc --noEmit` clean
+- [x] `npm run build` OK (новый bundle `index-D-UR3QF3.js`)
+- [x] Static check всех ключевых русских лейблов в bundle: «С — Ситуация», «Карта этапов СПИН», «Холодный контакт», «Контроль · низкий», ...
+- [x] Static check отсутствия 15 запрещённых англоязычных строк: **0 hits** на финальном bundle
+- [x] Local preview: SalesAssistant загружается, 0 console errors
+
+### Файлов изменено
+
+12 файлов:
+- `web/src/pages/SalesAssistant.tsx` (SPIN labels + tone + temp + map)
+- `web/src/pages/AILeads.tsx`
+- `web/src/pages/ConversationAnalysis.tsx`
+- `web/src/pages/DemoAILeads.tsx`
+- `web/src/pages/DemoCabinet.tsx`
+- `web/src/pages/DemoConversationAnalysis.tsx`
+- `web/src/pages/Meetings.tsx`
+- `web/src/pages/PersonalManager.tsx`
+- `web/src/pages/Dashboard.tsx`
+- `web/src/pages/AdminDashboard.tsx`
+- `web/src/components/ui/AIDiscoverabilityScore.tsx`
+- `web/src/components/ui/MeetingCard.tsx`
+- `web/src/components/ui/RecentMeetings.tsx`
+- `web/src/lib/aiProviders.ts`
+- `web/src/lib/investmentTrack.ts`
 
 ---
 

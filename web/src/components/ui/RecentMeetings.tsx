@@ -38,7 +38,7 @@ export function RecentMeetings({ projectId, leadId, limit = 3 }: { projectId?: s
           <div className="flex-1">
             <h3 className="text-sm font-semibold text-primary">Встреч пока нет</h3>
             <p className="text-xs text-secondary mt-1 leading-relaxed">
-              Проведите первую встречу с AI-ассистентом — он сохранит контекст инвестора, возражения и подготовит follow-up.
+              Проведите первую встречу с AI-ассистентом — он сохранит контекст инвестора, возражения и подготовит продолжение общения.
             </p>
           </div>
           <Link to="/sales-assistant">

@@ -90,7 +90,7 @@ export default function DemoConversationAnalysis() {
               <CardHeader title="Рекомендации к следующему звонку" subtitle="AI подсказывает, что добавить и где усилить" />
               <ol className="space-y-2 text-sm">
                 <Recommendation num={1} text="Высылаем one-pager и финмодель сегодня. Пометить как HOT в CRM." />
-                <Recommendation num={2} text="Через 2 дня — звонок-знакомство с фаундером. Готовим cheat-sheet по инвестору." />
+                <Recommendation num={2} text="Через 2 дня — звонок-знакомство с фаундером. Готовим краткую памятку по инвестору." />
                 <Recommendation num={3} text="Подготовить ответы на вопросы по юр.структуре (доля vs конвертируемый займ)." />
                 <Recommendation num={4} text="Использовать кейс из похожей ниши — он сработал, добавить в стандартный скрипт." />
               </ol>

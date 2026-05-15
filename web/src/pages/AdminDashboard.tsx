@@ -454,7 +454,7 @@ interface InviteRow {
 
 const WORKSPACE_OPTIONS = [
   { value: 'active', label: 'Active — полный доступ' },
-  { value: 'demo', label: 'Demo — read-only режим' },
+  { value: 'demo', label: 'Демо — только просмотр' },
   { value: 'approved', label: 'Approved — одобрен, ждёт оплаты' },
   { value: 'awaiting_payment', label: 'Awaiting payment' },
   { value: 'lead', label: 'Lead — нет доступа до approval' },

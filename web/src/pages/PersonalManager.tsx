@@ -31,7 +31,7 @@ export default function PersonalManager() {
                 'поможет завершить бриф без лишних форм',
                 'передаст замечания маркетологу и юристу',
                 'подготовит проект к запуску AI-лидов',
-                'разберёт записи разговоров и next steps',
+                'разберёт записи разговоров и следующие шаги',
                 'подскажет механику сделки с инвестором',
               ].map((item) => (
                 <li key={item} className="rounded-md border border-hairline bg-canvas/45 px-3 py-2">{item}</li>
