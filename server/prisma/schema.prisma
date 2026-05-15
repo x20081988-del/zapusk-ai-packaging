@@ -656,3 +656,122 @@ model KnowledgeRetrievalEvent {
   @@index([actorId, createdAt])
   @@index([createdAt])
 }
+
+// Sprint 43 — AssistantAdviceEvent: что именно AI посоветовал в один из моментов
+// встречи. Sprint 42 KnowledgeRetrievalEvent ловит «какой KB использовался»,
+// этот — что AI на основе KB+transcript ответил. Связка retrievalEventId →
+// adviceEventId → (потом) salesSessionId → outcomeEvent — это и есть learning
+// loop.
+//
+// Сохраняется ТОЛЬКО на full analyze (/api/sales-assistant/analyze). На fast
+// analyze не пишем — fast вызывается часто на короткой встрече, и шум загрязнит
+// аналитику. Если в Sprint 44+ понадобится — добавим поле phase='fast' и
+// фильтр в UI.
+//
+// SECURITY: НИКОГДА не хранить:
+//   • полный transcript встречи (он в SalesSession.transcript)
+//   • полный prompt (он реконструируется из template + context)
+//   • raw chunk snippets (они в KnowledgeChunk.text)
+// Только metadata — что AI сказал коротко (mainQuestion / nextStep — это уже
+// готовые user-facing фразы, не secret data) + provider/model для воспроизводимости.
+model AssistantAdviceEvent {
+  id                     String   @id @default(cuid())
+
+  projectId              String?
+  actorId                String?
+  salesSessionId         String?
+  conversationAnalysisId String?
+
+  // FK на retrieval event этого AI-вызова. NULL если KB не дала результата
+  // (retrieve вернул 0 sources) — но мы всё равно пишем advice event, важно
+  // знать, что AI отвечал без KB-контекста.
+  retrievalEventId       String?
+
+  // Sprint 43 — пока всегда 'full'. Поле зарезервировано на Sprint 44 для
+  // расширения (например 'meeting_summary', 'follow_up_draft').
+  phase                  String   @default("full")
+
+  // Слой структуры AI-ответа, который мы считаем безопасным сохранить.
+  // Это уже user-facing фразы — никакой raw transcript-leak'и.
+  spinStage              String?  // S | P | I | N
+  tone                   String?  // SOFT | CONTROL | CLOSE
+  mainQuestion           String?  // главный вопрос, который AI предложил спросить
+  nextStep               String?  // dealNextStep
+  recommendation         String?  // первый whatToDo
+  confidence             Int?     // 0..100
+
+  // Какие KB-источники / chunks реально попали в prompt. Cuid'ы, JSON-массивы.
+  // НЕ snippet text — только ids.
+  usedSourceIdsJson      String
+  usedChunkIdsJson       String?
+
+  provider               String?  // openai | anthropic | mock
+  model                  String?  // имя модели на момент вызова
+  fellBackToMock         Boolean  @default(false)
+
+  promptSource           String?  // db | fallback
+  promptTemplateId       String?  // id PromptTemplate.sales_gpt, если применимо
+
+  createdAt              DateTime @default(now())
+
+  outcomes               AssistantOutcomeEvent[]
+
+  @@index([projectId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([salesSessionId, createdAt])
+  @@index([conversationAnalysisId, createdAt])
+  @@index([retrievalEventId])
+}
+
+// Sprint 43 — AssistantOutcomeEvent: что произошло после AI-подсказки. Manager
+// или фаундер фиксирует результат: «отправил follow-up», «инвестор согласился»,
+// «потеряли». Это сигнал, замыкающий learning loop без авто-инференса (его не
+// делаем — слишком легко перетренировать на шуме).
+//
+// FK на AssistantAdviceEvent опциональный — outcome можно зафиксировать и без
+// конкретного advice (например, по всей встрече). projectId / salesSessionId /
+// conversationAnalysisId независимы — fill один или несколько, мы их используем
+// для аналитики per-source и per-project.
+//
+// SECURITY:
+//   • note ограничен по длине (см. zod schema в route).
+//   • audit пишет только outcomeType + metadata, не сам note.
+//   • Founder видит только outcomes своих проектов (см. route ownership).
+model AssistantOutcomeEvent {
+  id                     String   @id @default(cuid())
+
+  // Можно привязать к конкретной подсказке. NULL если outcome охватывает
+  // всю встречу или вообще без AI-помощи.
+  adviceEventId          String?
+  adviceEvent            AssistantAdviceEvent? @relation(fields: [adviceEventId], references: [id], onDelete: SetNull)
+
+  projectId              String?
+  salesSessionId         String?
+  conversationAnalysisId String?
+
+  // Имя инвестора, как видит его пользователь. Не FK — leads могут быть
+  // вне системы, ad-hoc.
+  investorName           String?
+
+  // Whitelist из спеки. zod validation в route.
+  // follow_up_sent | next_meeting_booked | investor_requested_docs |
+  // investor_interested | investment_received | lost | ghosted |
+  // no_decision | bad_fit
+  outcomeType            String
+
+  valueRub               Float?
+  probabilityAfter       Int?     // 0..100
+
+  // Свободный комментарий менеджера. Ограничен по длине в zod (см. route).
+  note                   String?
+
+  createdById            String?
+  createdAt              DateTime @default(now())
+
+  @@index([adviceEventId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([salesSessionId, createdAt])
+  @@index([conversationAnalysisId, createdAt])
+  @@index([outcomeType, createdAt])
+  @@index([createdById, createdAt])
+}

@@ -355,7 +355,145 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 42: retrieval intelligence + KB workflow landed)_
+_(empty — Sprint 43: advice events + outcome tracking landed)_
+
+---
+
+## Sprint 43 — 2026-05-15 — Assistant Advice Events + Outcome Tracking
+
+Theme: **AI-ассистент начинает понимать «что произошло после подсказки».** Sprint 43 — первый шаг к learning loop без auto-inference: подсказка (`AssistantAdviceEvent`) → использованные знания (`KnowledgeRetrievalEvent` от Sprint 42) → действие в реальности (`AssistantOutcomeEvent`). Ручная фиксация результата — команда сама знает контекст лучше любой ML.
+
+### P0.1 + P0.2 — Schema (2 новые модели + migration)
+
+[migrations/20260515180000_sprint43_advice_outcome](server/prisma/migrations/20260515180000_sprint43_advice_outcome/migration.sql):
+
+**AssistantAdviceEvent** — что AI посоветовал в один из моментов встречи:
+- FKs: projectId / actorId / salesSessionId / conversationAnalysisId / retrievalEventId
+- `phase` default 'full' (fast НЕ пишет — шумит на короткой встрече)
+- Структурный слой ответа: spinStage / tone / mainQuestion / nextStep / recommendation / confidence
+- Provenance: provider / model / fellBackToMock / promptSource / promptTemplateId
+- `usedSourceIdsJson` + `usedChunkIdsJson` — id'ы, не текст
+- 5 индексов
+
+**AssistantOutcomeEvent** — что произошло после подсказки:
+- FKs: adviceEventId / projectId / salesSessionId / conversationAnalysisId / createdById
+- `outcomeType` whitelist (9 values: follow_up_sent / next_meeting_booked / investor_requested_docs / investor_interested / investment_received / lost / ghosted / no_decision / bad_fit)
+- `investorName`, `valueRub`, `probabilityAfter`, `note` (capped 2000 chars)
+- adviceEventId FK с `onDelete: SetNull` — outcome переживает удалённый advice
+- 6 индексов
+
+**SECURITY (schema comment + код)**: НЕ хранить полный transcript / prompt / chunk text — только metadata + готовые user-facing фразы (mainQuestion, nextStep).
+
+### P0.3 — Save advice event on full analyze
+
+[routes/salesAssistant.ts](server/src/routes/salesAssistant.ts):
+- `recordRetrievalObservability` теперь возвращает retrievalEventId (await вместо fire-and-forget; insert <5ms).
+- Новый `recordAdviceEvent({req, projectId, retrievalEventId, card})` пишет AssistantAdviceEvent после успешного `analyze` и возвращает id.
+- POST /api/sales-assistant/analyze response shape расширен: `{ card, adviceEventId }`.
+- `/analyze-fast` НЕ пишет advice event (per spec) — только retrieval observability.
+
+### P0.4 — Link advice events to SalesSession
+
+[routes/salesSessions.ts](server/src/routes/salesSessions.ts):
+- `completeSchema` принимает `adviceEventIds?: string[]` (max 50).
+- После создания `SalesSession` бэкенд `updateMany`-ит advice events с этим salesSessionId.
+- **Ownership**: founder может линковать только свои (actorId == user.id ИЛИ projectId == own). Cross-tenant id'ы отфильтрованы тихо.
+
+### P0.5 — Outcome API
+
+**Новый** [routes/assistantOutcomes.ts](server/src/routes/assistantOutcomes.ts):
+- `POST /api/assistant-outcomes` — создать outcome.
+- `GET /api/assistant-outcomes?projectId=...&salesSessionId=...` — list.
+- Wired в `index.ts` под `/api/assistant-outcomes`.
+- **Permissions**: INVESTOR forbidden (requireNotInvestor). FOUNDER может только outcomes по своим projects/sessions/analyses/own-advice; admin/manager — все. Каждый FK проверяется отдельно.
+- **Audit**: metadata only — outcomeType + projectId + adviceEventId + hasNote (boolean). Сам `note` text НЕ пишется в audit.
+- **Whitelist валидация**: outcomeType через `z.enum(OUTCOME_TYPES)`. note max 2000 chars.
+
+### P0.6 — Frontend: SalesAssistant tracks adviceEventIds
+
+[pages/SalesAssistant.tsx](web/src/pages/SalesAssistant.tsx):
+- `adviceEventIds: string[]` — массив всех full-analyze ids этой встречи.
+- `adviceEventLast: string | null` — самый свежий для outcome panel.
+- После успешного full analyze добавляет id в массив; reset сбрасывает.
+- `completeMeeting(...)` теперь передаёт `adviceEventIds` (поле добавлено в `CompleteInput`).
+
+### P0.7 — UI: «Зафиксировать результат»
+
+[New component `OutcomePanel`](web/src/pages/SalesAssistant.tsx) — рендерится под AdviceCard когда есть свежий `adviceEventLast`:
+- 9 кнопок per spec: «Отправлен follow-up», «Назначена встреча», «Запросил документы», «Инвестор заинтересован», «Инвестиция получена», «Без решения», «Не отвечает», «Потерян», «Не подходит».
+- При клике → `POST /api/assistant-outcomes` с adviceEventId + investorName + outcomeType.
+- Badge «outcome сохранён» после успеха.
+- Можно нажимать несколько раз — каждый клик = новый outcome (например, сначала "Запросил документы", через неделю "Назначена встреча").
+
+Новый клиент-helper [lib/assistantOutcomes.ts](web/src/lib/assistantOutcomes.ts) — `createOutcome`, `listOutcomes`, `OUTCOME_OPTIONS`, `OUTCOME_LABELS`, `OutcomeType`.
+
+### P0.8 — Outcome list в ProjectCockpit
+
+[pages/ProjectCockpit.tsx](web/src/pages/ProjectCockpit.tsx) — новый внутренний компонент `ProjectOutcomesList`:
+- Auto-loads `listOutcomes({ projectId })` при mount.
+- Не рендерится если 0 outcomes (не зашумляет cockpit).
+- Карточный лист с tone-badge per outcome type, investorName, note (truncated 80 chars), probabilityAfter (если есть), valueRub money-format, createdAt.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-De9vqtrO.js`.
+- **Local preview**:
+  - Full analyze → returns `adviceEventId: cmp72a88800032uquz2icek19` ✓
+  - Fast analyze → no `adviceEventId` field per spec ✓
+  - POST `/api/assistant-outcomes` с adviceEventId → 201, outcome row created с FK ✓
+  - GET `/api/assistant-outcomes` → 1 record, hasAdvice=true ✓
+  - INVESTOR → 403 `investor_forbidden` на обоих GET и POST ✓
+  - Console errors: 0
+
+### Какие модели добавлены
+
+| Модель | Назначение |
+|---|---|
+| `AssistantAdviceEvent` | что AI посоветовал; metadata-only + готовые фразы (mainQuestion/nextStep), id'ы знаний |
+| `AssistantOutcomeEvent` | что произошло после подсказки; 9 outcome types, valueRub, probabilityAfter, note |
+
+### Как сохраняется advice event
+
+1. POST `/api/sales-assistant/analyze` отрабатывает.
+2. `recordRetrievalObservability` пишет `KnowledgeRetrievalEvent` (Sprint 42), возвращает id.
+3. `recordAdviceEvent` пишет `AssistantAdviceEvent` с retrievalEventId как FK.
+4. Route возвращает `{ card, adviceEventId }`.
+5. Фронт сохраняет id в `adviceEventIds[]` массиве встречи.
+
+### Как фиксируется outcome
+
+1. Manager/founder видит OutcomePanel под AdviceCard в SalesAssistant.
+2. Клик на кнопку → POST `/api/assistant-outcomes` с adviceEventId + outcomeType + investorName.
+3. Backend проверяет ownership (founder может только свои advice/projects), создаёт row, пишет audit.
+4. UI показывает badge «сохранено», можно нажать ещё outcome'ы.
+
+### Связь outcome ↔ knowledge sources
+
+Цепочка через FKs:
+```
+KnowledgeSource ← (usedSourceIdsJson via Sprint 42 KnowledgeRetrievalEvent)
+                ← AssistantAdviceEvent.retrievalEventId
+                ← AssistantOutcomeEvent.adviceEventId
+```
+
+В Sprint 44+ можно одним JOIN'ом ответить: «какие KB sources чаще ведут к investment_received» или «какие — к ghosted». Сейчас данные копятся; UI-дашборд по этим связям не реализован (P1 deferred).
+
+### Файлы (8)
+
+- Server: `prisma/schema.prisma`, **new** migration, **new** `routes/assistantOutcomes.ts`, `routes/salesAssistant.ts`, `routes/salesSessions.ts`, `index.ts`.
+- Web: **new** `lib/assistantOutcomes.ts`, `lib/salesSessions.ts`, `pages/SalesAssistant.tsx`, `pages/ProjectCockpit.tsx`.
+
+### Что осталось на Sprint 44
+
+- **P1 Learning Dashboard**: какие sources чаще связаны с follow_up_sent / investment_received / lost. Endpoint можно построить SQL-агрегацией: JOIN KnowledgeRetrievalEvent → AssistantAdviceEvent → AssistantOutcomeEvent → groupBy sourceId+outcomeType. Данные уже копятся.
+- **Outcome edit/delete UI** — сейчас можно только создавать. Manager может опечататься.
+- **Outcome list в Meetings page** — рядом с каждой сессией показывать её outcomes.
+- **adviceEventId → conversationAnalysisId привязка** — для AI-разбора чата (не только для live transcript).
+- **Demo-assets review** (наследие Sprint 37).
+- **Manager assignment schema** (наследие Sprint 37).
+- **AbortSignal proxy** в OpenAI client (наследие Hotfix 2026-05-15).
 
 ---
 

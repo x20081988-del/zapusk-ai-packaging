@@ -19,11 +19,14 @@ import type { Request } from 'express';
 //
 // Никогда не пишем transcript / prompt / chunk text / raw query — только
 // metadata (id'ы, счётчики). См. schema комментарий.
-function recordRetrievalObservability(
+// Sprint 43 — теперь возвращает id retrieval event'а (или null при ошибке).
+// Sprint 43 P0.3 будет ссылаться на него из AssistantAdviceEvent.retrievalEventId.
+// Audit пишем fire-and-forget; structured event ждём, потому что нужен id.
+async function recordRetrievalObservability(
   req: Request,
   projectId: string | null,
   meta: KnowledgeRetrievalMeta,
-) {
+): Promise<string | null> {
   // Audit (legacy path, оставлен на месте).
   recordAudit(req, {
     action: 'knowledge.retrieval',
@@ -39,21 +42,86 @@ function recordRetrievalObservability(
     },
   }).catch(() => { /* recordAudit логирует ошибки внутри */ });
 
-  // Sprint 42 — structured event для метрик.
+  // Sprint 42 — structured event для метрик. Sprint 43 — теперь await'им, чтобы
+  // получить id; insert этой row быстрый (<5ms), не влияет на user-latency.
   const actor = (req as { user?: { id?: string } }).user;
-  prisma.knowledgeRetrievalEvent.create({
-    data: {
-      actorId: actor?.id ?? null,
-      projectId,
-      feature: meta.feature,
-      sourceIdsJson: JSON.stringify(meta.sourceIds),
-      chunkIdsJson: null, // chunk-level пока не прокидываем; добавим в Sprint 43
-      sourceCount: meta.count,
-      totalChars: meta.totalChars,
-      conversationAnalysisId: null,
-      salesSessionId: null,
-    },
-  }).catch((err) => console.warn('[knowledge:retrieval-event] write failed', err));
+  try {
+    const row = await prisma.knowledgeRetrievalEvent.create({
+      data: {
+        actorId: actor?.id ?? null,
+        projectId,
+        feature: meta.feature,
+        sourceIdsJson: JSON.stringify(meta.sourceIds),
+        chunkIdsJson: null,
+        sourceCount: meta.count,
+        totalChars: meta.totalChars,
+        conversationAnalysisId: null,
+        salesSessionId: null,
+      },
+      select: { id: true },
+    });
+    return row.id;
+  } catch (err) {
+    console.warn('[knowledge:retrieval-event] write failed', err);
+    return null;
+  }
+}
+
+// Sprint 43 P0.3 — пишем AssistantAdviceEvent ТОЛЬКО на full analyze.
+// Fast analyze вызывается часто (раз в 1-3 секунды на живой встрече) и засорил
+// бы аналитику; если в будущем понадобится — расширим phase.
+async function recordAdviceEvent(args: {
+  req: Request;
+  projectId: string | null;
+  retrievalEventId: string | null;
+  // Часть AssistantCard, которую мы готовы хранить (см. schema comment).
+  card: {
+    spinStage?: string;
+    tone?: string;
+    mainQuestion?: string;
+    nextStep?: string | null;
+    recommendation?: string;
+    confidence?: number;
+    provider?: string;
+    model?: string;
+    fellBackToMock?: boolean;
+    promptSource?: string;
+    promptTemplateId?: string | null;
+    usedKnowledgeSources?: Array<{ sourceId: string; chunkId?: string }>;
+  };
+}): Promise<string | null> {
+  const actor = (args.req as { user?: { id?: string } }).user;
+  try {
+    const used = args.card.usedKnowledgeSources ?? [];
+    const row = await prisma.assistantAdviceEvent.create({
+      data: {
+        projectId: args.projectId,
+        actorId: actor?.id ?? null,
+        retrievalEventId: args.retrievalEventId,
+        phase: 'full',
+        spinStage: args.card.spinStage ?? null,
+        tone: args.card.tone ?? null,
+        mainQuestion: args.card.mainQuestion ?? null,
+        nextStep: args.card.nextStep ?? null,
+        recommendation: args.card.recommendation ?? null,
+        confidence: typeof args.card.confidence === 'number' ? args.card.confidence : null,
+        usedSourceIdsJson: JSON.stringify(used.map((s) => s.sourceId)),
+        usedChunkIdsJson: used.some((s) => s.chunkId)
+          ? JSON.stringify(used.map((s) => s.chunkId ?? null))
+          : null,
+        provider: args.card.provider ?? null,
+        model: args.card.model ?? null,
+        fellBackToMock: Boolean(args.card.fellBackToMock),
+        promptSource: args.card.promptSource ?? null,
+        promptTemplateId: args.card.promptTemplateId ?? null,
+      },
+      select: { id: true },
+    });
+    return row.id;
+  } catch (err) {
+    console.warn('[sales-assistant] advice event write failed', err);
+    return null;
+  }
 }
 
 export const salesAssistantRoutes = Router();
@@ -97,8 +165,32 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
       // Sprint 41 P0.8 — workspaceStatus для environment-фильтра.
       workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
     });
-    recordRetrievalObservability(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
-    res.json({ card });
+    const retrievalEventId = await recordRetrievalObservability(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
+    // Sprint 43 P0.3 — пишем AssistantAdviceEvent и возвращаем id фронту,
+    // чтобы UI мог потом ссылаться на него в outcome event.
+    const adviceEventId = await recordAdviceEvent({
+      req,
+      projectId: parsed.data.projectId ?? null,
+      retrievalEventId,
+      card: {
+        spinStage: card.spinStage,
+        tone: card.tone,
+        mainQuestion: card.mainQuestion,
+        nextStep: card.dealNextStep ?? null,
+        recommendation: card.whatToDo?.[0],
+        confidence: card.confidence,
+        provider: card.provider,
+        model: card.model,
+        fellBackToMock: card.fellBackToMock,
+        promptSource: card.promptSource,
+        promptTemplateId: card.promptTemplateId,
+        usedKnowledgeSources: card.usedKnowledgeSources.map((s) => ({
+          sourceId: s.sourceId,
+          // UsedKnowledgeSource в Sprint 38 не несёт chunkId; добавим в Sprint 44.
+        })),
+      },
+    });
+    res.json({ card, adviceEventId });
   } catch (err) {
     console.error('[sales-assistant]', err);
     res.status(500).json({ error: 'analyze_failed' });
@@ -130,7 +222,9 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
       // Sprint 38 — то же что и в /analyze.
       actorRole: getActorRole(req),
     });
-    recordRetrievalObservability(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
+    // Sprint 43 — для fast НЕ пишем AssistantAdviceEvent (см. schema comment),
+    // только retrieval observability.
+    await recordRetrievalObservability(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
     res.json({ fast });
   } catch (err) {
     console.error('[sales-assistant:fast]', err);

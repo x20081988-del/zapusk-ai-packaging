@@ -27,6 +27,10 @@ const completeSchema = z.object({
   adviceHistory: z.array(z.unknown()).optional(),
   startedAt: z.string().optional().nullable(),
   endedAt: z.string().optional().nullable(),
+  // Sprint 43 P0.4 — frontend передаёт id всех full-analyze advice events,
+  // которые произошли в рамках этой встречи. После создания SalesSession мы
+  // backfill'им их salesSessionId. Это и есть link для outcome-attribution.
+  adviceEventIds: z.array(z.string()).max(50).optional(),
 });
 
 // POST /api/sales-sessions/complete — analyze + persist in one call.
@@ -45,6 +49,41 @@ salesSessionsRoutes.post('/complete', async (req, res) => {
   try {
     const summary = await completeSession(input);
     const session = await persistSession(input, summary);
+
+    // Sprint 43 P0.4 — линкуем advice events этой встречи. Ownership:
+    // founder может линковать только свои advice (по actorId или projectId);
+    // admin/manager — любые. Защита от того, что user A передаст id из встречи
+    // user B и «своруёт» аналитику. updateMany возвращает только count'ы —
+    // не рапортуем фронту, какие именно id сматчились.
+    const adviceIds = parsed.data.adviceEventIds ?? [];
+    if (adviceIds.length > 0) {
+      const role = getActorRole(req);
+      const baseWhere: { id: { in: string[] }; projectId?: string | null; actorId?: string } = {
+        id: { in: adviceIds },
+      };
+      if (!isAdminLike(role)) {
+        // Только свои advice: либо запись связана с тем же projectId владельца,
+        // либо actorId == user.id. Любое из условий допускается.
+        const user = getUser(req);
+        // На уровне Prisma OR{actorId, projectId-our-own}. Сначала найдём,
+        // какие id допустимы, потом обновим.
+        const allowed = await prisma.assistantAdviceEvent.findMany({
+          where: {
+            id: { in: adviceIds },
+            OR: [
+              { actorId: user.id },
+              input.projectId ? { projectId: input.projectId } : { id: '__none__' },
+            ],
+          },
+          select: { id: true },
+        });
+        baseWhere.id = { in: allowed.map((a) => a.id) };
+      }
+      await prisma.assistantAdviceEvent.updateMany({
+        where: baseWhere,
+        data: { salesSessionId: session.id },
+      });
+    }
 
     // Sprint 40 P0.3 — auto-capture candidate в KB. Fire-and-forget, не
     // блокирует ответ. Quality gate внутри: если probability/tone/objections

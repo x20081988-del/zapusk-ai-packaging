@@ -36,6 +36,7 @@ import { TrackPicker } from '../components/project/TrackPicker';
 import { ActivityHistory } from '../components/project/ActivityHistory';
 import { MaterialHistoryDrawer, type MaterialKind } from '../components/ui/MaterialHistoryDrawer';
 import { listMeetings } from '../lib/salesSessions';
+import { listOutcomes, OUTCOME_LABELS, type AssistantOutcome } from '../lib/assistantOutcomes';
 import { History } from 'lucide-react';
 
 export default function ProjectCockpit() {
@@ -534,6 +535,10 @@ export default function ProjectCockpit() {
           onRestored={() => load()}
         />
       )}
+
+      {/* Sprint 43 P0.8 — outcomes list. Простая таблица «что произошло после
+          AI-подсказок» по этому проекту. Аналитика в Sprint 44+. */}
+      {id && <ProjectOutcomesList projectId={id} />}
     </AppLayout>
   );
 }
@@ -592,3 +597,63 @@ function AddLinkModal({ open, onClose, onAdd }: { open: boolean; onClose: () => 
     </Modal>
   );
 }
+
+// Sprint 43 P0.8 — список результатов AI-подсказок по этому проекту.
+// Без аналитики — это Sprint 44.
+function ProjectOutcomesList({ projectId }: { projectId: string }) {
+  const [outcomes, setOutcomes] = useState<AssistantOutcome[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    listOutcomes({ projectId })
+      .then((r) => { if (alive) setOutcomes(r.outcomes); })
+      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : 'load_failed'); });
+    return () => { alive = false; };
+  }, [projectId]);
+
+  if (error) return null; // молча — старый проект может не иметь outcomes
+  if (outcomes && outcomes.length === 0) return null; // не показываем пустую секцию
+
+  return (
+    <Card padded className="mt-6">
+      <CardHeader
+        title="Результаты AI-подсказок"
+        subtitle="Что произошло после AI-помощи в этом проекте. Фиксируется командой вручную."
+        action={outcomes ? <StatusBadge tone="ai" dot>{outcomes.length}</StatusBadge> : null}
+      />
+      {!outcomes && <div className="text-sm text-muted py-4 text-center">Загрузка…</div>}
+      {outcomes && (
+        <ul className="space-y-2">
+          {outcomes.map((o) => (
+            <li key={o.id} className="flex items-center gap-3 px-3 py-2 rounded-md border border-hairline bg-canvas/40">
+              <StatusBadge tone={outcomeTone(o.outcomeType)} dot>{OUTCOME_LABELS[o.outcomeType] ?? o.outcomeType}</StatusBadge>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-primary truncate">
+                  {o.investorName ?? '—'}
+                  {o.note && <span className="text-secondary text-xs ml-2">· {o.note.slice(0, 80)}{o.note.length > 80 ? '…' : ''}</span>}
+                </div>
+              </div>
+              {typeof o.probabilityAfter === 'number' && (
+                <span className="text-xs text-muted">→ {o.probabilityAfter}%</span>
+              )}
+              {typeof o.valueRub === 'number' && (
+                <span className="text-xs text-primary font-num">{formatMoney(o.valueRub, 'RUB')}</span>
+              )}
+              <span className="text-[10px] text-muted">{formatDate(o.createdAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function outcomeTone(type: string): 'success' | 'info' | 'warning' | 'danger' | 'neutral' {
+  if (type === 'investment_received' || type === 'next_meeting_booked' || type === 'investor_interested') return 'success';
+  if (type === 'follow_up_sent' || type === 'investor_requested_docs') return 'info';
+  if (type === 'lost') return 'danger';
+  if (type === 'ghosted') return 'warning';
+  return 'neutral';
+}
+

@@ -18,6 +18,7 @@ import { api, type Project } from '../lib/api';
 import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 import { completeMeeting, type CompleteResult } from '../lib/salesSessions';
+import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
 interface SRResultLike { transcript: string; isFinal?: boolean }
@@ -272,6 +273,13 @@ export default function SalesAssistant() {
   const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
   const [investorName, setInvestorName] = useState('');
   const [investorPhone, setInvestorPhone] = useState('');
+  // Sprint 43 P0.6 — список adviceEventId'ов всех full analyze этой встречи.
+  // На «Завершить встречу» передаём в /api/sales-sessions/complete, чтобы
+  // backend пробросил salesSessionId в эти записи (link для outcome attribution).
+  // adviceEventLast — последний полученный, фронт показывает кнопки «Зафиксировать
+  // результат» с этим id.
+  const [adviceEventIds, setAdviceEventIds] = useState<string[]>([]);
+  const [adviceEventLast, setAdviceEventLast] = useState<string | null>(null);
   const startedAtRef = useRef<string | null>(null);
 
   const srRef = useRef<SRInstance | null>(null);
@@ -477,7 +485,7 @@ export default function SalesAssistant() {
     }, FULL_TIMEOUT_MS);
 
     try {
-      const r = await api.post<{ card: AssistantCard }>(
+      const r = await api.post<{ card: AssistantCard; adviceEventId?: string | null }>(
         '/api/sales-assistant/analyze',
         {
           transcript: windowed,
@@ -504,6 +512,14 @@ export default function SalesAssistant() {
       setLastAnalyzeAt(Date.now());
       setAiError(null);
       setAnalyzePhase('idle');
+      // Sprint 43 P0.6 — копим adviceEventIds текущей встречи. Бэкенд
+      // вернёт null если запись advice event'а упала — это не критично, ID
+      // просто не появится в массиве (и outcome нельзя будет линковать —
+      // ok, спокойно живёт без линка по adviceEventId).
+      if (r.adviceEventId) {
+        setAdviceEventLast(r.adviceEventId);
+        setAdviceEventIds((prev) => [...prev, r.adviceEventId as string]);
+      }
     } catch (err) {
       window.clearTimeout(fullTimer);
       if (isStale()) return;
@@ -644,6 +660,10 @@ export default function SalesAssistant() {
         investorPhone: investorPhone.trim() || null,
         startedAt: startedAtRef.current,
         endedAt: new Date().toISOString(),
+        // Sprint 43 P0.4 — линкуем все advice events этой встречи. Backend
+        // присвоит им salesSessionId, чтобы outcome'ы можно было аккуратно
+        // атрибуцировать в дашбордах.
+        adviceEventIds,
       });
       setFinishResult(result);
     } catch (err) {
@@ -669,6 +689,9 @@ export default function SalesAssistant() {
     setAiError(null);
     setFastCard(null);
     setAnalyzePhase('idle');
+    // Sprint 43 — сброс advice tracking при новом meeting'е.
+    setAdviceEventIds([]);
+    setAdviceEventLast(null);
   }
 
   function stop() {
@@ -944,6 +967,19 @@ export default function SalesAssistant() {
               card={card}
               fastCard={fastCard}
               analyzePhase={analyzePhase}
+            />
+          )}
+
+          {/* Sprint 43 P0.7 — кнопки «Зафиксировать результат». Показываем
+              после первой full-card И только если у нас есть adviceEventId
+              (бэкенд успешно записал AssistantAdviceEvent). Если backend упал
+              на запись advice event, кнопки не появятся — outcome без линка
+              не имеет аналитической ценности на этом этапе. */}
+          {card && adviceEventLast && (
+            <OutcomePanel
+              adviceEventId={adviceEventLast}
+              projectId={projectId || null}
+              investorName={investorName.trim() || null}
             />
           )}
         </div>
@@ -1397,4 +1433,77 @@ function plural(n: number, one: string, few: string, many: string): string {
   if (mod10 === 1 && mod100 !== 11) return one;
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
   return many;
+}
+
+// Sprint 43 P0.7 — «Зафиксировать результат». 9 кнопок outcome'ов; одна нажата —
+// outcome event сохраняется, UI показывает «результат сохранён». Founder/manager
+// фиксируют что произошло после AI-подсказки — это первый шаг learning loop.
+function OutcomePanel({
+  adviceEventId, projectId, investorName,
+}: {
+  adviceEventId: string;
+  projectId: string | null;
+  investorName: string | null;
+}) {
+  const [saved, setSaved] = useState<{ type: OutcomeType; ts: number } | null>(null);
+  const [busy, setBusy] = useState<OutcomeType | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function record(type: OutcomeType) {
+    setBusy(type);
+    setError(null);
+    try {
+      await createOutcome({
+        adviceEventId,
+        projectId,
+        investorName,
+        outcomeType: type,
+      });
+      setSaved({ type, ts: Date.now() });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'outcome_failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card padded accent="zapusk" className="mt-4">
+      <CardHeader
+        title="Зафиксировать результат"
+        subtitle="Что произошло после AI-подсказки? Один клик — и команда увидит как материал сработал."
+        action={saved
+          ? <StatusBadge tone="success" dot>{OUTCOME_LABELS[saved.type]} · сохранено</StatusBadge>
+          : null}
+      />
+      <div className="flex flex-wrap gap-2">
+        {OUTCOME_OPTIONS.map((o) => {
+          const isSaved = saved?.type === o.value;
+          return (
+            <Button
+              key={o.value}
+              size="sm"
+              variant={isSaved ? 'primary' : 'secondary'}
+              loading={busy === o.value}
+              disabled={Boolean(busy && busy !== o.value)}
+              onClick={() => record(o.value)}
+              title={isSaved ? 'Сохранено — можно перенажать, чтобы создать ещё один outcome' : o.label}
+            >
+              {o.label}
+            </Button>
+          );
+        })}
+      </div>
+      {error && (
+        <div className="mt-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 flex items-start gap-2 text-xs text-warning">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {error}
+        </div>
+      )}
+      <p className="text-[10px] text-muted mt-2 leading-snug">
+        Можно нажать несколько раз подряд — каждый клик создаёт отдельный outcome (например,
+        сначала «Запросил документы», потом через неделю «Назначена встреча»).
+      </p>
+    </Card>
+  );
 }

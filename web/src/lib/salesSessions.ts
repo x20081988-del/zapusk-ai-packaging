@@ -65,6 +65,9 @@ export interface CompleteInput {
   adviceHistory?: unknown[];
   startedAt?: string | null;
   endedAt?: string | null;
+  // Sprint 43 P0.4 — id всех full-analyze advice events этой встречи; backend
+  // привяжет их к создаваемому salesSessionId для outcome attribution.
+  adviceEventIds?: string[];
 }
 
 export function completeMeeting(input: CompleteInput) {
