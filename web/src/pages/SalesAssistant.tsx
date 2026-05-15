@@ -192,6 +192,15 @@ export default function SalesAssistant() {
   const [analyzing, setAnalyzing] = useState(false);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
+  // Sprint 34A — realtime AI co-pilot fixes:
+  // • lastAnalyzeAt — таймстамп последнего успешного refresh подсказки
+  // • aiError — soft-shown ошибка («AI временно недоступен»), transcript продолжает идти
+  // • aiBackoffRetries — экспоненциальный backoff при serial failures
+  const [lastAnalyzeAt, setLastAnalyzeAt] = useState<number | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const aiBackoffRetriesRef = useRef(0);
+  const lastAnalyzeCharsRef = useRef(0);
+  const autoRefreshTimerRef = useRef<number | null>(null);
   // Investor Meeting Memory: «Завершить встречу» → AI summary → сохраняем как SalesSession.
   const [finishing, setFinishing] = useState(false);
   const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
@@ -238,6 +247,8 @@ export default function SalesAssistant() {
     shouldListenRef.current = false;
     recognitionActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
+    // Sprint 34A — auto-refresh tick тоже должен останавливаться при unmount.
+    if (autoRefreshTimerRef.current) window.clearInterval(autoRefreshTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore unmount race */ }
   }, []);
 
@@ -257,6 +268,22 @@ export default function SalesAssistant() {
     return text.length > 6_000 ? text.slice(-6_000) : text;
   }
 
+  // Sprint 34A — общая длина final transcript'а в символах. Используется для
+  // auto-refresh: если выросло на >=AUTO_REFRESH_CHARS_DELTA, дёргаем analyze
+  // даже если timer ещё не сработал.
+  function fullTranscriptChars(): number {
+    let total = 0;
+    for (const t of transcriptLinesRef.current) {
+      if (t.final) total += t.text.length;
+    }
+    return total;
+  }
+
+  // Sprint 34A constants — баланс между «AI чувствуется live» и не-flood AI.
+  const AUTO_REFRESH_INTERVAL_MS = 75_000;
+  const AUTO_REFRESH_CHARS_DELTA = 2_500;
+  const MAX_BACKOFF_RETRIES = 4;
+
   function toAdviceHistoryItem(next: AssistantCard): AdviceHistoryItem {
     return {
       situation: next.situation,
@@ -272,30 +299,62 @@ export default function SalesAssistant() {
     };
   }
 
-  async function runAnalyze() {
+  // Sprint 34A — analyze запрос с debug logs, error surface и exponential
+  // backoff. Не блокирует SpeechRecognition stream — transcript продолжает
+  // приходить независимо от того, что делает AI request.
+  // `auto=true` означает trigger из interval / chars-delta (тише в логах,
+  // не показываем permError если transcript ещё короткий — просто wait).
+  async function runAnalyze(opts: { auto?: boolean } = {}) {
     if (analyzingRef.current) return;
     const transcriptText = fullTranscript();
     if (transcriptText.trim().length < 10) {
-      setPermError('Сначала начните прослушивание и скажите несколько фраз.');
+      if (!opts.auto) setPermError('Сначала начните прослушивание и скажите несколько фраз.');
       return;
     }
     analyzingRef.current = true;
     setAnalyzing(true);
+    // Sprint 34A — context window ужат с 32k до 8k chars. Достаточно для
+    // последних 5-7 минут разговора + recentContext (6k) даёт overlap.
+    // Так context не взрывается через 30+ минут встречи.
+    const windowed = transcriptText.slice(-8_000);
+    const startedAt = performance.now();
+    console.log(`[sales-assistant] analyze req chars=${windowed.length} total=${transcriptText.length} retries=${aiBackoffRetriesRef.current}`);
     try {
       const r = await api.post<{ card: AssistantCard }>('/api/sales-assistant/analyze', {
-        transcript: transcriptText.slice(-32_000),
+        transcript: windowed,
         recentContext: recentContext(),
         previousAdvice: cardRef.current,
         previousSpinStage: cardRef.current?.spinStage ?? null,
         adviceHistory: adviceHistoryRef.current.slice(-6),
         projectId: projectId || null,
       });
+      const latencyMs = Math.round(performance.now() - startedAt);
+      console.log(`[sales-assistant] analyze ok latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
       setCard(r.card);
       setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
-      setPermError(null);
+      setLastAnalyzeAt(Date.now());
+      lastAnalyzeCharsRef.current = transcriptText.length;
+      setAiError(null);
+      aiBackoffRetriesRef.current = 0;
+      if (!opts.auto) setPermError(null);
     } catch (err) {
-      // soft-fail — transcript keeps growing
-      console.warn('[sales-assistant] analyze error', err);
+      // Sprint 34A — soft-fail: transcript keeps streaming, AI пытается заново
+      // с экспоненциальным backoff. После MAX_BACKOFF_RETRIES оставляем AI
+      // выключенным до следующего user action (или следующего interval tick).
+      const message = err instanceof Error ? err.message : 'unknown';
+      console.warn(`[sales-assistant] analyze error message="${message}" retries=${aiBackoffRetriesRef.current}`);
+      setAiError('AI временно недоступен. Транскрипция продолжается, попробуем ещё раз.');
+      const retries = aiBackoffRetriesRef.current;
+      if (retries < MAX_BACKOFF_RETRIES) {
+        aiBackoffRetriesRef.current = retries + 1;
+        const delayMs = 1000 * Math.pow(2, retries);
+        console.log(`[sales-assistant] backoff retry in ${delayMs}ms (attempt ${retries + 1}/${MAX_BACKOFF_RETRIES})`);
+        window.setTimeout(() => {
+          if (shouldListenRef.current || !opts.auto) runAnalyze({ auto: opts.auto });
+        }, delayMs);
+      } else {
+        console.warn(`[sales-assistant] backoff exhausted — AI off until next user trigger`);
+      }
     } finally {
       analyzingRef.current = false;
       setAnalyzing(false);
@@ -400,6 +459,22 @@ export default function SalesAssistant() {
     setPermError(null);
     if (!startedAtRef.current) startedAtRef.current = new Date().toISOString();
     startRecognition();
+    // Sprint 34A — auto-refresh interval. Каждые AUTO_REFRESH_INTERVAL_MS
+    // тик; ИЛИ если transcript вырос на AUTO_REFRESH_CHARS_DELTA с момента
+    // последнего успешного analyze — дёргаем сразу. AI чувствуется как
+    // «слушает непрерывно», без user action.
+    if (autoRefreshTimerRef.current) window.clearInterval(autoRefreshTimerRef.current);
+    autoRefreshTimerRef.current = window.setInterval(() => {
+      if (!shouldListenRef.current) return;
+      const chars = fullTranscriptChars();
+      const delta = chars - lastAnalyzeCharsRef.current;
+      const lastTickAgoMs = lastAnalyzeAt ? Date.now() - lastAnalyzeAt : Infinity;
+      const shouldRun = delta >= AUTO_REFRESH_CHARS_DELTA || lastTickAgoMs >= AUTO_REFRESH_INTERVAL_MS;
+      if (shouldRun && chars > 0) {
+        console.log(`[sales-assistant] auto-refresh trigger chars=${chars} delta=${delta} sinceLastMs=${lastTickAgoMs}`);
+        runAnalyze({ auto: true });
+      }
+    }, 5_000); // check every 5s — actual analyze gated by delta/interval
   }
 
   async function finishMeeting() {
@@ -439,6 +514,11 @@ export default function SalesAssistant() {
     startedAtRef.current = null;
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
+    // Sprint 34A — сбрасываем AI realtime state перед новой встречей.
+    setLastAnalyzeAt(null);
+    setAiError(null);
+    lastAnalyzeCharsRef.current = 0;
+    aiBackoffRetriesRef.current = 0;
   }
 
   function stop() {
@@ -447,6 +527,11 @@ export default function SalesAssistant() {
     speechStatusRef.current = 'stopped';
     setSpeechStatus('stopped');
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
+    // Sprint 34A — останавливаем auto-refresh AI loop при ручной остановке.
+    if (autoRefreshTimerRef.current) {
+      window.clearInterval(autoRefreshTimerRef.current);
+      autoRefreshTimerRef.current = null;
+    }
     try { srRef.current?.stop(); } catch { /* ignore */ }
     srRef.current = null;
     recognitionActiveRef.current = false;
@@ -461,6 +546,11 @@ export default function SalesAssistant() {
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
     setPermError(null);
+    // Sprint 34A — сбрасываем AI state.
+    setLastAnalyzeAt(null);
+    setAiError(null);
+    lastAnalyzeCharsRef.current = 0;
+    aiBackoffRetriesRef.current = 0;
   }
 
   const wordCount = useMemo(
@@ -482,9 +572,12 @@ export default function SalesAssistant() {
       title: 'Слушает',
       hint: 'Говорите естественно. Паузы не завершают встречу, распознавание перезапускается автоматически.',
     },
+    // Sprint 34A — restarting рендерится как «Слушает», без отдельного title.
+    // Браузер делит speech на сегменты; для пользователя это должно выглядеть
+    // как непрерывное прослушивание, а не как «AI на секунду отвлёкся».
     restarting: {
-      title: 'Перезапуск распознавания',
-      hint: 'Браузер завершил короткую speech-сессию, ассистент продолжает слушать автоматически.',
+      title: 'Слушает',
+      hint: 'Говорите естественно. AI обновляет подсказки автоматически каждые ~75 секунд.',
     },
     stopped: {
       title: 'Остановлено пользователем',
@@ -532,7 +625,7 @@ export default function SalesAssistant() {
           <Button
             variant="ai"
             iconLeft={<RefreshCw size={14} />}
-            onClick={runAnalyze}
+            onClick={() => runAnalyze()}
             loading={analyzing}
             disabled={!hasFinalTranscript}
           >
@@ -573,12 +666,22 @@ export default function SalesAssistant() {
           <div className="flex items-center gap-4 text-[11px] text-muted">
             <span><span className="text-primary font-num text-sm">{wordCount}</span> слов</span>
             <span><span className="text-primary font-num text-sm">{transcript.filter((t) => t.final).length}</span> реплик</span>
-            {speechStatus === 'listening' && <StatusBadge tone="success" dot>слушает</StatusBadge>}
-            {speechStatus === 'restarting' && <StatusBadge tone="warning" dot>перезапуск</StatusBadge>}
+            {/* Sprint 34A — 'restarting' визуально как 'listening' (smooth UX,
+                без жёлтого мигания между speech-сегментами). Реальная остановка
+                по user action отдельно. */}
+            {(speechStatus === 'listening' || speechStatus === 'restarting') && (
+              <StatusBadge tone="success" dot>слушает</StatusBadge>
+            )}
             {speechStatus === 'stopped' && <StatusBadge tone="neutral" dot>остановлено</StatusBadge>}
             {speechStatus === 'mic_error' && <StatusBadge tone="danger" dot>ошибка микрофона</StatusBadge>}
-            {hasFinalTranscript && !analyzing && <StatusBadge tone="info" dot>готов обновить подсказку</StatusBadge>}
-            {analyzing && <StatusBadge tone="ai" dot>обновляем подсказку</StatusBadge>}
+            {/* Sprint 34A — «AI думает» индикатор + timestamp последнего refresh. */}
+            {analyzing && <StatusBadge tone="ai" dot>AI думает…</StatusBadge>}
+            {!analyzing && lastAnalyzeAt && (
+              <span className="text-muted">
+                AI обновил <span className="text-secondary">{new Date(lastAnalyzeAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+              </span>
+            )}
+            {aiError && <StatusBadge tone="warning" dot>AI временно недоступен</StatusBadge>}
             {card && <StatusBadge tone={card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success'} dot>{providerLabel}</StatusBadge>}
           </div>
         </div>

@@ -355,7 +355,54 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 33 material history UI + compare + restore shipped)_
+_(empty — Sprint 34A AI co-pilot stability shipped)_
+
+---
+
+## Sprint 34A update — 2026-05-15 — AI-ассистент: auto-refresh + smooth restart + error surface
+
+Theme: **AI-copilot из «нажми кнопку» в «слушает непрерывно».** Core retention feature на странице `/sales-assistant` имел 5 видимых багов: silent fail на «Обновить подсказку», нет авто-refresh, жёлтый flash «перезапуск» между speech-сегментами, нет timestamp последнего AI-апдейта, 32k chars каждый запрос (context explosion за 30 мин). Sprint 34A — точечный bugfix без новых backend сущностей.
+
+### Что закрыто
+
+**`web/src/pages/SalesAssistant.tsx`:**
+- **Auto-refresh interval**: каждые 5s tick проверяет — если transcript вырос на ≥2500 chars ИЛИ с момента последнего successful analyze прошло ≥75s, дёргаем `runAnalyze({ auto: true })`. AI чувствуется как «слушает непрерывно», user button click больше не обязателен.
+- **Error surface + exponential backoff**: вместо silent `console.warn` теперь показываем `<StatusBadge tone="warning">AI временно недоступен</StatusBadge>`. Retry с backoff 1s → 2s → 4s → 8s (max 4 попытки). Transcript stream при этом продолжается независимо.
+- **Smooth restart UX**: `speechStatus === 'restarting'` визуально рендерится как «Слушает», без жёлтого мигания. Браузер режет speech на сегменты, пользователю это не видно.
+- **Last-update timestamp**: «AI обновил 14:32:12» в status row. Заменяет старый «готов обновить подсказку».
+- **«AI думает...» indicator** во время analyze.
+- **Debug logs в console** (frontend): chunk size, total chars, request size, latency, error code, backoff attempt.
+- **Rolling context window**: `transcript.slice(-32_000)` → `transcript.slice(-8_000)`. `recentContext` (последние 6k) уже было — даёт overlap. Context больше не взрывается через 30+ минут встречи.
+- **Cleanup on stop/unmount**: `autoRefreshTimerRef.current` чистится в `stop()`, `closeFinishModal()`, и unmount useEffect.
+
+### Что не делалось в Sprint 34A (отложено в Sprint 34B+)
+
+- `MeetingRealtimeSession` table — in-memory достаточно для текущих 5-30 минутных встреч
+- Backend rolling summary — frontend window достаточен
+- Speaker states / meeting energy / investor interest score — отдельные фичи
+- Separate Stream A/B — уже неблокирующе разделены (SR onresult → setTranscript независим от runAnalyze)
+
+### Verification
+
+- [x] `cd web && tsc --noEmit` — clean (после fix `onClick={() => runAnalyze()}` wrapper для типов)
+- [x] `npm run build` — OK (551.86 kB / 155.83 kB gzip, +2 kB к Sprint 33)
+- [x] Local preview: page `/sales-assistant` рендерится, 4 кнопки видны включая «Обновить подсказку», 0 console errors
+- [x] Backend smoke: `POST /api/sales-assistant/analyze` с реальным transcript → 200, card возвращается (mock fallback в dev, AI работает на проде)
+
+### Debug logs пример
+
+В console при listening:
+```
+[sales-assistant] auto-refresh trigger chars=2812 delta=2812 sinceLastMs=Infinity
+[sales-assistant] analyze req chars=2812 total=2812 retries=0
+[sales-assistant] analyze ok latencyMs=1577 spinStage=S
+```
+
+При ошибке:
+```
+[sales-assistant] analyze error message="500" retries=0
+[sales-assistant] backoff retry in 1000ms (attempt 1/4)
+```
 
 ---
 
