@@ -107,6 +107,14 @@ interface LearningFilters {
   period: PeriodFilter;
   projectId: string;
   outcomeType: '' | OutcomeType;
+  actorId: string;
+}
+
+interface LearningActor {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
 }
 
 const SPIN_LABELS: Record<SpinFunnelStage['stage'], string> = {
@@ -120,7 +128,8 @@ const SPIN_LABELS: Record<SpinFunnelStage['stage'], string> = {
 export default function AdminLearning() {
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [filters, setFilters] = useState<LearningFilters>({ period: '30', projectId: '', outcomeType: '' });
+  const [actors, setActors] = useState<LearningActor[]>([]);
+  const [filters, setFilters] = useState<LearningFilters>({ period: '30', projectId: '', outcomeType: '', actorId: '' });
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +139,7 @@ export default function AdminLearning() {
     params.set('period', filters.period);
     if (filters.projectId) params.set('projectId', filters.projectId);
     if (filters.outcomeType) params.set('outcomeType', filters.outcomeType);
+    if (filters.actorId) params.set('actorId', filters.actorId);
     return params.toString();
   }
 
@@ -149,8 +159,11 @@ export default function AdminLearning() {
     api.get<{ projects: Project[] }>('/api/projects')
       .then((r) => setProjects(r.projects))
       .catch(() => setProjects([]));
+    api.get<{ users: LearningActor[] }>('/api/assistant-learning/actors')
+      .then((r) => setActors(r.users))
+      .catch(() => setActors([]));
   }, []);
-  useEffect(() => { load(); }, [filters.period, filters.projectId, filters.outcomeType]);
+  useEffect(() => { load(); }, [filters.period, filters.projectId, filters.outcomeType, filters.actorId]);
 
   async function exportCsv() {
     setExporting(true);
@@ -191,7 +204,7 @@ export default function AdminLearning() {
           <code>AssistantAdviceEvent</code> → <code>AssistantOutcomeEvent</code>. Outcome'ы фиксирует команда
           вручную в Sales Assistant. Чем больше outcomes тем точнее цифры — пока KB маленькая, статистика будет шумной.
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-5">
           <Select
             label="Период"
             value={filters.period}
@@ -216,6 +229,18 @@ export default function AdminLearning() {
             options={[
               { value: '', label: 'Все результаты' },
               ...Object.entries(OUTCOME_LABELS).map(([value, label]) => ({ value, label })),
+            ]}
+          />
+          <Select
+            label="Пользователь / менеджер"
+            value={filters.actorId}
+            onChange={(e) => setFilters((f) => ({ ...f, actorId: e.target.value }))}
+            options={[
+              { value: '', label: 'Все пользователи' },
+              ...actors.map((u) => ({
+                value: u.id,
+                label: `${u.name || u.email} · ${u.role}`,
+              })),
             ]}
           />
         </div>

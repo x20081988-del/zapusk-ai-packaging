@@ -13,6 +13,7 @@ import {
   type OutcomeType,
   type LearningFilters,
 } from '../services/assistantLearningService.js';
+import { prisma } from '../db.js';
 
 // Sprint 44 — Learning Dashboard routes.
 //
@@ -62,6 +63,7 @@ const learningFilterSchema = z.object({
   period: z.enum(['7', '30', '90', 'all']).optional().default('30'),
   projectId: z.string().optional(),
   outcomeType: z.enum(OUTCOME_TYPES).optional(),
+  actorId: z.string().optional(),
 });
 
 function parseLearningFilters(req: { query: unknown }): {
@@ -76,12 +78,25 @@ function parseLearningFilters(req: { query: unknown }): {
     filters: {
       ...(d.projectId ? { projectId: d.projectId } : {}),
       ...(d.outcomeType ? { outcomeType: d.outcomeType } : {}),
+      ...(d.actorId ? { actorId: d.actorId } : {}),
       ...(d.period !== 'all'
         ? { since: new Date(Date.now() - Number(d.period) * 24 * 60 * 60 * 1000) }
         : {}),
     },
   };
 }
+
+// GET /api/assistant-learning/actors
+// Список пользователей для фильтра "менеджер / пользователь". Без секретов,
+// доступен только тем же ролям, что и Learning Dashboard.
+assistantLearningRoutes.get('/actors', async (_req, res) => {
+  const users = await prisma.user.findMany({
+    where: { workspaceStatus: { not: 'archived' } },
+    orderBy: [{ role: 'asc' }, { email: 'asc' }],
+    select: { id: true, email: true, name: true, role: true },
+  });
+  res.json({ users });
+});
 
 // GET /api/assistant-learning/top-sources?outcomeTypes=...&limit=10
 // Параметр outcomeTypes — comma-separated whitelist; пусто → дефолтный
@@ -179,6 +194,7 @@ assistantLearningRoutes.get('/export.csv', async (req, res) => {
         period: parsed.params.period,
         projectId: parsed.params.projectId ?? null,
         outcomeType: parsed.params.outcomeType ?? null,
+        actorId: parsed.params.actorId ?? null,
         format: 'csv',
       },
     });

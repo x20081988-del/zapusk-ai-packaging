@@ -74,6 +74,7 @@ export interface LearningFilters {
   since?: Date;
   projectId?: string;
   outcomeType?: OutcomeType;
+  actorId?: string;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
@@ -124,6 +125,9 @@ async function buildSourceMetrics(opts: {
     ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
     ...(filters.projectId ? { projectId: filters.projectId } : {}),
     ...(filters.outcomeType ? { outcomeType: filters.outcomeType } : {}),
+    ...(filters.actorId
+      ? { OR: [{ createdById: filters.actorId }, { adviceEvent: { is: { actorId: filters.actorId } } }] }
+      : {}),
   };
   const outcomes = await prisma.assistantOutcomeEvent.findMany({
     where: outcomeWhere,
@@ -159,6 +163,7 @@ async function buildSourceMetrics(opts: {
   }
 
   const sourceIds = Object.keys(perSource);
+  if (sourceIds.length === 0 && filters.actorId) return [];
   if (sourceIds.length === 0) {
     // Нет outcome-данных. Возвращаем top retrievalCount источников чтобы
     // дашборд показал хоть что-то осмысленное.
@@ -309,6 +314,7 @@ export async function spinFunnel(filters: LearningFilters = {}): Promise<SpinFun
   const adviceWhere: Prisma.AssistantAdviceEventWhereInput = {
     ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
     ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    ...(filters.actorId ? { actorId: filters.actorId } : {}),
     ...(filters.outcomeType ? { outcomes: { some: outcomeWhere } } : {}),
   };
   const advices = await prisma.assistantAdviceEvent.findMany({
@@ -356,6 +362,9 @@ export async function outcomeDistribution(filters: LearningFilters = {}): Promis
       ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
       ...(filters.outcomeType ? { outcomeType: filters.outcomeType } : {}),
+      ...(filters.actorId
+        ? { OR: [{ createdById: filters.actorId }, { adviceEvent: { is: { actorId: filters.actorId } } }] }
+        : {}),
     },
     _count: { _all: true },
   });
@@ -373,6 +382,7 @@ export async function retrievalHealth(filters: LearningFilters = {}): Promise<Re
   const retrievalWhere: Prisma.KnowledgeRetrievalEventWhereInput = {
     createdAt: { gt: since },
     ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    ...(filters.actorId ? { actorId: filters.actorId } : {}),
   };
   const totalRetrievals = await prisma.knowledgeRetrievalEvent.count({
     where: retrievalWhere,
@@ -387,6 +397,7 @@ export async function retrievalHealth(filters: LearningFilters = {}): Promise<Re
     where: {
       createdAt: { gt: since },
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
+      ...(filters.actorId ? { actorId: filters.actorId } : {}),
     },
     select: {
       usedSourceIdsJson: true,
