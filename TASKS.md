@@ -355,7 +355,66 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 34Б.3 русификация интерфейса shipped)_
+_(empty — Sprint 35-start: AI Brief prompt в template'е)_
+
+---
+
+## Sprint 35-start — 2026-05-15 — AI Brief prompt мигрирован на template-driven
+
+Theme: **Prompt Operating System, шаг 2.** Sprint 34Б.2 вынес `sales_gpt` system-prompt в БД. Sprint 35-start делает то же для **AI Brief Extractor** — второго самого-важного prompt'а платформы. Из 9 системных промптов спека (Sales / AI Leads / Brief / Packaging / Meeting Analysis / Investor Research / Follow-up / Objections / Pitch Analyzer) — 2 теперь template-driven, 7 остаются для следующих итераций Sprint 35.
+
+### Что закрыто
+
+**`server/src/services/templateSeeds.ts`**:
+- Импорт `SYSTEM_BRIEF_EXTRACTOR` из `ai/prompts.js` (единый source-of-truth)
+- Новая запись в `SEED_TEMPLATES`: `key: 'brief_extractor'`, `category: 'brief'`, `body: SYSTEM_BRIEF_EXTRACTOR`. Seed на каждом deploy upsert'ит её в БД.
+
+**`server/src/services/briefService.ts`**:
+- Новый helper `resolveBriefPrompt()` идентичный `resolveSalesPrompt()` из Sprint 34Б.2. Читает `prisma.promptTemplate.findFirst({key:'brief_extractor'})`, проверяет `active && body.length > 200`, возвращает `{system, source: 'db' | 'fallback', templateId}`.
+- При fallback пишет AuditEvent `brief_prompt.fallback` с payload `{key, reason, active, bodyLen}`.
+- `generateBrief()` и `regenerateBriefWithFeedback()` — оба используют `briefPrompt.system` вместо прямого `SYSTEM_BRIEF_EXTRACTOR`. Регенерация добавляет свой feedback-mode инструктаж сверху.
+- Console log: `[brief] generate · prompt source=db templateId=...` или `[brief] regenerate · prompt source=fallback`.
+
+### Принцип
+
+«Не разбрасываться». В Sprint 35-start взят один prompt по тому же паттерну. После DEMO_MODE=false (env-флип в Render) super-admin сможет редактировать `brief_extractor` без redeploy — как уже умеет с `sales_gpt`.
+
+### Что осталось для Sprint 35 (полный prompt-OS)
+
+| Promt | Текущее место | Кандидат на migrate |
+|---|---|---|
+| ✅ Sales GPT | template `sales_gpt` (Sprint 34Б.2) | done |
+| ✅ Brief Extractor | template `brief_extractor` (Sprint 35-start) | done |
+| Packaging templates (10 keys) | уже template-driven через `generateAllPrompts` | — |
+| AI Meeting Analysis | hardcoded в `conversationAnalysisService` | TODO |
+| AI Leads orchestration | hardcoded в `aiLeadsService` | TODO |
+| AI Investor Research | не реализован | new feature |
+| AI Follow-up generation | живёт внутри SalesSession completion | TODO |
+| AI Objections handler | часть Sales GPT prompt | уже там |
+| AI Pitch Analyzer | не реализован | new feature |
+
+Плюс **Sprint 35 spec items** (за пределами migrate'а):
+- Категории шаблонов в админке
+- Версии prompt-шаблонов (как у material versions из Sprint 32)
+- Draft / Published flow для templates
+- A/B prompt testing
+- Prompt metrics (какой prompt даёт лучшие follow-up / встречи / конверсию)
+
+### КРИТИЧЕСКИЙ блокер прод-редактирования промптов
+
+Sprint 34Б.2 + 35-start обе сделаны архитектурно правильно. Но прод **всё ещё на `DEMO_MODE=true`** → `demoGuard` блокирует `PATCH /api/templates/:id` с 403 `demo_mode_locked`. Super-admin физически не может редактировать `brief_extractor` или `sales_gpt` через API.
+
+**Действие**: в Render dashboard → service `zapusk-ai` → Environment → `DEMO_MODE` с `true` на `false` → Save. Без этого все template-миграции остаются read-only inert.
+
+### Verification
+
+- [x] `cd server && tsc --noEmit` clean
+- [x] `npm run build` OK
+- [x] Локальный smoke не нужен — паттерн идентичен Sprint 34Б.2 (full smoke verified тогда)
+- [ ] Прод-смок отложен до `DEMO_MODE=false`. После env-флипа можно проверить:
+  - PATCH /api/templates/{brief_extractor.id} {active: false} → analyze → promptSource=fallback
+  - PATCH back {active: true} → analyze → promptSource=db
+  - Edit body → новый prompt применяется сразу
 
 ---
 

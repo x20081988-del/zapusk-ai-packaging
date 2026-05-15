@@ -23,6 +23,12 @@ export interface SeedTemplate {
   body: string;
 }
 
+// Sprint 35 (start): system-prompts AI-layer'а тоже должны быть управляемыми.
+// Импортируем SYSTEM_BRIEF_EXTRACTOR из ai/prompts.ts — это единственный
+// source-of-truth для AI Brief prompt. seed.ts upsert'ит его как
+// PromptTemplate с key='brief_extractor', briefService читает динамически.
+import { SYSTEM_BRIEF_EXTRACTOR } from '../ai/prompts.js';
+
 // Sprint 20 — AI Search Visibility & AEO layer.
 // Все landing-style материалы (landing, one_pager, lovable_pitch, pitch_structure)
 // должны быть AI-readable: ChatGPT/Claude/Perplexity и AI-search engines должны
@@ -1102,5 +1108,19 @@ interface InvestorCalculatorProps {
 - Recommendations — конкретные, action-able. Не «улучшите тексты», а «добавьте summary-paragraph в Hero перед СTA».
 - Никаких упоминаний brand names (Lovable / Claude / GPT / Semrush) в тексте отчёта — это ВНУТРЕННЯЯ оценка от Zapusk AI.
 - Если данных недостаточно — пиши явно «нужна более полная упаковка» с указанием, что именно собрать.`,
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // L. AI Brief Extractor (Sprint 35 — system prompt в template'е)
+  // ─────────────────────────────────────────────────────────────
+  // System prompt для первичного AI-разбора проекта (briefService.generateBrief).
+  // Раньше жил в коде как const SYSTEM_BRIEF_EXTRACTOR. Теперь super-admin
+  // может редактировать его как обычный шаблон без redeploy.
+  {
+    key: 'brief_extractor',
+    name: 'AI Brief Extractor (system prompt)',
+    category: 'brief',
+    description: 'System prompt для AI-анализа проекта и сборки «бизнеса на салфетке». Управляется суперадмином, влияет на первичный бриф любого проекта.',
+    body: SYSTEM_BRIEF_EXTRACTOR,
   },
 ];

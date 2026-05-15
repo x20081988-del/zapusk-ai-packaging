@@ -5,6 +5,53 @@ import { SYSTEM_BRIEF_EXTRACTOR } from '../ai/prompts.js';
 import { mockBrief } from '../ai/mock.js';
 import { extractFromUploadedFile } from './fileParser.js';
 
+// Sprint 35 — AI Brief prompt из template'а. Тот же паттерн что Sprint 34Б.2
+// для sales_gpt: читаем активный template из БД, fallback на hardcoded
+// SYSTEM_BRIEF_EXTRACTOR с громким warn + AuditEvent.
+const BRIEF_PROMPT_TEMPLATE_KEY = 'brief_extractor';
+
+type BriefPromptSource = 'db' | 'fallback';
+
+async function resolveBriefPrompt(): Promise<{ system: string; source: BriefPromptSource; templateId: string | null }> {
+  try {
+    const tpl = await prisma.promptTemplate.findFirst({
+      where: { key: BRIEF_PROMPT_TEMPLATE_KEY },
+    });
+    if (tpl && tpl.active && tpl.body && tpl.body.trim().length > 200) {
+      return { system: tpl.body, source: 'db', templateId: tpl.id };
+    }
+    const reason = !tpl
+      ? 'not_found'
+      : !tpl.active
+        ? 'inactive'
+        : (tpl.body?.trim().length ?? 0) <= 200
+          ? 'body_too_short'
+          : 'unknown';
+    console.warn(
+      `[brief] template "${BRIEF_PROMPT_TEMPLATE_KEY}" not usable (reason=${reason}) — ` +
+      `falling back to hardcoded SYSTEM_BRIEF_EXTRACTOR. ` +
+      `Edit template via super-admin → /templates to control prompt without redeploy.`,
+    );
+    await prisma.auditEvent.create({
+      data: {
+        action: 'brief_prompt.fallback',
+        targetType: 'PromptTemplate',
+        targetId: tpl?.id ?? null,
+        payload: JSON.stringify({
+          key: BRIEF_PROMPT_TEMPLATE_KEY,
+          reason,
+          active: tpl?.active ?? null,
+          bodyLen: tpl?.body?.length ?? 0,
+        }),
+      },
+    }).catch((err) => console.warn('[brief] audit write failed:', err));
+    return { system: SYSTEM_BRIEF_EXTRACTOR, source: 'fallback', templateId: null };
+  } catch (err) {
+    console.warn('[brief] template fetch failed, using hardcoded fallback:', err);
+    return { system: SYSTEM_BRIEF_EXTRACTOR, source: 'fallback', templateId: null };
+  }
+}
+
 export interface StoredAnswer { question: string; answer: string; category?: string; savedAt?: string }
 export type BriefFeedbackFocus = 'narrative' | 'finance' | 'risks' | 'investor_offer' | 'missing_data';
 
@@ -122,8 +169,11 @@ ${interviewBlock}
 
 Сделай первичный разбор и собери "бизнес на салфетке". Если фаундер уже ответил на некоторые вопросы интервью — учти эти ответы в napkin/strengths/keyMetrics и убери закрытые пункты из missingData. Верни строго JSON.`;
 
+  // Sprint 35 — system prompt из template'а (или fallback на hardcoded).
+  const briefPrompt = await resolveBriefPrompt();
+  console.log(`[brief] generate · prompt source=${briefPrompt.source} templateId=${briefPrompt.templateId ?? 'none'}`);
   const ai = await aiComplete({
-    system: SYSTEM_BRIEF_EXTRACTOR,
+    system: briefPrompt.system,
     user: userPrompt,
     asJSON: true,
     feature: 'brief.generate',
@@ -229,8 +279,11 @@ ${feedback}
 5. Если feedback закрывает пробелы — убери соответствующие вопросы из missingData/missingByCategory.
 6. Верни строго JSON той же структуры, что и ProjectBrief extractor.`;
 
+  // Sprint 35 — system prompt из template'а, plus feedback-mode инструкция сверху.
+  const briefPrompt = await resolveBriefPrompt();
+  console.log(`[brief] regenerate · prompt source=${briefPrompt.source} templateId=${briefPrompt.templateId ?? 'none'}`);
   const ai = await aiComplete({
-    system: `${SYSTEM_BRIEF_EXTRACTOR}
+    system: `${briefPrompt.system}
 
 Ты сейчас выполняешь не первичную генерацию, а регенерацию существующего ProjectBrief по feedback команды.
 Не заменяй хороший заполненный бриф generic-текстом. Меняй только то, что связано с feedback/focus, и сохраняй конкретику текущего brief.`,
