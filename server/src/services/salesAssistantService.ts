@@ -68,6 +68,7 @@ export interface AnalyzeInput {
   // Sprint 38 — роль актора нужна для KB retrieval (visibility-фильтр,
   // raw vs redacted snippet). Передаётся route'ом из getActorRole(req).
   actorRole?: string;
+  actorId?: string | null;
   // Sprint 41 P0.8 — workspaceStatus актора. demo workspace получает только
   // demo+synthetic KB; production — production+synthetic. Без этого demo-user
   // может случайно достать production-кейсы. Передаётся route'ом из
@@ -454,6 +455,9 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
       schema: SALES_ASSISTANT_RESPONSE_SCHEMA,
       strict: true,
     },
+    projectId: input.projectId ?? null,
+    actorId: input.actorId ?? null,
+    requestType: 'sales_assistant_full_json',
   });
 
   let parsed: Partial<AssistantCard> | null = null;
@@ -660,6 +664,9 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
       schema: SALES_FAST_RESPONSE_SCHEMA,
       strict: true,
     },
+    projectId: input.projectId ?? null,
+    actorId: input.actorId ?? null,
+    requestType: 'sales_assistant_fast_json',
   });
 
   let parsed: Partial<FastAssistantCard> | null = null;

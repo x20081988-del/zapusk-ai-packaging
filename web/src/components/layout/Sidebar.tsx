@@ -32,6 +32,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
       // Sprint 44 — learning dashboard.
       { to: '/admin/learning',   icon: Activity,          label: 'Learning Dashboard' },
+      { to: '/admin/ai-reliability', icon: Activity,      label: 'AI Reliability' },
       { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
       { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
     ]},
@@ -50,6 +51,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
       // Sprint 44 — learning dashboard.
       { to: '/admin/learning',   icon: Activity,          label: 'Learning Dashboard' },
+      { to: '/admin/ai-reliability', icon: Activity,      label: 'AI Reliability' },
       { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
     ]},
   ],
@@ -68,6 +70,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
       // Sprint 44 — learning dashboard для менеджеров.
       { to: '/admin/learning',   icon: Activity,          label: 'Learning Dashboard' },
+      { to: '/admin/ai-reliability', icon: Activity,      label: 'AI Reliability' },
     ]},
   ],
   FOUNDER: [

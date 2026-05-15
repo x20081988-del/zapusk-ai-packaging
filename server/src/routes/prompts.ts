@@ -1,15 +1,25 @@
 import { Router } from 'express';
 import { prisma } from '../db.js';
-import { authMiddleware, getUser } from '../auth.js';
+import { authMiddleware, getUser, requireRole } from '../auth.js';
 import { generatePrompt, generateAllPrompts, ALL_PROMPT_KINDS, type PromptKind } from '../services/promptBuilders.js';
 import { generateFullPackaging } from '../services/packageService.js';
 import { recordAudit } from '../lib/audit.js';
 import { requireNotInvestor } from '../lib/ownership.js';
+import { getPromptTemplateHistory } from '../services/promptTemplateVersioning.js';
 
 export const promptsRoutes = Router();
 promptsRoutes.use(authMiddleware);
 // Sprint 37 P0.4 — INVESTOR не запускает packaging и не работает с founder-prompts.
 promptsRoutes.use(requireNotInvestor());
+
+// Sprint 48 — PromptTemplate history. Placed before /:projectId so `history`
+// is not treated as a project route. Admin/manager only: history can reveal
+// operational template changes, but never returns full template body.
+promptsRoutes.get('/:id/history', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  const history = await getPromptTemplateHistory(req.params.id);
+  if (!history) return res.status(404).json({ error: 'not_found' });
+  res.json(history);
+});
 
 promptsRoutes.post('/:projectId/generate-full-packaging', async (req, res) => {
   const user = getUser(req);

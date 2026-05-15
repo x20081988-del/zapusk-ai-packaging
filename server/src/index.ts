@@ -25,6 +25,7 @@ import { initKnowledgeFts } from './services/knowledgeFts.js';
 import { assistantOutcomesRoutes } from './routes/assistantOutcomes.js';
 import { assistantLearningRoutes } from './routes/assistantLearning.js';
 import { managerRoutes } from './routes/manager.js';
+import { aiReliabilityRoutes } from './routes/aiReliability.js';
 
 const app = express();
 
@@ -139,6 +140,8 @@ app.use('/api/knowledge', knowledgeRoutes);
 app.use('/api/assistant-outcomes', assistantOutcomesRoutes);
 // Sprint 44 — Learning Dashboard (manager/admin global analytics).
 app.use('/api/assistant-learning', assistantLearningRoutes);
+// Sprint 48 — AI reliability ledger/dashboard.
+app.use('/api/ai-reliability', aiReliabilityRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

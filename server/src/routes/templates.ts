@@ -2,7 +2,16 @@ import { Router } from 'express';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { authMiddleware, requireRole } from '../auth.js';
+import { authMiddleware, getUser, requireRole } from '../auth.js';
+import { recordAudit } from '../lib/audit.js';
+import {
+  assertNoPromptSecrets,
+  checksumTemplate,
+  createInitialPromptTemplateVersion,
+  getPromptTemplateHistory,
+  isPromptTemplateSecretError,
+  updatePromptTemplateWithVersion,
+} from '../services/promptTemplateVersioning.js';
 
 export const templatesRoutes = Router();
 templatesRoutes.use(authMiddleware);
@@ -51,6 +60,12 @@ templatesRoutes.post('/', async (req, res) => {
   const parsed = templateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
+    assertNoPromptSecrets(parsed.data.body);
+  } catch (err) {
+    if (isPromptTemplateSecretError(err)) return res.status(400).json({ error: 'prompt_body_contains_secret_like_value' });
+    throw err;
+  }
+  try {
     const template = await prisma.promptTemplate.create({
       data: {
         key: parsed.data.key,
@@ -63,8 +78,13 @@ templatesRoutes.post('/', async (req, res) => {
         tool: parsed.data.tool?.trim() || null,
         model: parsed.data.model?.trim() || null,
         outputType: parsed.data.outputType?.trim() || null,
+        version: 1,
+        checksum: checksumTemplate(parsed.data.body),
+        changedById: getUser(req).id,
+        publishedAt: new Date(),
       },
     });
+    await createInitialPromptTemplateVersion(template.id, getUser(req).id);
     res.status(201).json({ template });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -72,6 +92,12 @@ templatesRoutes.post('/', async (req, res) => {
     }
     throw err;
   }
+});
+
+templatesRoutes.get('/:id/history', async (req, res) => {
+  const history = await getPromptTemplateHistory(req.params.id);
+  if (!history) return res.status(404).json({ error: 'not_found' });
+  res.json(history);
 });
 
 templatesRoutes.get('/:id', async (req, res) => {
@@ -98,17 +124,28 @@ const updateSchema = z.object({
 templatesRoutes.patch('/:id', async (req, res) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const existing = await prisma.promptTemplate.findUnique({ where: { id: req.params.id } });
-  if (!existing) return res.status(404).json({ error: 'not_found' });
   const data = {
     ...parsed.data,
     ...(parsed.data.description !== undefined ? { description: parsed.data.description.trim() || null } : {}),
   };
-  const t = await prisma.promptTemplate.update({
-    where: { id: req.params.id },
-    data,
-  });
-  res.json({ template: t });
+  try {
+    const result = await updatePromptTemplateWithVersion(req.params.id, data, getUser(req).id);
+    if (!result) return res.status(404).json({ error: 'not_found' });
+    await recordAudit(req, {
+      action: 'prompt_template.version_publish',
+      targetType: 'PromptTemplate',
+      targetId: result.template.id,
+      payload: {
+        key: result.template.key,
+        version: result.template.version,
+        previousVersionId: result.template.previousVersionId,
+      },
+    });
+    res.json({ template: result.template, version: result.version });
+  } catch (err) {
+    if (isPromptTemplateSecretError(err)) return res.status(400).json({ error: 'prompt_body_contains_secret_like_value' });
+    throw err;
+  }
 });
 
 templatesRoutes.delete('/:id', async (req, res) => {

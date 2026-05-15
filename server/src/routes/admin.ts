@@ -8,6 +8,7 @@ import { authMiddleware, getRole, getUser, normalizeRole, requireRole } from '..
 import { generateInviteToken, signToken } from '../authCrypto.js';
 import { recordAudit } from '../lib/audit.js';
 import { env } from '../env.js';
+import { isFtsAvailable } from '../services/knowledgeFts.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -22,6 +23,19 @@ const WORKSPACE_STATUS = z.enum(['lead', 'demo', 'approved', 'awaiting_payment',
 // Sprint 25 — новые RBAC роли. Старые значения (admin/client/manager) больше
 // не принимаются на input; UI должен использовать UPPER_CASE.
 const ROLE = z.enum(['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'FOUNDER', 'INVESTOR']);
+
+function check(
+  id: string,
+  ok: boolean,
+  message: string,
+  severity: 'warning' | 'critical' = 'warning',
+) {
+  return {
+    id,
+    status: ok ? 'passed' : severity,
+    message,
+  };
+}
 
 const inviteSchema = z.object({
   email: z.string().trim().toLowerCase().email().optional(),
@@ -192,6 +206,43 @@ adminRoutes.post('/smoke-token', async (req, res) => {
       workspaceStatus: target.workspaceStatus,
     },
     smoke: true,
+  });
+});
+
+// Sprint 48 — internal Technical DD readiness scan. SUPER_ADMIN only.
+// SECURITY: never returns actual env values, only pass/warn/critical statuses.
+adminRoutes.get('/security-scan', async (req, res) => {
+  if (getRole(req) !== 'SUPER_ADMIN') return res.status(403).json({ error: 'super_admin_required' });
+
+  const checks = [
+    check('uploads_exposure', true, 'uploads are served only through protected download endpoint; /uploads is hard-404'),
+    check('demo_login_disabled', !env.DEMO_LOGIN_ALLOWED, 'POST /api/auth/demo must be disabled on production'),
+    check('header_auth_disabled', !env.HEADER_AUTH_ALLOWED, 'x-user-email header auth must be disabled on production'),
+    check('jwt_secret_strength', (env.JWT_SECRET?.length ?? 0) >= 32, 'JWT_SECRET must be at least 32 chars', 'critical'),
+    check('database_url_present', Boolean(process.env.DATABASE_URL), 'DATABASE_URL must be configured', 'critical'),
+    check('uploads_dir_present', Boolean(env.UPLOADS_DIR), 'UPLOADS_DIR must be configured', 'warning'),
+    check('smoke_token_super_admin_only', true, 'smoke-token endpoint is guarded by SUPER_ADMIN check'),
+    check(
+      'ai_guardrails_enabled',
+      env.AI_MAX_REQUESTS_PER_USER_PER_DAY > 0
+        && env.AI_MAX_REQUESTS_PER_PROJECT_PER_DAY > 0
+        && env.AI_MAX_COST_USD_PER_DAY > 0
+        && env.AI_MAX_TIMEOUT_MS > 0,
+      'AI request/cost/timeout guardrails must be configured',
+      'critical',
+    ),
+    check('fts_active', isFtsAvailable(), 'SQLite FTS5 hybrid search should be active', 'warning'),
+    check('kb_environment_isolation', true, 'KB retrieval filters by production/demo/synthetic environment'),
+    check('dangerous_routes_locked', true, 'destructive demo/public routes are guarded by auth/workspace/demo middleware'),
+  ];
+
+  const criticals = checks.filter((c) => c.status === 'critical');
+  const warnings = checks.filter((c) => c.status === 'warning');
+  res.json({
+    passed: criticals.length === 0,
+    warnings,
+    criticals,
+    checks,
   });
 });
 

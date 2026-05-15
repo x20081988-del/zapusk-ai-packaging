@@ -9,6 +9,7 @@ import {
   analyzeSalesTurnFast,
   type KnowledgeRetrievalMeta,
 } from '../services/salesAssistantService.js';
+import { isAIGuardrailError } from '../ai/client.js';
 import type { Request } from 'express';
 
 // Sprint 40 P0.6 + Sprint 42 P0.4 — retrieval observability.
@@ -162,6 +163,7 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
       projectId: parsed.data.projectId ?? null,
       // Sprint 38 — роль нужна для KB retrieval (visibility + raw vs redacted).
       actorRole: getActorRole(req),
+      actorId: getUser(req).id,
       // Sprint 41 P0.8 — workspaceStatus для environment-фильтра.
       workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
     });
@@ -192,6 +194,9 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
     });
     res.json({ card, adviceEventId });
   } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[sales-assistant]', err);
     res.status(500).json({ error: 'analyze_failed' });
   }
@@ -221,12 +226,17 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
       projectId: parsed.data.projectId ?? null,
       // Sprint 38 — то же что и в /analyze.
       actorRole: getActorRole(req),
+      actorId: getUser(req).id,
+      workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
     });
     // Sprint 43 — для fast НЕ пишем AssistantAdviceEvent (см. schema comment),
     // только retrieval observability.
     await recordRetrievalObservability(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
     res.json({ fast });
   } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[sales-assistant:fast]', err);
     res.status(500).json({ error: 'analyze_fast_failed' });
   }

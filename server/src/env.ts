@@ -71,6 +71,10 @@ export const env = {
 
   AI_PROVIDER: (process.env.AI_PROVIDER ?? 'mock') as 'anthropic' | 'openai' | 'mock',
   AI_LOG_USAGE: truthy(process.env.AI_LOG_USAGE),
+  AI_MAX_REQUESTS_PER_USER_PER_DAY: Number(process.env.AI_MAX_REQUESTS_PER_USER_PER_DAY ?? 500),
+  AI_MAX_REQUESTS_PER_PROJECT_PER_DAY: Number(process.env.AI_MAX_REQUESTS_PER_PROJECT_PER_DAY ?? 2_000),
+  AI_MAX_COST_USD_PER_DAY: Number(process.env.AI_MAX_COST_USD_PER_DAY ?? 50),
+  AI_MAX_TIMEOUT_MS: Number(process.env.AI_MAX_TIMEOUT_MS ?? 30_000),
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? '',
   // Sprint 17: разделили на MAIN / FAST по аналогии с OpenAI. ANTHROPIC_MODEL
   // оставлен как back-compat alias для существующих deployment'ов.

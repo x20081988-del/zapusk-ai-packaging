@@ -2,7 +2,7 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-13 (Sprint 1: roles + admin + manager + demo cabinet).
+Last updated: 2026-05-15 (Sprint 48: AI reliability + technical DD hardening).
 
 ---
 
@@ -27,7 +27,67 @@ zapusk-ai-packaging/
 
 ---
 
-## Completed (this sprint — roles + admin + demo cabinet 2026-05-13)
+## Completed (this sprint — AI reliability + technical DD hardening 2026-05-15)
+
+- [x] Added metadata-only `AiRequestLedger` for AI calls: feature, provider, model, request type, actor/project ids, success/fallback/timeout, latency, token/cost estimates and char counts. Prompts, transcripts, chunks and raw AI outputs are not stored.
+- [x] Added AI request/cost/time guardrails via env:
+  - `AI_MAX_REQUESTS_PER_USER_PER_DAY`
+  - `AI_MAX_REQUESTS_PER_PROJECT_PER_DAY`
+  - `AI_MAX_COST_USD_PER_DAY`
+  - `AI_MAX_TIMEOUT_MS`
+- [x] Added in-memory provider circuit breaker: high provider error/timeout rate temporarily degrades the provider and falls back to mock instead of failing user flows.
+- [x] Added `GET /api/ai-reliability/dashboard` for SUPER_ADMIN / ADMIN / MANAGER with request, failure, fallback, latency, cost, provider split, feature split and breaker health metrics.
+- [x] Added `/admin/ai-reliability` page and sidebar entry for admin/manager roles.
+- [x] Added prompt template versioning: template updates create a new version snapshot with checksum, author and diff summary instead of silently overwriting history.
+- [x] Added prompt template history endpoints:
+  - `GET /api/templates/:id/history`
+  - `GET /api/prompts/:id/history`
+- [x] Added secret-like value checks for prompt template bodies before create/update/history snapshot.
+- [x] Added SUPER_ADMIN-only `GET /api/admin/security-scan` for technical DD readiness: demo/header auth, JWT strength, env presence, AI guardrails, FTS status and route-lock checks without exposing env values.
+- [x] Hardened KB prompt injection handling: role-spoofing, hidden markdown/html comments, XML/tool/system tags, unicode override chars and base64-like blocks are sanitized; KB snippets are wrapped as QUOTE/EVIDENCE, not instructions.
+- [x] Wired Sales Assistant and Conversation Analysis AI calls into ledger/guardrails with actor/project metadata and graceful guardrail errors.
+
+**Files changed**
+- `server/prisma/schema.prisma`
+- `server/prisma/migrations/20260515223000_sprint48_ai_reliability/migration.sql`
+- `server/src/ai/client.ts`
+- `server/src/env.ts`
+- `server/src/index.ts`
+- `server/src/routes/aiReliability.ts`
+- `server/src/routes/admin.ts`
+- `server/src/routes/templates.ts`
+- `server/src/routes/prompts.ts`
+- `server/src/routes/salesAssistant.ts`
+- `server/src/routes/conversationAnalysis.ts`
+- `server/src/services/promptTemplateVersioning.ts`
+- `server/src/services/knowledgeService.ts`
+- `server/src/services/salesAssistantService.ts`
+- `server/src/services/conversationAnalysisService.ts`
+- `web/src/App.tsx`
+- `web/src/components/layout/Sidebar.tsx`
+- `web/src/pages/AdminAIReliability.tsx`
+- `.env.example`
+- `TASKS.md`
+
+**Checks**
+- `cd server && npx prisma generate` → green.
+- `cd server && npx tsc --noEmit` → green.
+- `cd web && npx tsc --noEmit` → green.
+- `npm run build` → green with existing Vite chunk-size / dynamic-import warnings.
+- `git diff --check` → green.
+
+**Known risks / ограничения**
+- Local DB smoke could not apply migrations because the existing local `dev.db` already has failed migration `20260514140340_sprint30_soft_delete_audit`. A fresh temp DB also hit Prisma `Schema engine error` without details in this environment, so endpoint smoke must be run after Render applies migrations or after local DB migration state is repaired.
+- Circuit breaker is intentionally in-memory for Sprint 48; it resets on process restart and is not shared across instances.
+- Cost estimates use coarse model-family rates and may be `null` for unknown models or providers without token usage.
+- Prompt history stores sanitized snapshots for operational audit; it does not yet expose full side-by-side body diff in UI.
+
+**Next recommended task**
+- Sprint 49: repair local migration state, add automated smoke coverage for AI guardrail hit / timeout / provider failure simulation, and expand `/admin/ai-reliability` with time filters and per-feature drilldown.
+
+---
+
+## Completed (previous sprint — roles + admin + demo cabinet 2026-05-13)
 
 - [x] Light theme is now the default for new users; saved `zapusk.theme` values are preserved and dark mode stays available through the theme toggle.
 - [x] Added MVP roles: `client`, `manager`, `admin`. The role is stored in demo auth state and sent as `x-user-role` with API calls.

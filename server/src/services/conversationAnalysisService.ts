@@ -46,6 +46,7 @@ export interface AnalyzeInput {
   transcript: string;
   projectId?: string | null;
   investorName?: string | null;
+  actorId?: string | null;
 }
 
 export interface IngestInput {
@@ -162,6 +163,9 @@ export async function analyzeConversation(input: AnalyzeInput): Promise<Conversa
       schema: ANALYSIS_SCHEMA,
       strict: true,
     },
+    projectId: input.projectId ?? null,
+    actorId: input.actorId ?? null,
+    requestType: 'conversation_analysis_json',
   });
 
   let parsed: Partial<ConversationAnalysisCard> | null = null;
@@ -237,6 +241,7 @@ export async function ingestConversation(input: IngestInput) {
     transcript,
     projectId: input.projectId,
     investorName: input.investorName,
+    actorId: input.createdById ?? null,
   });
 
   const row = await prisma.conversationAnalysis.create({

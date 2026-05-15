@@ -11,6 +11,7 @@ import {
   listAnalyses,
   getAnalysis,
 } from '../services/conversationAnalysisService.js';
+import { isAIGuardrailError } from '../ai/client.js';
 
 export const conversationAnalysisRoutes = Router();
 conversationAnalysisRoutes.use(authMiddleware);
@@ -67,6 +68,9 @@ conversationAnalysisRoutes.post('/', upload.single('file'), async (req, res) => 
 
     res.status(201).json({ analysis: result.card, row: result.row });
   } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     if (err instanceof Error && err.message === 'transcript_too_short') {
       return res.status(400).json({ error: 'transcript_too_short', message: 'Transcript слишком короткий для анализа.' });
     }
@@ -108,6 +112,9 @@ conversationAnalysisRoutes.post('/text', async (req, res) => {
       .catch((err) => console.warn('[conv-analysis/text auto-capture] failed', err));
     res.status(201).json({ analysis: result.card, row: result.row });
   } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[conversation-analysis/text]', err instanceof Error ? err.message : err);
     res.status(500).json({ error: 'analysis_failed' });
   }

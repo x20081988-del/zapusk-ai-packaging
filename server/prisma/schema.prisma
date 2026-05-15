@@ -199,8 +199,50 @@ model PromptTemplate {
   model       String?            // optional concrete model id, e.g. gpt-4.1-2025-04
   outputType  String?            // faq / financial_model / landing / one_pager / pitch_deck / investor_summary / sales_assistant / calculator
 
+  // Sprint 48 — prompt versioning. PromptTemplate remains the current active
+  // pointer (existing code reads by key/id), while PromptTemplateVersion stores
+  // append-only snapshots. Updates must create a new version row before moving
+  // this pointer.
+  version           Int      @default(1)
+  checksum          String?
+  previousVersionId String?
+  changedById       String?
+  publishedAt       DateTime?
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  versions    PromptTemplateVersion[]
+}
+
+model PromptTemplateVersion {
+  id          String   @id @default(cuid())
+  templateId  String
+  template    PromptTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  version     Int
+  checksum    String
+  previousVersionId String?
+  changedById String?
+  publishedAt DateTime?
+
+  key         String
+  name        String
+  category    String
+  description String?
+  body        String
+  active      Boolean
+  provider    String?
+  tool        String?
+  model       String?
+  outputType  String?
+  diffSummary String?
+
+  createdAt   DateTime @default(now())
+
+  @@unique([templateId, version])
+  @@index([templateId, createdAt])
+  @@index([changedById, createdAt])
 }
 
 // Sprint 15: every time a packaging artefact is requested we record the
@@ -660,6 +702,36 @@ model KnowledgeRetrievalEvent {
   @@index([feature, createdAt])
   @@index([actorId, createdAt])
   @@index([createdAt])
+}
+
+// Sprint 48 — AI Request Ledger. Metadata-only observability for every AI
+// call/circuit-breaker fallback/guardrail hit. SECURITY: never store prompt,
+// transcript, chunk text, or raw output here.
+model AiRequestLedger {
+  id               String   @id @default(cuid())
+  feature          String
+  provider         String
+  model            String
+  projectId        String?
+  actorId          String?
+  requestType      String
+  success          Boolean
+  fallbackUsed     Boolean  @default(false)
+  timeoutHit       Boolean  @default(false)
+  latencyMs        Int
+  tokensIn         Int?
+  tokensOut        Int?
+  estimatedCostUsd Float?
+  charInput        Int?
+  charOutput       Int?
+  errorCode        String?
+  createdAt        DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([provider, createdAt])
+  @@index([projectId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([success, createdAt])
 }
 
 // Sprint 43 — AssistantAdviceEvent: что именно AI посоветовал в один из моментов

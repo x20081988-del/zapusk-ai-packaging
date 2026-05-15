@@ -122,6 +122,15 @@ Model routing:
 
 JSON flows use strict parsing in services; Sales Assistant additionally asks OpenAI for a structured `json_schema` response. When `AI_LOG_USAGE=true`, logs include provider, feature, model, latency, token counts if available, estimated cost as `null` when not available, success/failure and safe error code. Prompts, project data and API keys are not logged.
 
+Sprint 48 adds production reliability controls around the same gateway:
+
+- `AiRequestLedger` stores metadata only: feature, provider, model, project/actor ids, request type, success/fallback/timeout flags, latency, token/cost estimates and char counts.
+- Daily request/cost/timeout limits are controlled by `AI_MAX_REQUESTS_PER_USER_PER_DAY`, `AI_MAX_REQUESTS_PER_PROJECT_PER_DAY`, `AI_MAX_COST_USD_PER_DAY` and `AI_MAX_TIMEOUT_MS`.
+- Guardrail hits return graceful `429` / `503` errors and write `ai.guardrail.hit` audit events without storing prompts or transcripts.
+- The provider circuit breaker is in-memory: repeated provider failures or timeouts temporarily degrade the provider and use mock fallback. It resets on process restart.
+- Admin reliability dashboard: `GET /api/ai-reliability/dashboard` and `/admin/ai-reliability`.
+- Technical DD scan: `GET /api/admin/security-scan` for SUPER_ADMIN only. It reports pass/warn/critical checks without exposing env values.
+
 Production checks:
 
 ```bash
@@ -135,6 +144,10 @@ OPENAI_MODEL_MAIN=gpt-5.5
 OPENAI_MODEL_FAST=gpt-4o-mini
 OPENAI_MODEL_REALTIME=gpt-4o-realtime-preview
 AI_LOG_USAGE=true
+AI_MAX_REQUESTS_PER_USER_PER_DAY=500
+AI_MAX_REQUESTS_PER_PROJECT_PER_DAY=2000
+AI_MAX_COST_USD_PER_DAY=50
+AI_MAX_TIMEOUT_MS=30000
 ```
 
 If Render logs show `http_401`, check the API key. If they show `http_403` or `http_429`, check model access, billing/quota and rate limits. If the selected model is unavailable, the gateway logs the model name and safe error code, then returns mock fallback rather than failing silently.
@@ -273,6 +286,10 @@ npm start
 | `OPENAI_MODEL_FAST` | Быстрая модель для summaries/classifications/metadata.                 | `gpt-4o-mini`                  |
 | `OPENAI_MODEL_REALTIME` | Модель для будущего realtime audio streaming. Сейчас только env/abstraction. | `gpt-4o-realtime-preview` |
 | `AI_LOG_USAGE`    | Безопасные usage-логи без prompt/API key: provider, feature, model, latency, tokens, error code. | `true` |
+| `AI_MAX_REQUESTS_PER_USER_PER_DAY` | Дневной лимит AI-запросов на пользователя; превышение → `429`. | `500` |
+| `AI_MAX_REQUESTS_PER_PROJECT_PER_DAY` | Дневной лимит AI-запросов на проект; превышение → `429`. | `2000` |
+| `AI_MAX_COST_USD_PER_DAY` | Общий дневной cost guardrail; превышение → `503`. | `50` |
+| `AI_MAX_TIMEOUT_MS` | Верхняя граница timeout для AI-вызовов. | `30000` |
 | `ANTHROPIC_API_KEY` | Альтернативный Anthropic ключ, если `AI_PROVIDER=anthropic`.            | секрет                         |
 | `DEV_USER_EMAIL` / `DEV_USER_NAME`     | Имя пользователя по умолчанию для всех гостей демо.    | `demo@zapusk.tech`             |
 | `VITE_API_BASE_URL` (build-time)       | Пустая строка → same-origin. Для split-deploy — URL API.| `` (empty)                    |
