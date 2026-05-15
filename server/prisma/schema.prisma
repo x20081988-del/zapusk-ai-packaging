@@ -603,3 +603,56 @@ model KnowledgeChunk {
   @@index([sourceId, chunkIndex])
   @@index([projectId])
 }
+
+// Sprint 42 — структурированный лог retrieval-событий.
+//
+// В Sprint 40 каждый retrieval писал AuditEvent (action='knowledge.retrieval').
+// Это было удобно для расследования инцидентов, но плохо подходит для метрик:
+// нужно парсить JSON payload, нет индекса по projectId / feature, не связать
+// с конкретной sales session.
+//
+// KnowledgeRetrievalEvent — отдельная таблица для measurable outcomes. Audit
+// event остаётся для security forensics, эта — для analytics. Sprint 43+ можно
+// добавить outcome-поля (acceptedByUser, leadToConversion и т.д.) без миграции
+// существующего audit-кода.
+//
+// SECURITY: НИКОГДА не пишем transcript, prompt, raw chunk text, raw query.
+// Только metadata: какие sources/chunks были выбраны, сколько символов в
+// контексте, какая фича запросила.
+model KnowledgeRetrievalEvent {
+  id              String   @id @default(cuid())
+
+  // Кто запросил retrieval. actorId nullable — на случай system-инициированных
+  // retrieval'ов (например, future autoscoring пайплайны).
+  actorId         String?
+
+  // Какой проект (если есть). Без FK constraint — retrieval может быть для
+  // удалённого/архивированного проекта, и event должен пережить.
+  projectId       String?
+
+  // Какая фича вызвала retrieval. См. RetrievalOptions.feature.
+  feature         String
+
+  // Какие sources / chunks были выбраны (JSON array of cuid). Не FK — для
+  // того же reason'а (удалённые sources не должны ломать historic events).
+  sourceIdsJson   String
+  chunkIdsJson    String?
+
+  // Метрика «сколько мы реально подмешали в prompt». Полезно для оценки
+  // budget'а: если sources>0 но totalChars=0 — что-то фильтрнуло, диагностика.
+  sourceCount     Int
+  totalChars      Int
+
+  // Sprint 42 — связь с реальной встречей / анализом (если retrieval привязан).
+  // Permission'ы передаются в route — здесь это просто backlinks для дашборда
+  // «AI помог в этой сессии».
+  conversationAnalysisId String?
+  salesSessionId         String?
+
+  createdAt       DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([feature, createdAt])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+}

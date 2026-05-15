@@ -7,6 +7,7 @@ import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 import { EmptyState } from '../components/ui/EmptyState';
 import { MeetingCard } from '../components/ui/MeetingCard';
+import { AddToKnowledgeBaseButton } from '../components/ui/AddToKnowledgeBaseButton';
 import { listMeetings, type SalesSession } from '../lib/salesSessions';
 import { api, type Project } from '../lib/api';
 
@@ -67,7 +68,19 @@ export default function Meetings() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {filtered.map((s) => <MeetingCard key={s.id} session={s} />)}
+          {filtered.map((s) => (
+            <div key={s.id} className="relative">
+              <MeetingCard session={s} />
+              {/* Sprint 42 P0.3 — admin/manager CTA «Добавить в KB» сверху-справа
+                  карточки. Hidden для FOUNDER (компонент сам себя гасит). */}
+              <div className="absolute top-3 right-3">
+                <AddToKnowledgeBaseButton
+                  salesSessionId={s.id}
+                  defaultSourceType={s.tone === 'hot' ? 'successful_sale' : 'deal_case'}
+                />
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </AppLayout>

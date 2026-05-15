@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft, BookOpen, Plus, Upload, Search, Filter, FileText, Sparkles,
-  CheckCircle2, EyeOff, Archive, AlertTriangle, ChevronRight,
+  CheckCircle2, EyeOff, Archive, AlertTriangle, ChevronRight, RefreshCw,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -281,7 +281,8 @@ export default function AdminKnowledge() {
         )}
       </Card>
 
-      <SearchDebugCard />
+      <MetricsCard />
+      <CompareSearchCard />
 
       {showNoteForm && (
         <CreateNoteModal
@@ -310,6 +311,7 @@ export default function AdminKnowledge() {
 
 function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: () => void; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
 
   async function patch(payload: Record<string, unknown>) {
     setBusy(true);
@@ -323,8 +325,8 @@ function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: ()
     }
   }
 
-  async function reject() {
-    const reason = window.prompt('Причина отключения (опционально):') ?? '';
+  async function applyReject(reason: string) {
+    setShowRejectModal(false);
     await patch({ status: 'disabled', disabledReason: reason.trim() || null });
   }
 
@@ -413,7 +415,7 @@ function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: ()
           </Button>
         )}
         {source.status !== 'disabled' && (
-          <Button size="sm" variant="ghost" iconLeft={<EyeOff size={12} />} loading={busy} onClick={reject}>
+          <Button size="sm" variant="ghost" iconLeft={<EyeOff size={12} />} loading={busy} onClick={() => setShowRejectModal(true)}>
             {source.isCandidate ? 'Отклонить' : 'Отключить'}
           </Button>
         )}
@@ -423,7 +425,80 @@ function SourceRow({ source, onOpen, onChanged }: { source: KbSource; onOpen: ()
           </Button>
         )}
       </div>
+      {showRejectModal && (
+        <RejectReasonModal
+          isCandidate={Boolean(source.isCandidate)}
+          onCancel={() => setShowRejectModal(false)}
+          onConfirm={applyReject}
+        />
+      )}
     </div>
+  );
+}
+
+// Sprint 42 P1 — Reject modal с настоящей формой. Раньше использовали
+// window.prompt() — выглядело как фишинговое окно из 2002 года и не давало
+// preset-причин. Теперь предлагаем 4 типичных reason'а + кастомный текст.
+function RejectReasonModal({
+  isCandidate, onCancel, onConfirm,
+}: {
+  isCandidate: boolean;
+  onCancel: () => void;
+  onConfirm: (reason: string) => void | Promise<void>;
+}) {
+  const presets = [
+    'Низкое качество — слишком общий кейс',
+    'Дубликат уже существующего материала',
+    'Содержит чувствительные данные клиента',
+    'Не подходит для шаблона продаж',
+  ];
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      await onConfirm(reason);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onCancel} title={isCandidate ? 'Отклонить кандидат' : 'Отключить источник'} width="max-w-lg">
+      <div className="p-5 space-y-3">
+        <p className="text-sm text-secondary leading-snug">
+          {isCandidate
+            ? 'Этот auto-capture кандидат не пройдёт в опубликованную базу знаний. Укажите причину — она будет видна в карточке источника.'
+            : 'Source будет помечен disabled и перестанет участвовать в retrieval. Причина сохранится для аудита.'}
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {presets.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setReason(p)}
+              className={`text-[11px] px-2 py-1 rounded border transition-colors ${reason === p ? 'border-warning/40 bg-warning/10 text-warning' : 'border-line bg-surface text-secondary hover:border-warning/30'}`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <Textarea
+          label="Причина (опционально)"
+          rows={3}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Своя формулировка…"
+        />
+        <div className="flex justify-end gap-2 pt-2 border-t border-hairline">
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>Отмена</Button>
+          <Button variant="danger" loading={busy} onClick={submit} iconLeft={<EyeOff size={14} />}>
+            {isCandidate ? 'Отклонить' : 'Отключить'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -804,27 +879,61 @@ function Meta({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ─── Search debug card (P1) ───────────────────────────────────────────────
+// ─── Sprint 42 — Compare Search UI (Hybrid Debug Panel) ──────────────────
 
-function SearchDebugCard() {
+interface DebugV2Result {
+  sourceId: string;
+  chunkId?: string;
+  title: string;
+  sourceType: string;
+  scope: 'global' | 'project';
+  visibility: string;
+  summary: string | null;
+  snippet: string;
+  finalScore: number;
+  breakdown?: {
+    bm25Score: number;
+    bm25Norm: number;
+    keywordScore: number;
+    qualityBoost: number;
+    projectBoost: number;
+    typeBoost: number;
+    freshnessBoost: number;
+    finalScore: number;
+    reasons: string[];
+  };
+}
+
+function CompareSearchCard() {
   const [query, setQuery] = useState('');
   const [projectId, setProjectId] = useState('');
-  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [feature, setFeature] = useState<'sales_assistant_full' | 'sales_assistant_fast'>('sales_assistant_full');
+  // workspace selector нужен только как индикатор в Sprint 42 UI — backend
+  // выводит environment из текущего request actor'а. Здесь это hint для admin'а
+  // о том, в каком контексте имитировать.
+  const [workspace, setWorkspace] = useState<'production' | 'demo'>('production');
+  const [results, setResults] = useState<DebugV2Result[] | null>(null);
+  const [ftsAvailable, setFtsAvailable] = useState<boolean | null>(null);
+  const [scanned, setScanned] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [scanned, setScanned] = useState<number | null>(null);
 
   async function run() {
     if (query.trim().length < 3) { setError('Минимум 3 символа'); return; }
     setError(null);
     setBusy(true);
     try {
-      const r = await api.post<{ sources: SearchHit[]; totalChunksScanned: number }>('/api/knowledge/search-debug', {
+      const r = await api.post<{
+        ftsAvailable: boolean;
+        hybridResults: DebugV2Result[];
+        totalChunksScanned: number;
+      }>('/api/knowledge/search-debug-v2', {
         query,
         projectId: projectId.trim() || null,
-        topN: 8,
+        topN: 12,
       });
-      setHits(r.sources);
+      setResults(r.hybridResults);
+      setFtsAvailable(r.ftsAvailable);
       setScanned(r.totalChunksScanned);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'search_failed');
@@ -833,74 +942,315 @@ function SearchDebugCard() {
     }
   }
 
+  const topScore = results?.[0]?.finalScore ?? 0;
+
   return (
-    <Card padded>
+    <Card padded className="mt-6">
       <CardHeader
-        title="Проверить поиск"
-        subtitle="Тест retrieval: какие источники AI-ассистент найдёт для данного запроса. Используется только admin/manager — нужно для отладки качества."
+        title="Сравнить поиск AI"
+        subtitle="Hybrid debug: видно почему AI выбрал конкретный кейс и какой boost сильнее всего повлиял. Используется для отладки качества retrieval."
+        action={
+          ftsAvailable === false
+            ? <StatusBadge tone="warning" dot>FTS5 недоступен — keyword fallback</StatusBadge>
+            : ftsAvailable === true
+              ? <StatusBadge tone="success" dot>FTS5 + hybrid</StatusBadge>
+              : null
+        }
       />
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_240px] gap-3 mb-3">
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_180px_180px_140px] gap-3 mb-3">
         <Textarea
-          label="Запрос (transcript-like текст)"
+          label="Запрос / transcript"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           rows={3}
           placeholder="Здравствуйте, я инвестор. Какой минимальный чек и какая доходность?"
         />
         <Input
-          label="projectId (опционально)"
+          label="projectId (опц.)"
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
-          placeholder="оставьте пустым для global-only"
+          placeholder="cmXXX..."
+        />
+        <Select
+          label="Feature"
+          value={feature}
+          onChange={(e) => setFeature(e.target.value as typeof feature)}
+          options={[
+            { value: 'sales_assistant_full', label: 'sales / full' },
+            { value: 'sales_assistant_fast', label: 'sales / fast' },
+          ]}
+        />
+        <Select
+          label="Workspace"
+          value={workspace}
+          onChange={(e) => setWorkspace(e.target.value as typeof workspace)}
+          options={[
+            { value: 'production', label: 'production' },
+            { value: 'demo', label: 'demo' },
+          ]}
         />
       </div>
-      <div className="flex items-center gap-2 mb-3">
-        <Button variant="ai" iconLeft={<Search size={14} />} loading={busy} onClick={run}>Найти фрагменты</Button>
+
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <Button variant="ai" iconLeft={<Search size={14} />} loading={busy} onClick={run}>
+          Запустить retrieval
+        </Button>
         {scanned !== null && (
           <span className="text-[11px] text-muted">просканировано фрагментов: {scanned}</span>
         )}
+        {results && (
+          <span className="text-[11px] text-muted">найдено sources: {results.length}</span>
+        )}
       </div>
+
       {error && (
         <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 mb-3 flex items-start gap-2 text-xs text-warning">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           {error}
         </div>
       )}
-      {hits && (
-        hits.length === 0 ? (
-          <EmptyState
-            title="Ничего не нашлось"
-            description="Запрос не пересекается с published+неархивированными источниками. Попробуйте другой текст или загрузите больше материала."
-          />
-        ) : (
-          <ul className="space-y-2">
-            {hits.map((h) => (
-              <li key={h.sourceId} className="rounded-md border border-hairline bg-canvas/40 px-3 py-2.5">
-                <div className="flex items-start justify-between gap-2 flex-wrap">
-                  <div className="text-sm font-medium text-primary">{h.title}</div>
-                  <div className="flex items-center gap-1.5">
-                    <StatusBadge tone="ai" dot>score {h.score.toFixed(3)}</StatusBadge>
-                  </div>
-                </div>
-                <div className="text-[11px] text-muted mt-0.5 flex flex-wrap gap-x-3">
-                  <span><Filter size={10} className="inline-block -mt-0.5" /> {SOURCE_TYPE_LABELS[h.sourceType] ?? h.sourceType}</span>
-                  <span>· {h.scope === 'global' ? 'Глобальная' : 'Проект'}</span>
-                  <span>· {h.visibility === 'internal' ? 'Внутренняя' : 'Безопасная'}</span>
-                </div>
-                {h.summary && <div className="text-[12px] text-secondary mt-1">{h.summary}</div>}
-                <details className="mt-1">
-                  <summary className="text-[11px] text-muted cursor-pointer flex items-center gap-1 hover:text-primary transition-colors">
-                    <ChevronRight size={11} /> snippet
-                  </summary>
-                  <pre className="mt-1 text-[11.5px] text-muted whitespace-pre-wrap font-sans leading-snug border-l border-line pl-2">
-                    {h.snippet.slice(0, 600)}{h.snippet.length > 600 ? '…' : ''}
-                  </pre>
-                </details>
-              </li>
-            ))}
-          </ul>
-        )
+
+      {results && results.length === 0 && (
+        <EmptyState
+          title="Ничего не нашлось"
+          description="Запрос не пересекается с published-не-candidate источниками для выбранного workspace. Возможные причины: пустая база, environment-filter, threshold cutoff."
+        />
+      )}
+
+      {results && results.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-hairline text-[10px] uppercase tracking-[0.08em] text-muted">
+                <th className="text-left py-2 px-2">#</th>
+                <th className="text-left py-2 px-2">title / type</th>
+                <th className="text-right py-2 px-2">final</th>
+                <th className="text-right py-2 px-2">bm25Norm</th>
+                <th className="text-right py-2 px-2">keyword</th>
+                <th className="text-right py-2 px-2">quality</th>
+                <th className="text-right py-2 px-2">project</th>
+                <th className="text-right py-2 px-2">type</th>
+                <th className="text-right py-2 px-2">fresh</th>
+                <th className="text-left py-2 px-2">reasons</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((h, idx) => {
+                const isTop = idx === 0;
+                const isRejected = h.finalScore < topScore / 3;
+                return (
+                  <tr
+                    key={`${h.sourceId}-${h.chunkId}`}
+                    className={`border-b border-hairline/50 ${isTop ? 'bg-success/8' : isRejected ? 'opacity-50' : ''}`}
+                  >
+                    <td className="py-2 px-2 align-top text-muted">{idx + 1}</td>
+                    <td className="py-2 px-2 align-top">
+                      <div className="text-primary font-medium leading-snug">{h.title}</div>
+                      <div className="text-[10px] text-muted mt-0.5">
+                        {SOURCE_TYPE_LABELS[h.sourceType] ?? h.sourceType} ·{' '}
+                        {h.scope === 'global' ? 'global' : 'project'} ·{' '}
+                        {h.visibility === 'internal' ? 'internal' : 'client_safe'}
+                      </div>
+                      {h.summary && <div className="text-[10px] text-secondary mt-0.5 line-clamp-1">{h.summary}</div>}
+                    </td>
+                    <td className={`py-2 px-2 align-top text-right font-num ${isTop ? 'text-success font-bold' : 'text-primary'}`}>
+                      {h.finalScore.toFixed(4)}
+                    </td>
+                    <td className="py-2 px-2 align-top text-right font-num text-secondary">
+                      {h.breakdown?.bm25Norm.toFixed(3) ?? '—'}
+                    </td>
+                    <td className="py-2 px-2 align-top text-right font-num text-secondary">
+                      {h.breakdown?.keywordScore.toFixed(3) ?? '—'}
+                    </td>
+                    <td className="py-2 px-2 align-top text-right font-num text-secondary">
+                      ×{h.breakdown?.qualityBoost.toFixed(2) ?? '1.00'}
+                    </td>
+                    <td className="py-2 px-2 align-top text-right font-num text-secondary">
+                      ×{h.breakdown?.projectBoost.toFixed(2) ?? '1.00'}
+                    </td>
+                    <td className="py-2 px-2 align-top text-right font-num text-secondary">
+                      ×{h.breakdown?.typeBoost.toFixed(2) ?? '1.00'}
+                    </td>
+                    <td className="py-2 px-2 align-top text-right font-num text-secondary">
+                      ×{h.breakdown?.freshnessBoost.toFixed(2) ?? '1.00'}
+                    </td>
+                    <td className="py-2 px-2 align-top">
+                      <div className="flex flex-wrap gap-1">
+                        {(h.breakdown?.reasons ?? []).map((r) => (
+                          <span key={r} className="text-[9px] px-1.5 py-0.5 rounded bg-surface border border-line text-muted">
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <div className="text-[10px] text-muted mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <span><span className="inline-block w-3 h-3 rounded bg-success/30 align-middle mr-1" /> top result</span>
+            <span><span className="inline-block w-3 h-3 rounded bg-surface align-middle mr-1 opacity-50" /> rejected (≤ top/3)</span>
+            <span>workspace: {workspace} · feature: {feature}</span>
+          </div>
+        </div>
       )}
     </Card>
+  );
+}
+
+// ─── Sprint 42 P0.2 — Metrics dashboard ───────────────────────────────────
+
+interface MetricsResponse {
+  topRetrieved: Array<{
+    id: string; title: string; sourceType: string; retrievalCount: number;
+    lastRetrievedAt: string | null; qualityScore: number | null; status: string; scope: string;
+  }>;
+  deadSources: Array<{
+    id: string; title: string; sourceType: string; createdAt: string;
+    qualityScore: number | null; scope: string;
+  }>;
+  funnel: {
+    candidates: number; published: number; drafts: number; disabled: number; archived: number;
+  };
+  environmentSplit: Record<string, number>;
+  retrieval7d: { total: number; empty: number; emptyRate: number };
+  params: { deadDays: number; limit: number };
+}
+
+function MetricsCard() {
+  const [data, setData] = useState<MetricsResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.get<MetricsResponse>('/api/knowledge/metrics?deadDays=30&limit=10');
+      setData(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'metrics_failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => { load(); }, []);
+
+  return (
+    <Card padded className="mt-6">
+      <CardHeader
+        title="Метрики базы знаний"
+        subtitle="Какие источники AI чаще всего использует, какие лежат мёртвым грузом. Обновляется по кнопке."
+        action={
+          <Button size="sm" variant="ghost" iconLeft={<RefreshCw size={12} />} loading={busy} onClick={load}>
+            Обновить
+          </Button>
+        }
+      />
+      {error && (
+        <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 mb-3 flex items-start gap-2 text-xs text-warning">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {error}
+        </div>
+      )}
+      {!data && !error && <div className="text-sm text-muted py-4 text-center">Загрузка…</div>}
+      {data && (
+        <div className="space-y-5">
+          {/* Funnel + retrieval 7d summary */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <MetricTile label="Кандидаты" value={data.funnel.candidates} tone="warning" />
+            <MetricTile label="Опубликовано" value={data.funnel.published} tone="success" />
+            <MetricTile label="Черновики" value={data.funnel.drafts} tone="neutral" />
+            <MetricTile label="Отключено" value={data.funnel.disabled} tone="danger" />
+            <MetricTile label="В архиве" value={data.funnel.archived} tone="neutral" />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-md border border-hairline bg-canvas/40 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">Retrieval за 7 дней</div>
+              <div className="flex items-baseline gap-3">
+                <div className="text-xl font-num font-semibold text-primary">{data.retrieval7d.total}</div>
+                <div className="text-[11px] text-muted">
+                  пустых: {data.retrieval7d.empty} ({Math.round(data.retrieval7d.emptyRate * 100)}%)
+                </div>
+              </div>
+              <div className="text-[10px] text-muted mt-1">
+                {data.retrieval7d.emptyRate > 0.3
+                  ? '⚠ Высокий процент пустых retrieval — KB не покрывает темы запросов'
+                  : 'KB хорошо покрывает запросы AI'}
+              </div>
+            </div>
+            <div className="rounded-md border border-hairline bg-canvas/40 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">Environment split</div>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {Object.entries(data.environmentSplit).map(([env, n]) => (
+                  <span key={env} className="text-[11px] px-2 py-0.5 rounded bg-surface border border-line text-secondary">
+                    {env}: <span className="text-primary font-num">{n}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Top retrieved */}
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-2">
+              Топ источников по retrieval ({data.topRetrieved.length})
+            </div>
+            {data.topRetrieved.length === 0 ? (
+              <div className="text-xs text-muted">AI ещё ничего не использовал. Зайдите в AI-ассистента и сделайте пару запросов.</div>
+            ) : (
+              <ul className="space-y-1">
+                {data.topRetrieved.map((s, idx) => (
+                  <li key={s.id} className="flex items-center gap-3 px-2 py-1.5 rounded bg-canvas/40 border border-hairline">
+                    <span className="text-[10px] text-muted font-num w-5 text-right">{idx + 1}.</span>
+                    <span className="flex-1 text-sm text-primary truncate">{s.title}</span>
+                    <span className="text-[10px] text-muted">{SOURCE_TYPE_LABELS[s.sourceType] ?? s.sourceType}</span>
+                    <StatusBadge tone="ai" dot>{s.retrievalCount}×</StatusBadge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Dead sources */}
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-2">
+              «Мёртвые» источники (старше {data.params.deadDays} дн., 0 retrieval'ов) — {data.deadSources.length}
+            </div>
+            {data.deadSources.length === 0 ? (
+              <div className="text-xs text-muted">Все опубликованные источники используются.</div>
+            ) : (
+              <ul className="space-y-1">
+                {data.deadSources.map((s) => (
+                  <li key={s.id} className="flex items-center gap-3 px-2 py-1.5 rounded bg-canvas/40 border border-danger/20">
+                    <span className="flex-1 text-sm text-primary truncate">{s.title}</span>
+                    <span className="text-[10px] text-muted">{SOURCE_TYPE_LABELS[s.sourceType] ?? s.sourceType}</span>
+                    <span className="text-[10px] text-muted">{new Date(s.createdAt).toLocaleDateString('ru-RU')}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function MetricTile({ label, value, tone }: { label: string; value: number; tone: 'success' | 'warning' | 'danger' | 'neutral' }) {
+  const toneClasses: Record<typeof tone, string> = {
+    success: 'border-success/30 bg-success/8',
+    warning: 'border-warning/30 bg-warning/8',
+    danger: 'border-danger/30 bg-danger/8',
+    neutral: 'border-hairline bg-canvas/40',
+  };
+  return (
+    <div className={`rounded-md border px-3 py-2 ${toneClasses[tone]}`}>
+      <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold">{label}</div>
+      <div className="text-xl font-num font-semibold text-primary">{value}</div>
+    </div>
   );
 }

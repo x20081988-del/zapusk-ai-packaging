@@ -355,7 +355,144 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 41: FTS5 + hybrid retrieval landed)_
+_(empty — Sprint 42: retrieval intelligence + KB workflow landed)_
+
+---
+
+## Sprint 42 — 2026-05-15 — Retrieval Intelligence + Sales Knowledge Workflow
+
+Theme: **KB перестала быть «складом кейсов» — стала управляемой системой обучения AI-продаж.** Команда теперь видит почему AI выбрал кейс (Compare Search UI), какие источники мертвы (Metrics dashboard), может добавлять материалы прямо из встреч (Add-to-KB CTA), отклонять кандидатов с reason'ом (RejectModal). Backend: structured retrieval events для метрик, prompt injection hardening.
+
+### P0.4 — KnowledgeRetrievalEvent
+
+**Schema** [migrations/20260515170000_sprint42_retrieval_event](server/prisma/migrations/20260515170000_sprint42_retrieval_event/migration.sql):
+- Поля: `id`, `actorId`, `projectId`, `feature`, `sourceIdsJson`, `chunkIdsJson`, `sourceCount`, `totalChars`, `conversationAnalysisId`, `salesSessionId`, `createdAt`.
+- 4 индекса: (projectId, createdAt), (feature, createdAt), (actorId, createdAt), createdAt.
+
+**SECURITY (повторно прописано в schema-комментарии)**: НИКОГДА не пишем transcript, prompt, raw chunk text, raw query — только metadata.
+
+**Backend write** в [routes/salesAssistant.ts](server/src/routes/salesAssistant.ts): новый `recordRetrievalObservability()` пишет одновременно audit event (Sprint 40, security forensics) и structured `KnowledgeRetrievalEvent` row (Sprint 42, analytics). Fire-and-forget, не блокирует AI ответ.
+
+### P0.2 — Metrics endpoint + dashboard
+
+**`GET /api/knowledge/metrics`** ([routes/knowledge.ts](server/src/routes/knowledge.ts)) — admin/manager.
+
+Возвращает:
+- **topRetrieved**: published+!candidate sorted by retrievalCount desc, lastRetrievedAt, qualityScore.
+- **deadSources**: published+!candidate с retrievalCount=0, старше N дней (default 30).
+- **funnel**: counts по candidates / published / drafts / disabled / archived.
+- **environmentSplit**: counts по production / demo / synthetic.
+- **retrieval7d**: total / empty / emptyRate за последние 7 дней (из KnowledgeRetrievalEvent).
+
+Query: `?deadDays=30&limit=10`.
+
+**Frontend** `MetricsCard` в [pages/AdminKnowledge.tsx](web/src/pages/AdminKnowledge.tsx): 5 funnel tiles, retrieval-7d-summary с эвристикой «KB покрывает запросы AI» (>30% empty = warning), env split, top-3-7 retrieved sources с retrievalCount-badge, мёртвые источники по приоритету old→new.
+
+### P0.1 — Compare Search UI (Hybrid Debug Panel)
+
+`CompareSearchCard` заменяет старый `SearchDebugCard` — использует `/api/knowledge/search-debug-v2` (Sprint 41) для breakdown:
+
+- Inputs: textarea (query), projectId, feature (full/fast), workspace (production/demo).
+- Output: **table** с колонками `# | title/type | final | bm25Norm | keyword | quality | project | type | fresh | reasons[]`.
+- **Top result** подсвечен `bg-success/8`.
+- **Rejected results** (`finalScore < topScore/3`) полупрозрачные.
+- Badge сверху: FTS5 status (`готов / недоступен`).
+- Reasons as chips: `fts_match`, `keyword_overlap`, `verified`, `quality_NN`, `project_source`, `type_NAME`, `fresh_<30d`.
+
+### P0.3 — Per-card «Добавить в базу знаний»
+
+**Backend** `POST /api/knowledge/capture` ([routes/knowledge.ts](server/src/routes/knowledge.ts)):
+- admin/manager only.
+- Принимает `conversationAnalysisId` ИЛИ `salesSessionId` + опц. sourceType/scope/visibility/tags/summary/title.
+- Auto-derives title и scope из row если UI не передал.
+- Всегда `isCandidate=true` — manual capture не bypass'ит review-loop.
+- Audit: `knowledge.source.capture` с originType='manual_capture_*'.
+- Idempotency: contentHash dedupe (Sprint 40) — повторное добавление вернёт `duplicate: true`, тот же sourceId.
+
+**Frontend** [new component AddToKnowledgeBaseButton](web/src/components/ui/AddToKnowledgeBaseButton.tsx):
+- Hidden для FOUNDER/INVESTOR — `canAdd = role === SUPER_ADMIN|ADMIN|MANAGER`.
+- При клике открывает modal с формой (title опц., sourceType, scope, visibility, tags, summary).
+- После создания показывает badge «в базе знаний» или «в базе знаний (дубль)».
+- Inline-баннер в модалке: «Запись будет добавлена как кандидат — AI не использует её, пока admin не подтвердит».
+
+Wired в:
+- [pages/ConversationAnalysis.tsx](web/src/pages/ConversationAnalysis.tsx) — рядом с «Открыть» в history list.
+- [pages/Meetings.tsx](web/src/pages/Meetings.tsx) — top-right corner каждой MeetingCard (defaultSourceType inferred from tone: `hot` → successful_sale, иначе deal_case).
+
+### P1 — Better Candidate UX (RejectReasonModal)
+
+Замена `window.prompt()`. Новый [`RejectReasonModal`](web/src/pages/AdminKnowledge.tsx#RejectReasonModal):
+- 4 preset-причины: «Низкое качество», «Дубликат», «Чувствительные данные», «Не подходит для шаблона продаж».
+- Кастомный textarea.
+- Кнопка адаптируется: «Отклонить» для candidates, «Отключить» для опубликованных.
+
+### P1 — Prompt Injection Hardening
+
+[knowledgeService.ts](server/src/services/knowledgeService.ts) — новая `sanitizeChunkForPrompt(text)` применяется в `formatKnowledgeForPrompt` перед отдачей в AI prompt. 11 паттернов EN+RU:
+- `ignore (all|the|any) (previous|prior|...) (instructions|prompts|...)`
+- `system|developer (prompt|message|...)` / `jailbreak`
+- `act as (a) ... (model|AI|assistant|persona)` / `override ...`
+- `you are now (a) ...`
+- RU: «игнорируй предыдущие инструкции», «забудь правила», «действуй как», «обойди ограничения», «раскрой системный промпт».
+
+Replacement: `[блок удалён из соображений безопасности]`. Защита НЕ слишком агрессивна — нормальная фраза «давайте проигнорируем риск» не триггерит (требует длинной фразы с метаязыком).
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-BF38sug3.js`.
+- **Local preview** (zapusk-api + zapusk-web):
+  - FTS5 init на старте сервера ✓
+  - Admin login → metrics 200, debug-v2 200, capture 404 на fake id (validation works)
+  - analyze-fast → retrieval7d.total: 0 → 1 (KnowledgeRetrievalEvent написан)
+  - AdminKnowledge renders все 6 секций: список + кандидат-banner + 5 funnel tiles + retrieval7d + env-split + topRetrieved + deadSources + compare search table
+  - Hybrid breakdown: `bm25Norm=0.54 keyword=0.074 finalScore=0.232 reasons=[fts_match, keyword_overlap]`
+  - 0 console errors
+
+### Какие проверки прошли
+
+| Проверка | Результат |
+|---|---|
+| Retrieval debug UI показывает breakdown | ✓ table с 9 columns + reasons chips + top/rejected подсветка |
+| Candidate source не участвует в retrieval | ✓ inherited from Sprint 40 (WHERE isCandidate=false) |
+| Published source участвует | ✓ topRetrieved показывает 3 sources × retrievalCount |
+| Dead source dashboard корректен | ✓ filter по retrievalCount=0 + createdAt < deadBefore |
+| Add-to-KB CTA создает candidate | ✓ /capture endpoint всегда isCandidate=true |
+| Duplicate source не создается второй раз | ✓ contentHash dedupe (Sprint 40) |
+| Retrieval event создается | ✓ KnowledgeRetrievalEvent.total bumped |
+| Transcript/prompt не попадают в audit/event | ✓ payload содержит только metadata (sourceIds, count, chars) |
+| Demo KB не утекает production user | ✓ environment-filter inherited from Sprint 41 |
+| No console errors | ✓ |
+
+### Файлы (8)
+
+- Server: `prisma/schema.prisma`, `prisma/migrations/20260515170000_sprint42_retrieval_event/migration.sql` (new), `routes/knowledge.ts`, `routes/salesAssistant.ts`, `services/knowledgeService.ts`.
+- Web: **new** `components/ui/AddToKnowledgeBaseButton.tsx`, `pages/AdminKnowledge.tsx`, `pages/ConversationAnalysis.tsx`, `pages/Meetings.tsx`.
+
+### Какие retrieval метрики появились
+
+- **Per-source**: retrievalCount, lastRetrievedAt (live из KnowledgeSource).
+- **Per-feature, per-actor, per-project**: indexed по KnowledgeRetrievalEvent table — готово для дашборда «retrieval по фаундерам» в Sprint 43.
+- **Aggregate**: retrieval7d (total, empty, emptyRate) — здоровье KB одной цифрой.
+- **Funnel**: candidates → drafts → published → disabled → archived (count в /metrics).
+
+### Security risks закрыты
+
+1. **Прямое влияние на AI через chunk-injection** — `sanitizeChunkForPrompt` стрипает 11 jailbreak-паттернов EN+RU перед инъекцией.
+2. **Transcript leak в analytics** — `KnowledgeRetrievalEvent` хранит только metadata (id'ы, счётчики), не payload текстов.
+3. **Founder/Investor видит KB management** — `AddToKnowledgeBaseButton` self-gates по role, hidden для не-admin/manager.
+
+### Что осталось на Sprint 43
+
+- **chunkIdsJson** в KnowledgeRetrievalEvent — сейчас всегда null; нужно прокинуть из retrieval body, чтобы было видно «AI взял именно chunk N из source X».
+- **outcome поля** (`acceptedByUser`, `leadToConversion`, `userFeedback`) на KnowledgeRetrievalEvent — для learning loop'а.
+- **Source timeline** в preview drawer — последние 5 audit events: capture, publish, retrieval-spikes.
+- **Bulk publish/disable** — multi-select в AdminKnowledge.
+- **Demo-assets review** (наследие Sprint 37).
+- **Manager assignment schema** (наследие Sprint 37).
+- **AbortSignal proxy** в OpenAI client (наследие Hotfix 2026-05-15).
+- **Embeddings** — когда KB перевалит ~5000 источников.
 
 ---
 

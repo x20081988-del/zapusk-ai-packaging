@@ -10,6 +10,7 @@ import { Button } from '../components/ui/Button';
 import { Input, Select, Textarea } from '../components/ui/Input';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
+import { AddToKnowledgeBaseButton } from '../components/ui/AddToKnowledgeBaseButton';
 import { ConversationScoreCard } from '../components/ui/ConversationScoreCard';
 import {
   analyzeConversationUpload, analyzeConversationText, listAnalyses,
@@ -255,11 +256,20 @@ export default function ConversationAnalysis() {
                         <p className="text-xs text-secondary mt-1 line-clamp-2">{card.summary}</p>
                       )}
                     </div>
-                    {card && (
-                      <Button size="sm" variant="ghost" iconLeft={<History size={12} />} onClick={() => setResult(card)}>
-                        Открыть
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {/* Sprint 42 P0.3 — admin/manager могут добавить разбор
+                          как kandidat в KB. Footprint минимальный — кнопка
+                          сама себя скрывает для FOUNDER (см. AddToKb...). */}
+                      <AddToKnowledgeBaseButton
+                        conversationAnalysisId={h.id}
+                        defaultSourceType="meeting_recording"
+                      />
+                      {card && (
+                        <Button size="sm" variant="ghost" iconLeft={<History size={12} />} onClick={() => setResult(card)}>
+                          Открыть
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </li>
               );

@@ -543,6 +543,204 @@ knowledgeRoutes.post(
   },
 );
 
+// Sprint 42 P0.2 — GET /api/knowledge/metrics. Дашборд retrieval-метрик для
+// admin/manager: top-retrieved, dead sources, candidate funnel, environment split.
+//
+// Query params:
+//   • deadDays — порог «мёртвости» в днях (default 30).
+//   • limit    — сколько строк в каждом блоке (default 10, max 50).
+knowledgeRoutes.get(
+  '/metrics',
+  requireRole(['ADMIN', 'MANAGER']),
+  async (req, res) => {
+    const deadDays = Math.max(1, Math.min(365, Number(req.query.deadDays ?? 30)));
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit ?? 10)));
+    const deadBefore = new Date(Date.now() - deadDays * 24 * 60 * 60 * 1000);
+
+    // Top retrieved — published, не candidate, sorted by retrievalCount desc.
+    const topRetrieved = await prisma.knowledgeSource.findMany({
+      where: { archivedAt: null, status: 'published', isCandidate: false, retrievalCount: { gt: 0 } },
+      orderBy: { retrievalCount: 'desc' },
+      take: limit,
+      select: {
+        id: true, title: true, sourceType: true, retrievalCount: true,
+        lastRetrievedAt: true, qualityScore: true, status: true, scope: true,
+      },
+    });
+
+    // Dead sources — published, не candidate, retrievalCount=0, старше deadDays.
+    // Эти источники в индексе, но AI их никогда не использует — кандидаты на disable.
+    const deadSources = await prisma.knowledgeSource.findMany({
+      where: {
+        archivedAt: null,
+        status: 'published',
+        isCandidate: false,
+        retrievalCount: 0,
+        createdAt: { lt: deadBefore },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      select: {
+        id: true, title: true, sourceType: true, createdAt: true,
+        qualityScore: true, scope: true,
+      },
+    });
+
+    // Candidate funnel — counts by status × isCandidate.
+    const funnel = await prisma.knowledgeSource.groupBy({
+      by: ['status', 'isCandidate'],
+      where: { archivedAt: null },
+      _count: { _all: true },
+    });
+    const archived = await prisma.knowledgeSource.count({ where: { archivedAt: { not: null } } });
+
+    // Environment split — counts.
+    const envSplit = await prisma.knowledgeSource.groupBy({
+      by: ['environment'],
+      where: { archivedAt: null },
+      _count: { _all: true },
+    });
+
+    // Retrieval events за последние 7 дней — суммарный счётчик.
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const recentRetrievals = await prisma.knowledgeRetrievalEvent.count({
+      where: { createdAt: { gt: sevenDaysAgo } },
+    });
+    const emptyRetrievals = await prisma.knowledgeRetrievalEvent.count({
+      where: { createdAt: { gt: sevenDaysAgo }, sourceCount: 0 },
+    });
+
+    res.json({
+      topRetrieved,
+      deadSources,
+      funnel: {
+        candidates: funnel
+          .filter((f) => f.isCandidate)
+          .reduce((sum, f) => sum + f._count._all, 0),
+        published: funnel
+          .filter((f) => !f.isCandidate && f.status === 'published')
+          .reduce((sum, f) => sum + f._count._all, 0),
+        drafts: funnel
+          .filter((f) => !f.isCandidate && f.status === 'draft')
+          .reduce((sum, f) => sum + f._count._all, 0),
+        disabled: funnel
+          .filter((f) => !f.isCandidate && f.status === 'disabled')
+          .reduce((sum, f) => sum + f._count._all, 0),
+        archived,
+      },
+      environmentSplit: Object.fromEntries(envSplit.map((e) => [e.environment, e._count._all])),
+      retrieval7d: {
+        total: recentRetrievals,
+        empty: emptyRetrievals,
+        emptyRate: recentRetrievals === 0 ? 0 : Number((emptyRetrievals / recentRetrievals).toFixed(3)),
+      },
+      params: { deadDays, limit },
+    });
+  },
+);
+
+// Sprint 42 P0.3 — unified capture endpoint. CTA «Добавить в базу знаний» из
+// карточки ConversationAnalysis или SalesSession. Backend Sprint 38 уже
+// поддерживал ingest по conversationAnalysisId / salesSessionId, но без
+// поля `isCandidate`. Этот endpoint ВСЕГДА создаёт candidate (manual user
+// action ≠ автоматически проверенный материал).
+//
+// Идемпотентность: contentHash dedupe вернёт existing source если этот же
+// transcript уже был ingest'нут. UI получит `{ duplicate: true, sourceId }`.
+const captureFromAnalysisOrSessionSchema = z.object({
+  conversationAnalysisId: z.string().optional(),
+  salesSessionId: z.string().optional(),
+  // UI-controlled поля. Не требуем title — auto-генерируется из метаданных
+  // самой analysis/session, чтобы менеджеру не приходилось его придумывать.
+  sourceType: z.enum(KNOWLEDGE_SOURCE_TYPES).optional(),
+  scope: z.enum(['global', 'project']).optional(),
+  visibility: z.enum(['internal', 'client_safe']).optional(),
+  tags: z.array(z.string()).max(20).optional(),
+  summary: z.string().max(2_000).optional().nullable(),
+  title: z.string().trim().min(1).max(300).optional(),
+}).refine((d) => d.conversationAnalysisId || d.salesSessionId, {
+  message: 'conversationAnalysisId or salesSessionId required',
+});
+
+knowledgeRoutes.post(
+  '/capture',
+  requireRole(['ADMIN', 'MANAGER']),
+  async (req, res) => {
+    const parsed = captureFromAnalysisOrSessionSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const d = parsed.data;
+
+    // Деривируем title / scope / projectId из source row если UI не передал.
+    let title = d.title;
+    let projectId: string | null = null;
+    let scope: KnowledgeScope = (d.scope as KnowledgeScope) ?? 'global';
+    let defaultSourceType: KnowledgeSourceType = (d.sourceType as KnowledgeSourceType) ?? 'meeting_recording';
+
+    if (d.conversationAnalysisId) {
+      const row = await prisma.conversationAnalysis.findUnique({
+        where: { id: d.conversationAnalysisId },
+        select: { projectId: true, investorName: true, spinStage: true, createdAt: true },
+      });
+      if (!row) return res.status(404).json({ error: 'analysis_not_found' });
+      projectId = row.projectId;
+      if (!title) {
+        title = `AI-разбор ${row.investorName ?? 'инвестора без имени'} · ${row.spinStage ?? '—'} · ${new Date(row.createdAt).toISOString().slice(0, 10)}`;
+      }
+      if (!d.sourceType) defaultSourceType = 'meeting_recording';
+    } else if (d.salesSessionId) {
+      const row = await prisma.salesSession.findUnique({
+        where: { id: d.salesSessionId },
+        select: { projectId: true, investorName: true, tone: true, createdAt: true },
+      });
+      if (!row) return res.status(404).json({ error: 'session_not_found' });
+      projectId = row.projectId;
+      if (!title) {
+        title = `Встреча ${row.investorName ?? 'инвестора без имени'} · ${row.tone ?? '—'} · ${new Date(row.createdAt).toISOString().slice(0, 10)}`;
+      }
+      if (!d.sourceType) defaultSourceType = row.tone === 'hot' ? 'successful_sale' : 'deal_case';
+    }
+
+    if (!d.scope) scope = projectId ? 'project' : 'global';
+
+    try {
+      const out = await ingestKnowledgeSource({
+        scope,
+        projectId: scope === 'project' ? projectId : null,
+        title: title ?? 'Без названия',
+        sourceType: defaultSourceType,
+        status: 'draft',
+        visibility: d.visibility ?? 'internal',
+        tags: d.tags,
+        summary: d.summary ?? null,
+        createdById: getUser(req).id,
+        // Sprint 42 — manual capture тоже candidate. Manager явно нажал
+        // «Добавить», но review-loop остаётся (см. Sprint 40 P0.3 spec).
+        isCandidate: true,
+        originType: d.conversationAnalysisId ? 'manual_capture_analysis' : 'manual_capture_session',
+        originId: d.conversationAnalysisId ?? d.salesSessionId ?? null,
+        conversationAnalysisId: d.conversationAnalysisId,
+        salesSessionId: d.salesSessionId,
+      });
+      await recordAudit(req, {
+        action: 'knowledge.source.capture',
+        targetType: 'KnowledgeSource',
+        targetId: out.sourceId,
+        payload: {
+          origin: d.conversationAnalysisId ? 'analysis' : 'session',
+          originId: d.conversationAnalysisId ?? d.salesSessionId,
+          chunkCount: out.chunkCount,
+          duplicate: out.duplicate,
+        },
+      });
+      res.status(201).json(out);
+    } catch (err) {
+      console.error('[knowledge:capture]', err);
+      const msg = err instanceof Error ? err.message : 'capture_failed';
+      res.status(400).json({ error: msg });
+    }
+  },
+);
+
 // DELETE /api/knowledge/:id — soft-delete. Chunks остаются, но source
 // помечается archivedAt и retrieval его уже не учтёт.
 knowledgeRoutes.delete(

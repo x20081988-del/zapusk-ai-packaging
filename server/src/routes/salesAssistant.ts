@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { authMiddleware } from '../auth.js';
+import { prisma } from '../db.js';
+import { authMiddleware, getUser } from '../auth.js';
 import { assertProjectOwnership, getActorRole, requireNotInvestor } from '../lib/ownership.js';
 import { recordAudit } from '../lib/audit.js';
 import {
@@ -8,14 +9,22 @@ import {
   analyzeSalesTurnFast,
   type KnowledgeRetrievalMeta,
 } from '../services/salesAssistantService.js';
+import type { Request } from 'express';
 
-// Sprint 40 P0.6 — single point для retrieval audit. Metadata-only (sourceIds,
-// count, chunksScanned, totalChars), без transcript / prompt / chunk text.
-function recordRetrievalAudit(req: Parameters<typeof recordAudit>[0], projectId: string | null, meta: KnowledgeRetrievalMeta) {
-  if (meta.count === 0) {
-    // Пишем даже при пустом результате — это диагностический сигнал
-    // «AI спросил, но KB не помогла».
-  }
+// Sprint 40 P0.6 + Sprint 42 P0.4 — retrieval observability.
+//   • AuditEvent (Sprint 40) — security forensics: «кто и когда дёрнул KB».
+//   • KnowledgeRetrievalEvent (Sprint 42) — структурированная metrics-таблица:
+//     отдельные индексы по projectId/feature/actor для дешёвых дашбордов
+//     («какие sources чаще используются», «процент пустых retrieval'ов»).
+//
+// Никогда не пишем transcript / prompt / chunk text / raw query — только
+// metadata (id'ы, счётчики). См. schema комментарий.
+function recordRetrievalObservability(
+  req: Request,
+  projectId: string | null,
+  meta: KnowledgeRetrievalMeta,
+) {
+  // Audit (legacy path, оставлен на месте).
   recordAudit(req, {
     action: 'knowledge.retrieval',
     targetType: 'KnowledgeRetrieval',
@@ -28,7 +37,23 @@ function recordRetrievalAudit(req: Parameters<typeof recordAudit>[0], projectId:
       chunksScanned: meta.chunksScanned,
       totalChars: meta.totalChars,
     },
-  }).catch(() => { /* recordAudit уже логирует ошибки */ });
+  }).catch(() => { /* recordAudit логирует ошибки внутри */ });
+
+  // Sprint 42 — structured event для метрик.
+  const actor = (req as { user?: { id?: string } }).user;
+  prisma.knowledgeRetrievalEvent.create({
+    data: {
+      actorId: actor?.id ?? null,
+      projectId,
+      feature: meta.feature,
+      sourceIdsJson: JSON.stringify(meta.sourceIds),
+      chunkIdsJson: null, // chunk-level пока не прокидываем; добавим в Sprint 43
+      sourceCount: meta.count,
+      totalChars: meta.totalChars,
+      conversationAnalysisId: null,
+      salesSessionId: null,
+    },
+  }).catch((err) => console.warn('[knowledge:retrieval-event] write failed', err));
 }
 
 export const salesAssistantRoutes = Router();
@@ -72,7 +97,7 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
       // Sprint 41 P0.8 — workspaceStatus для environment-фильтра.
       workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
     });
-    recordRetrievalAudit(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
+    recordRetrievalObservability(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
     res.json({ card });
   } catch (err) {
     console.error('[sales-assistant]', err);
@@ -105,7 +130,7 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
       // Sprint 38 — то же что и в /analyze.
       actorRole: getActorRole(req),
     });
-    recordRetrievalAudit(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
+    recordRetrievalObservability(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
     res.json({ fast });
   } catch (err) {
     console.error('[sales-assistant:fast]', err);
