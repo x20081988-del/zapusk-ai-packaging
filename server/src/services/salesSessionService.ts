@@ -251,13 +251,22 @@ export async function persistSession(
   });
 }
 
-export async function listSessions(filters: { projectId?: string; leadId?: string } = {}) {
-  // Sprint 30: исключаем soft-deleted сессии.
+export async function listSessions(filters: {
+  projectId?: string;
+  leadId?: string;
+  // Sprint 35 P0.3 — для founder фильтр по project.userId. Передаётся route'ом
+  // только если actor — НЕ admin-like. Для admin/manager оставляется undefined
+  // → видны все записи, включая orphan'ы без projectId.
+  ownerUserId?: string;
+} = {}) {
   return prisma.salesSession.findMany({
     where: {
       archivedAt: null,
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
       ...(filters.leadId ? { leadId: filters.leadId } : {}),
+      ...(filters.ownerUserId
+        ? { project: { is: { userId: filters.ownerUserId } } }
+        : {}),
     },
     orderBy: { createdAt: 'desc' },
     include: { project: { select: { id: true, name: true } } },

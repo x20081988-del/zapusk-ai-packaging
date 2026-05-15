@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { authMiddleware } from '../auth.js';
+import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
+import { assertProjectOwnership, getActorRole, isAdminLike } from '../lib/ownership.js';
 import {
   completeSession,
   persistSession,
@@ -32,6 +33,12 @@ salesSessionsRoutes.post('/complete', async (req, res) => {
   const parsed = completeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const input: CompleteSessionInput = parsed.data;
+
+  // Sprint 35 P0.3 — founder может создать сессию только если projectId — его
+  // проект. Admin/manager — допускаются без проверки, в т.ч. orphan'ы.
+  const ownership = await assertProjectOwnership(req, input.projectId ?? null);
+  if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+
   try {
     const summary = await completeSession(input);
     const session = await persistSession(input, summary);
@@ -45,13 +52,28 @@ salesSessionsRoutes.post('/complete', async (req, res) => {
 salesSessionsRoutes.get('/', async (req, res) => {
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
   const leadId = typeof req.query.leadId === 'string' ? req.query.leadId : undefined;
-  const sessions = await listSessions({ projectId, leadId });
+
+  // Sprint 35 P0.3 — founder видит только свои сессии. Admin/manager — все.
+  const role = getActorRole(req);
+  const ownerUserId = isAdminLike(role) ? undefined : getUser(req).id;
+
+  const sessions = await listSessions({ projectId, leadId, ownerUserId });
   res.json({ sessions });
 });
 
 salesSessionsRoutes.get('/:id', async (req, res) => {
   const session = await getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'not_found' });
+
+  // Sprint 35 P0.3 — founder может открыть запись только если она привязана к
+  // его проекту. Orphan'ы (projectId=null) — admin-only. Возвращаем 404 чтобы
+  // не палить факт существования чужой записи.
+  const role = getActorRole(req);
+  if (!isAdminLike(role)) {
+    const ownership = await assertProjectOwnership(req, session.projectId ?? null);
+    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+  }
+
   res.json({ session });
 });
 
@@ -60,6 +82,14 @@ salesSessionsRoutes.get('/:id', async (req, res) => {
 salesSessionsRoutes.delete('/:id', async (req, res) => {
   const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
   if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
+
+  // Sprint 35 P0.3 — founder может архивировать только свою запись.
+  const role = getActorRole(req);
+  if (!isAdminLike(role)) {
+    const ownership = await assertProjectOwnership(req, existing.projectId ?? null);
+    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+  }
+
   await prisma.salesSession.update({ where: { id: req.params.id }, data: { archivedAt: new Date() } });
   await recordAudit(req, {
     action: 'sales_session.archive',

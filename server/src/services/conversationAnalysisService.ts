@@ -265,12 +265,19 @@ export async function ingestConversation(input: IngestInput) {
   return { card, row };
 }
 
-export async function listAnalyses(filters: { projectId?: string } = {}) {
-  // Sprint 30: исключаем soft-deleted analyses.
+export async function listAnalyses(filters: {
+  projectId?: string;
+  // Sprint 35 P0.3 — founder фильтр по project.userId. Передаётся route'ом
+  // только если actor не admin-like.
+  ownerUserId?: string;
+} = {}) {
   return prisma.conversationAnalysis.findMany({
     where: {
       archivedAt: null,
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
+      ...(filters.ownerUserId
+        ? { project: { is: { userId: filters.ownerUserId } } }
+        : {}),
     },
     orderBy: { createdAt: 'desc' },
     take: 50,

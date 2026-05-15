@@ -315,12 +315,16 @@ function buildStrategy(project: ProjectForAILeads | null): InvestorStrategy {
   };
 }
 
-// Real-shaped demo leads from production AI-calls feed. Names/phones/recordings
-// come from the actual aicallscloud.ru exports the team uses, so the demo
-// looks the same as the live CRM (without exposing private notes).
+// Sprint 35 P1 — demo leads больше НЕ содержат реальных телефонов, имён и
+// ссылок на external CRM (aicallscloud.ru). Это синтетические данные с тем же
+// shape, что и реальный feed, но без PII: маскированные телефоны, синтетические
+// имена «Инвестор А/Б/В…», recording URL ведёт на локальный demo-asset.
+// На UI присутствует пометка «Это демонстрационные данные, не реальные лиды».
 function mockLeads(projectName: string): AILead[] {
   const now = Date.now();
-  const recording = (id: string) => `https://aicallscloud.ru/api/process-record-url?recordUrl=${id}.wav`;
+  // Локальная заглушка. Если в /public/demo-assets/recordings/{id}.wav файла
+  // нет — плеер просто не воспроизведёт, без 404 на внешний сервис.
+  const recording = (id: string) => `/demo-assets/recordings/${id}.wav`;
 
   type Seed = {
     id: string;
@@ -344,7 +348,7 @@ function mockLeads(projectName: string): AILead[] {
   const seeds: Seed[] = [
     {
       id: 'lead-victor', status: 'HOT', minutesAgo: 6,
-      name: 'Виктор Николаевич', phone: '+7 924 274-54-22',
+      name: 'Инвестор А.', phone: '+7 9** ***-**-22',
       check: 'от 1 млн ₽', horizon: 'в течение недели', profile: 'готов к взаимодействию',
       tags: ['HOT', 'READY FOR CALL'],
       summary: 'Предложение заинтересовало, готов перейти к звонку со специалистом.',
@@ -355,7 +359,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-tatiana', status: 'HOT', minutesAgo: 22,
-      name: 'Татьяна Андреевна', phone: '+7 914 147-13-41',
+      name: 'Инвестор Б.', phone: '+7 9** ***-**-41',
       check: 'от 1 млн ₽', horizon: '1-2 недели', profile: 'готова к взаимодействию',
       tags: ['HOT', 'QUALIFIED'],
       summary: 'Подтвердила интерес. Хочет понять условия и порядок выплат до созвона.',
@@ -366,7 +370,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-alexey', status: 'HOT', minutesAgo: 41,
-      name: 'Алексей', phone: '+7 908 217-23-64',
+      name: 'Инвестор В.', phone: '+7 9** ***-**-64',
       check: 'от 1 млн ₽', horizon: 'до 30 дней', profile: 'ждёт звонок специалиста',
       tags: ['HOT', 'AWAITING CALL'],
       summary: 'Интерес подтверждён, ожидает звонок специалиста для уточнения деталей сделки.',
@@ -377,7 +381,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-ilya', status: 'WAITING', minutesAgo: 73,
-      name: 'Илья', phone: '+7 913 210-65-03',
+      name: 'Инвестор Г.', phone: '+7 9** ***-**-03',
       check: '1-5 млн ₽', horizon: 'до 30 дней', profile: 'просит сначала материалы',
       tags: ['MATERIALS REQUESTED', 'WARM'],
       summary: 'Интерес подтверждён. Сначала хочет изучить материалы, дальше готов обсуждать.',
@@ -388,7 +392,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-unknown-30d', status: 'WAITING', minutesAgo: 110,
-      name: 'Без имени · уточняется', phone: '+7 950 789-41-92',
+      name: 'Без имени · уточняется', phone: '+7 9** ***-**-92',
       check: 'от 1 млн ₽', horizon: 'в течение 30 дней', profile: 'просит сначала материалы',
       tags: ['MATERIALS REQUESTED'],
       summary: 'Заинтересовался предложением, запросил пакет материалов перед обсуждением.',
@@ -399,7 +403,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-unknown-guarantees', status: 'WAITING', minutesAgo: 148,
-      name: 'Без имени · уточняется', phone: '+7 922 540-50-92',
+      name: 'Без имени · уточняется', phone: '+7 9** ***-**-90',
       check: 'от 1 млн ₽', horizon: 'в течение 30 дней', profile: 'интересуют гарантии',
       tags: ['GUARANTEES', 'AWAITING CALL'],
       summary: 'Заинтересовался предложением. Хочет обсудить гарантии со специалистом.',
@@ -411,7 +415,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-evgeny', status: 'NEW', minutesAgo: 195,
-      name: 'Евгений', phone: '+7 912 284-15-73',
+      name: 'Инвестор Д.', phone: '+7 9** ***-**-73',
       check: '1,5 млн ₽', horizon: 'в начале весны', profile: 'готов в ближайшее время',
       tags: ['QUALIFIED', 'WARM'],
       summary: 'Подтвердил чек 1,5 млн ₽. Готов к диалогу ближе к началу весны.',
@@ -422,7 +426,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-mikhail', status: 'WAITING', minutesAgo: 247,
-      name: 'Михаил', phone: '+7 919 631-53-11',
+      name: 'Инвестор Е.', phone: '+7 9** ***-**-11',
       check: '1 млн ₽', horizon: 'в начале весны', profile: 'вопросы по конфиденциальности',
       tags: ['CONFIDENTIALITY', 'WARM'],
       summary: 'Интерес подтверждён. Беспокоят вопросы конфиденциальности проекта.',
@@ -434,7 +438,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-german', status: 'HOT', minutesAgo: 312,
-      name: 'Герман', phone: '+7 916 777-31-72',
+      name: 'Инвестор Ж.', phone: '+7 9** ***-**-72',
       check: '1 млн ₽', horizon: '1-2 недели', profile: 'согласовал слот на 28.02 11:00',
       tags: ['HOT', 'SCHEDULED'],
       summary: 'Согласовал конкретный слот для созвона: 28.02, первая половина дня, 11:00.',
@@ -445,7 +449,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-kostroma', status: 'WAITING', minutesAgo: 388,
-      name: 'Без имени · уточняется', phone: '+7 901 197-65-31',
+      name: 'Без имени · уточняется', phone: '+7 9** ***-**-31',
       check: 'от 1 млн ₽', horizon: 'в течение 30 дней', profile: 'хочет обсудить договор',
       tags: ['CONTRACT REVIEW', 'TIMEZONE'],
       summary: 'Заинтересовался. Из Костромы, знает Главснаб. Хочет проговорить договор инвестирования.',
@@ -457,7 +461,7 @@ function mockLeads(projectName: string): AILead[] {
     },
     {
       id: 'lead-vitaly', status: 'NEW', minutesAgo: 456,
-      name: 'Виталий', phone: '+7 920 919-81-52',
+      name: 'Инвестор З.', phone: '+7 9** ***-**-52',
       check: '1 млн ₽', horizon: '1 месяц', profile: 'готов к взаимодействию',
       tags: ['QUALIFIED'],
       summary: 'Подтвердил интерес и базовый чек 1 млн ₽ с горизонтом одного месяца.',

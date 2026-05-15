@@ -45,6 +45,14 @@ services:
         value: production
       - key: DEMO_MODE
         value: "true"
+      # Sprint 35 P0.4 — production по умолчанию выключает demo-login и
+      # x-user-email header auth. Этот инстанс — публичная демо-витрина,
+      # явно включаем оба flow. На реальном tenant'е эти переменные не
+      # задаются (или ENABLE_*=false) и обе небезопасные точки входа закрыты.
+      - key: ENABLE_DEMO_LOGIN
+        value: "true"
+      - key: ENABLE_HEADER_AUTH
+        value: "true"
       # Sprint 29: SQLite и uploads теперь живут на persistent disk.
       # Раньше file:./prod.db и ./uploads оба указывали на ephemeral working
       # directory — каждый deploy создавал новый контейнер с пустой БД,

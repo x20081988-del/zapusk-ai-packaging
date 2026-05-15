@@ -2,8 +2,9 @@ import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import { prisma } from '../db.js';
-import { authMiddleware } from '../auth.js';
+import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
+import { assertProjectOwnership, getActorRole, isAdminLike } from '../lib/ownership.js';
 import {
   ingestConversation,
   listAnalyses,
@@ -32,6 +33,10 @@ conversationAnalysisRoutes.post('/', upload.single('file'), async (req, res) => 
     if (!file && !transcript && !audioUrl) {
       return res.status(400).json({ error: 'no_input', message: 'Прикрепите файл, вставьте transcript или укажите audioUrl.' });
     }
+
+    // Sprint 35 P0.3 — founder может анализировать только свои проекты.
+    const ownership = await assertProjectOwnership(req, projectId);
+    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
 
     const result = await ingestConversation({
       audioBuffer: file?.buffer ?? null,
@@ -64,6 +69,11 @@ const analyzeOnlySchema = z.object({
 conversationAnalysisRoutes.post('/text', async (req, res) => {
   const parsed = analyzeOnlySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  // Sprint 35 P0.3 — founder может анализировать только свои проекты.
+  const ownership = await assertProjectOwnership(req, parsed.data.projectId ?? null);
+  if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+
   try {
     const result = await ingestConversation({
       pastedTranscript: parsed.data.transcript,
@@ -79,13 +89,27 @@ conversationAnalysisRoutes.post('/text', async (req, res) => {
 
 conversationAnalysisRoutes.get('/', async (req, res) => {
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-  const rows = await listAnalyses({ projectId });
+
+  // Sprint 35 P0.3 — founder видит только свои анализы.
+  const role = getActorRole(req);
+  const ownerUserId = isAdminLike(role) ? undefined : getUser(req).id;
+
+  const rows = await listAnalyses({ projectId, ownerUserId });
   res.json({ analyses: rows });
 });
 
 conversationAnalysisRoutes.get('/:id', async (req, res) => {
   const row = await getAnalysis(req.params.id);
   if (!row) return res.status(404).json({ error: 'not_found' });
+
+  // Sprint 35 P0.3 — founder может открыть запись только если она привязана к
+  // его проекту. 404 чтобы не палить факт существования чужой записи.
+  const role = getActorRole(req);
+  if (!isAdminLike(role)) {
+    const ownership = await assertProjectOwnership(req, row.projectId ?? null);
+    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+  }
+
   res.json({ analysis: row });
 });
 
@@ -93,6 +117,14 @@ conversationAnalysisRoutes.get('/:id', async (req, res) => {
 conversationAnalysisRoutes.delete('/:id', async (req, res) => {
   const existing = await prisma.conversationAnalysis.findUnique({ where: { id: req.params.id } });
   if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
+
+  // Sprint 35 P0.3 — founder может архивировать только свою запись.
+  const role = getActorRole(req);
+  if (!isAdminLike(role)) {
+    const ownership = await assertProjectOwnership(req, existing.projectId ?? null);
+    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+  }
+
   await prisma.conversationAnalysis.update({
     where: { id: req.params.id },
     data: { archivedAt: new Date() },

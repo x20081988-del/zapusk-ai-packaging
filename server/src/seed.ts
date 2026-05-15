@@ -18,27 +18,25 @@ async function main() {
     log('safe mode enabled — only upsert/update operations allowed');
     log('no destructive operations on real user data (User, Project, InviteToken, files, briefs, prompts, jobs, sessions, reviews)');
   }
-  log('upserting prompt templates...');
+  // Sprint 35 P0.1 — seed теперь create-if-missing, не upsert. Ручные правки
+  // шаблонов в админке (body / name / active / provider / model / outputType)
+  // НЕ перетираются повторным запуском seed. Иначе суперадмин редактирует
+  // sales_gpt в админке, ловит deploy → правки откатываются к жёстко-заданным
+  // SEED_TEMPLATES — это и есть тот риск, который мы закрываем.
+  //
+  // Future flag SEED_UPDATE_TEMPLATES=true можно ввести позже, если понадобится
+  // force-обновление; в Sprint 35 он сознательно не реализован, чтобы не было
+  // легального пути «случайно перетереть продакшен».
+  log('seeding prompt templates (create-if-missing)...');
   for (const t of SEED_TEMPLATES) {
-    // Sprint 15: проставляем orchestration metadata из единого registry. Для
-    // существующих строк это backfill (update пути обновляет поля), для
-    // новых — заранее правильная провенанс.
+    const existing = await prisma.promptTemplate.findUnique({ where: { key: t.key } });
+    if (existing) {
+      console.log(`[seed] template exists, skip update: ${t.key}`);
+      continue;
+    }
     const orch = resolveOrchestration(t.key);
-    await prisma.promptTemplate.upsert({
-      where: { key: t.key },
-      update: {
-        name: t.name,
-        category: t.category,
-        description: t.description,
-        body: t.body,
-        ...(orch ? {
-          provider: orch.provider,
-          tool: orch.tool,
-          model: orch.model,
-          outputType: orch.outputType,
-        } : {}),
-      },
-      create: {
+    await prisma.promptTemplate.create({
+      data: {
         ...t,
         active: true,
         ...(orch ? {
@@ -49,6 +47,7 @@ async function main() {
         } : {}),
       },
     });
+    console.log(`[seed] template created: ${t.key}`);
   }
 
   console.log('[seed] upserting dev user...');
@@ -60,11 +59,20 @@ async function main() {
   });
 
   // Sprint 22: backfill — все существующие пользователи получают active, если
-  // ещё в дефолтном 'lead' (pre-Sprint-22). Новых создаём только через invite.
-  await prisma.user.updateMany({
-    where: { workspaceStatus: 'lead' },
-    data: { workspaceStatus: 'active' },
-  });
+  // ещё в дефолтном 'lead' (pre-Sprint-22). Sprint 35 P2: блокируем по
+  // умолчанию — массовый apgrade lead→active в production может случайно
+  // открыть доступ кому-то, кто намеренно остался в lead-стадии (например,
+  // future-lead из CRM-импорта). Включается явным SEED_PROMOTE_LEADS=true
+  // в случае, если backfill действительно нужен.
+  if (process.env.SEED_PROMOTE_LEADS === 'true') {
+    const updated = await prisma.user.updateMany({
+      where: { workspaceStatus: 'lead' },
+      data: { workspaceStatus: 'active' },
+    });
+    if (updated.count > 0) {
+      console.log(`[seed] SEED_PROMOTE_LEADS=true — promoted ${updated.count} lead users to active`);
+    }
+  }
 
   // Sprint 25 — bootstrap accounts. Создаём 5 типовых пользователей платформы
   // (владелец, админ, менеджер, демо-фаундер, демо-инвестор). Пароли берём
@@ -367,6 +375,18 @@ async function upsertBootstrap(opts: {
   envVarName: string;
 }): Promise<void> {
   const email = opts.email.toLowerCase();
+  // Sprint 35 P2 — явные логи, когда seed МЕНЯЕТ существующего пользователя
+  // (role / workspaceStatus / name). Чтобы из деплой-логов было видно, что
+  // bootstrap не просто прошёл, но и реально что-то поменял в БД.
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    const diffs: string[] = [];
+    if (existing.role !== opts.role) diffs.push(`role: ${existing.role} → ${opts.role}`);
+    if ((existing.workspaceStatus ?? 'active') !== opts.workspaceStatus) diffs.push(`workspaceStatus: ${existing.workspaceStatus ?? 'active'} → ${opts.workspaceStatus}`);
+    if ((existing.name ?? '') !== opts.name) diffs.push(`name: "${existing.name ?? ''}" → "${opts.name}"`);
+    if (diffs.length > 0) console.log(`[seed] bootstrap ${email} — applying: ${diffs.join('; ')}`);
+  }
+
   if (!opts.password) {
     console.warn(`[seed] ${opts.envVarName} not set — bootstrap account ${email} created without password (login disabled).`);
     await prisma.user.upsert({

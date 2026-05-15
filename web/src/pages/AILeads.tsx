@@ -79,7 +79,7 @@ interface AILead {
 // • empty — active кабинет, лиды не запущены. Скрываем «AI работает сейчас»,
 //   KPI grid и LiveFeed. Показываем onboarding + briefing analyzer.
 // • live  — реальные лиды в БД (когда сделаем persistence)
-// • demo  — Sprint 24 demo workspace или ?demo=1 на /demo/ai-leads
+// • demo  — только demo workspace (Sprint 35 P0.2: ?demo=1 больше не доверяем)
 type AILeadsMode = 'empty' | 'live' | 'demo';
 
 interface AILeadsDashboard {
@@ -260,6 +260,13 @@ export default function AILeads() {
                   <EmptyLeadsState dashboard={dashboard} briefHref={briefHref} briefCtaLabel={briefCtaLabel} />
                 ) : (
                   <>
+                    {/* Sprint 35 P1 — явная пометка, что это не реальные лиды
+                        клиента, телефоны замаскированы, записи синтетические. */}
+                    {dashboard.mode === 'demo' && (
+                      <div className="rounded-md border border-ai/30 bg-ai/8 px-3 py-2 text-xs text-secondary">
+                        Это демонстрационные данные, не реальные лиды клиента. Телефоны и записи разговоров — синтетические.
+                      </div>
+                    )}
                     <KpiGrid dashboard={dashboard} />
                     <LiveFeed leads={dashboard.leads} locked={!dashboard.readiness.criticalReady} />
                   </>

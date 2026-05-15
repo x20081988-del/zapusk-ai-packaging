@@ -108,7 +108,9 @@ export default function DemoCabinet() {
                 </div>
               </div>
               <div className="mt-4 flex justify-end">
-                <Link to="/ai-leads">
+                {/* Sprint 35 P0.2 — это демо-страница, CTA ведёт на демо-витрину
+                    AI-лидов, не в боевой кабинет. */}
+                <Link to="/demo/ai-leads">
                   <Button variant="ai" iconRight={<ChevronRight size={14} />}>Открыть AI-лиды</Button>
                 </Link>
               </div>

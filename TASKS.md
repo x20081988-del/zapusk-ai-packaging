@@ -355,7 +355,84 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 34В: транскрипция и AI-подсказка разделены + двухэтапная генерация)_
+_(empty — Sprint 35: data safety, demo isolation, ownership checks landed)_
+
+---
+
+## Sprint 35 — 2026-05-15 — Data Safety + Demo Isolation + Ownership + Prod Auth Hardening
+
+Theme: **закрыли P0-риски смешения demo/боевого режима, доступа к чужим записям, перетирания шаблонов seed-ом и небезопасных production defaults для demo-login / header-auth.** Плюс P1 — замаскировали PII в demo-лидах. P2 — gate'ы вокруг опасных seed-операций.
+
+### P0.1 — Seed safety для шаблонов
+
+- **`server/src/seed.ts`** — перевели `promptTemplate.upsert` на **create-if-missing**. Если шаблон существует — `[seed] template exists, skip update: <key>` и пропускаем. Ручные правки в админке (body / name / active / provider / model / outputType) больше НЕ перетираются повторным деплоем.
+- Future flag `SEED_UPDATE_TEMPLATES=true` сознательно не реализован — нет легального пути перетереть прод одной env-переменной.
+
+### P0.2 — Demo isolation для AI-лидов
+
+- **`server/src/routes/aiLeads.ts`** — убрали доверие к `?demo=1`. Mock-лиды теперь только при `user.workspaceStatus === 'demo'`. Active пользователь больше не может одним GET'ом включить себе «43 звонка сегодня» и принять их за реальный сигнал.
+- **`web/src/pages/DemoCabinet.tsx`** — CTA «Открыть AI-лиды» ведёт на `/demo/ai-leads` (frontend-only showcase), не в боевой `/ai-leads`.
+- **`web/src/pages/AILeads.tsx`** — комментарий-эпиграф к `AILeadsMode` обновлён.
+
+### P0.3 — Ownership checks для встреч и анализов
+
+- **Новый `server/src/lib/ownership.ts`** — единый guard `assertProjectOwnership(req, projectId)` + helpers `isAdminLike(role)`, `getActorRole(req)`. Правила:
+  - SUPER_ADMIN / ADMIN / MANAGER — admin-like read/write на всё.
+  - FOUNDER — только записи своих проектов (`project.userId = user.id`).
+  - Orphan-записи (projectId=null) — admin-only.
+  - 404 (не 403) на чужих записях, чтобы не палить факт существования.
+- **`server/src/routes/salesSessions.ts`** + **`services/salesSessionService.ts`** — POST `/complete`, GET `/`, GET `/:id`, DELETE `/:id` все проверяют владение. `listSessions` принимает `ownerUserId` и фильтрует через `project.userId`.
+- **`server/src/routes/conversationAnalysis.ts`** + **`services/conversationAnalysisService.ts`** — то же самое для POST `/`, POST `/text`, GET `/`, GET `/:id`, DELETE `/:id`.
+
+### P0.4 — Production auth hardening
+
+- **`server/src/env.ts`** — два новых производных флага: `DEMO_LOGIN_ALLOWED`, `HEADER_AUTH_ALLOWED`. Логика: `ENABLE_*=true` → on, `DISABLE_*=true` → off, иначе `!IS_PROD`. В production по умолчанию ОБА выключены.
+- **`server/src/auth.ts`** — header-auth fallback теперь смотрит на `env.HEADER_AUTH_ALLOWED`, не на `process.env.DISABLE_HEADER_AUTH`. В prod без явного opt-in — 401.
+- **`server/src/routes/auth.ts`** — `/api/auth/demo` смотрит на `env.DEMO_LOGIN_ALLOWED`. В prod без opt-in — 403 demo_login_disabled.
+- **`render.yaml`** — текущий Render-инстанс — публичная демо-витрина, поэтому добавили `ENABLE_DEMO_LOGIN=true` + `ENABLE_HEADER_AUTH=true`. Реальные customer tenants эти env-vars не задают → оба flow закрыты по умолчанию.
+
+### P1 — Demo data sensitivity
+
+- **`server/src/services/aiLeadsService.ts`** — 11 жёстко-заданных моков mockLeads():
+  - Телефоны замаскированы до `+7 9** ***-**-XX` (только последние 2 цифры различимы).
+  - Реальные имена («Виктор Николаевич», «Татьяна Андреевна», «Алексей», «Илья», «Евгений», «Михаил», «Герман», «Виталий») заменены на синтетические «Инвестор А.», «Инвестор Б.», …, «Инвестор З.». «Без имени · уточняется» сохранили.
+  - URL записей заменены с `https://aicallscloud.ru/api/process-record-url?recordUrl=<id>.wav` на локальный `/demo-assets/recordings/<id>.wav` — никаких внешних CRM-ссылок в бандле.
+- **`web/src/pages/AILeads.tsx`** — баннер «Это демонстрационные данные, не реальные лиды клиента. Телефоны и записи разговоров — синтетические» показывается над KpiGrid при `mode === 'demo'`.
+
+### P2 — Seed cleanup (минимально)
+
+- **`server/src/seed.ts`** — `user.updateMany({ lead → active })` теперь под флагом `SEED_PROMOTE_LEADS=true`. Раньше каждый deploy слепо upgrade'ил всех lead-пользователей; теперь — только при явном opt-in, с логом `[seed] promoted N lead users to active`.
+- **`upsertBootstrap()`** — перед upsert'ом сравнивает существующего пользователя с целевыми значениями; если меняем role / workspaceStatus / name — пишет `[seed] bootstrap <email> — applying: role: X → Y; ...`. Видно из деплой-логов, что bootstrap не просто прошёл, но реально что-то поменял.
+- Demo project «Венский ветер» уже защищён Sprint 29 (обновляется только если `isDemo=true` или owner = dev-user). Дополнительных изменений не требовалось.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-Den47Xoz.js`, server tsc — clean.
+- В коде нет `+7 9XX XXX-XX-XX` (real phones), нет `aicallscloud.ru`, нет `?demo=1` доверия на сервере.
+
+### Какие риски закрыты
+
+1. **Перетирание ручных правок шаблонов** при deploy — закрыто create-if-missing.
+2. **Demo-инъекция через query** (`?demo=1`) для активных user'ов — закрыто.
+3. **Чтение/архивация чужих sales sessions и conversation analyses** founder'ом — закрыто ownership-guard'ами.
+4. **/api/auth/demo и x-user-email auth открыты на production по умолчанию** — закрыто prod-safe defaults.
+5. **PII в demo-данных** (реальные телефоны + ссылки на CRM) — закрыто маскированием.
+6. **Случайный lead→active backfill** при каждом deploy — закрыто SEED_PROMOTE_LEADS gate.
+
+### Файлы
+
+- Server: `seed.ts`, `env.ts`, `auth.ts`, `routes/auth.ts`, `routes/aiLeads.ts`, `routes/salesSessions.ts`, `routes/conversationAnalysis.ts`, `services/salesSessionService.ts`, `services/conversationAnalysisService.ts`, `services/aiLeadsService.ts`, **new** `lib/ownership.ts`.
+- Web: `pages/AILeads.tsx`, `pages/DemoCabinet.tsx`.
+- Infra: `render.yaml` (опт-ин ENABLE_DEMO_LOGIN + ENABLE_HEADER_AUTH для текущего демо-инстанса).
+
+### Что осталось на Sprint 36
+
+- Полноценный `createdByUserId` на SalesSession / ConversationAnalysis — текущий ownership работает через project.userId, но orphan-записи без projectId всё ещё admin-only. После миграции `createdByUserId` founder сможет владеть orphan'ами.
+- Audit-log для read-access (сейчас audit пишется только на mutations).
+- Frontend feedback по 403/404 на чужие записи — сейчас просто пустой list, можно показать toast.
+- Включение DEMO_MODE=false на текущем Render-инстансе (это уже user-side env-flip, см. Sprint 34Б.2).
 
 ---
 

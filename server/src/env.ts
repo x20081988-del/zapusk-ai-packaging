@@ -5,9 +5,36 @@ function truthy(v: string | undefined): boolean {
   return /^(1|true|yes|on)$/i.test(v.trim());
 }
 
+const NODE_ENV = process.env.NODE_ENV ?? 'development';
+const IS_PROD = NODE_ENV === 'production';
+
+// Sprint 35 P0.4 — production safety defaults.
+//
+// Раньше /api/auth/demo и x-user-email header auth включались всегда, и
+// отключались только явным DISABLE_*=true. Это значит: deploy в production
+// без правильных env-флагов оставлял quick-login роли и upsert-by-email
+// открытыми. Любой кто узнал URL мог получить FOUNDER/ADMIN-токен одним
+// POST'ом или подменить identity через header.
+//
+// Новая логика: в production оба пути ВЫКЛЮЧЕНЫ по умолчанию. Включить
+// можно только явным ENABLE_*=true (для demo-инстанса). DISABLE_*=true
+// сохраняется как back-compat для существующих deploy'ев.
+function resolveDemoLoginAllowed(): boolean {
+  if (process.env.ENABLE_DEMO_LOGIN === 'true') return true;
+  if (process.env.DISABLE_DEMO_LOGIN === 'true') return false;
+  return !IS_PROD; // dev/test → on, prod → off
+}
+function resolveHeaderAuthAllowed(): boolean {
+  if (process.env.ENABLE_HEADER_AUTH === 'true') return true;
+  if (process.env.DISABLE_HEADER_AUTH === 'true') return false;
+  return !IS_PROD;
+}
+
 export const env = {
   PORT: Number(process.env.PORT ?? 4000),
-  NODE_ENV: process.env.NODE_ENV ?? 'development',
+  NODE_ENV,
+  DEMO_LOGIN_ALLOWED: resolveDemoLoginAllowed(),
+  HEADER_AUTH_ALLOWED: resolveHeaderAuthAllowed(),
   // In single-service production deploy (Render / Railway / Fly) Express
   // serves both the API and the compiled SPA. CORS_ORIGIN is then irrelevant
   // because requests are same-origin. Leave it for split deploys.

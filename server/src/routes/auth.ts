@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, normalizeRole } from '../auth.js';
+import { env } from '../env.js';
 import { hashPassword, signToken, verifyPassword } from '../authCrypto.js';
 
 export const authRoutes = Router();
@@ -157,7 +158,10 @@ const demoSchema = z.object({
 });
 
 authRoutes.post('/demo', async (req, res) => {
-  if (process.env.DISABLE_DEMO_LOGIN === 'true') {
+  // Sprint 35 P0.4 — в production /api/auth/demo выключен по умолчанию.
+  // Включить можно явным ENABLE_DEMO_LOGIN=true для demo-инстанса. Не
+  // зависим больше от обратного DISABLE_*=true: дефолт в проде = safe.
+  if (!env.DEMO_LOGIN_ALLOWED) {
     return res.status(403).json({ error: 'demo_login_disabled' });
   }
   const parsed = demoSchema.safeParse(req.body);

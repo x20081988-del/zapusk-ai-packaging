@@ -67,18 +67,14 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return res.status(401).json({ error: 'invalid_token' });
   }
 
-  // 2. Header back-compat: x-user-email. Включён по умолчанию на demo-URL'ах,
-  // отключается на реальном production tenant через DISABLE_HEADER_AUTH=true.
-  // Это компромисс: новые signup/login клиенты используют Bearer; старые
-  // demo-flows и интеграционные скрипты продолжают работать через header
-  // до момента отказа от них.
-  const headerAuthDisabled = process.env.DISABLE_HEADER_AUTH === 'true';
-
+  // 2. Header back-compat: x-user-email. Sprint 35 P0.4 — в production
+  // отключён по умолчанию; в dev/test остаётся включён. Включается явно через
+  // ENABLE_HEADER_AUTH=true (для demo-инстанса). См. env.ts.
   const headerEmail = (req.header('x-user-email') ?? '').toLowerCase().trim();
   if (!headerEmail) {
     return res.status(401).json({ error: 'unauthenticated' });
   }
-  if (headerAuthDisabled) {
+  if (!env.HEADER_AUTH_ALLOWED) {
     return res.status(401).json({ error: 'unauthenticated', hint: 'header_auth_disabled' });
   }
 

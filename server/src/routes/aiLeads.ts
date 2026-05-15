@@ -26,11 +26,11 @@ aiLeadsRoutes.get('/', async (req, res) => {
 
   if (projectId && !project) return res.status(404).json({ error: 'project_not_found' });
 
-  // Sprint 27 — mock-лиды показываем ТОЛЬКО для demo workspace или явного
-  // showcase-запроса (?demo=1 на странице /demo/ai-leads). Активный кабинет
-  // получает empty state, без фиктивных «43 звонка сегодня».
-  const demoQueryFlag = req.query.demo === '1' || req.query.demo === 'true';
-  const demoMode = demoQueryFlag || user.workspaceStatus === 'demo';
+  // Sprint 35 P0.2 — demo data разрешено ТОЛЬКО для demo workspace. Query
+  // ?demo=1 больше не доверяем: иначе active user мог одним GET'ом включить
+  // себе моковые лиды и принять их за реальные сигналы.
+  // /demo/ai-leads — frontend-only showcase, серверу про него знать не нужно.
+  const demoMode = user.workspaceStatus === 'demo';
 
   const dashboard = await leadProvider.getDashboard(
     project ? toAILeadProject(project) : null,
