@@ -355,7 +355,88 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 35: data safety, demo isolation, ownership checks landed)_
+_(empty — Sprint 36: P0 security fixes from Codex audit landed)_
+
+---
+
+## Sprint 36 — 2026-05-15 — P0 Security Fixes after Codex audit
+
+Theme: **закрыли четыре P0-риска, найденные Codex'ом после Sprint 35.** Плюс маленькая русификация добитых английских строк.
+
+### P0.1 — публичная раздача /uploads закрыта
+
+- **`server/src/index.ts`** — убрали `app.use('/uploads', express.static(...))`. Раньше любой человек с URL мог скачать презентации, финмодели, записи разговоров и брифы клиентов.
+- Из SPA fallback убрали exclude для `/uploads` — он больше не нужен.
+- **`server/src/routes/files.ts`** — новый `GET /api/files/:projectId/:fileId/download` с проверкой:
+  - SUPER_ADMIN / ADMIN / MANAGER скачивают любой файл (helper `actorCanAccessProject`).
+  - FOUNDER — только файлы своих проектов.
+  - link-файлы (внешние URL'ы без диска) — 404 file_not_downloadable.
+  - Path traversal невозможен: финальный путь после `storage.resolvePath` явно проверяется на принадлежность storage-root (защита глубже Prisma row).
+  - Missing-on-disk → 404 без отдачи stub'а.
+
+### P0.2 — ownership check на /api/sales-assistant/{analyze,analyze-fast}
+
+- **`server/src/routes/salesAssistant.ts`** — оба endpoint'а теперь до вызова сервиса делают `assertProjectOwnership(req, projectId)` (helper из Sprint 35 `lib/ownership.ts`).
+- Правила: admin-like могут использовать любой projectId; founder — только свой; без projectId → анализ без project-context (разрешено).
+- Утечка контента закрыта: раньше user A мог подставить projectId user B и получить AI-подсказку, построенную на чужом brief'е и context'е (industry / финмодель / objections, которые AI поднимает из БД).
+
+### P0.3 — render.yaml safe-by-default + .env.example документация
+
+- **`render.yaml`** — blueprint defaults для production теперь safe:
+  - `DEMO_MODE=false`
+  - `ENABLE_DEMO_LOGIN=false`
+  - `ENABLE_HEADER_AUTH=false`
+- Комментарий в yaml явно объясняет: если этот деплой — публичная демо-витрина, оверрайдить три флага надо в Render dashboard (dashboard override побеждает yaml). Yaml остаётся safe-by-default — любой новый blueprint-spawn не подхватит опасное поведение.
+- **`.env.example`** — отдельный блок описывает все три флага: что они делают, какие production / dev значения, и что demo-инстанс оверрайдит в dashboard.
+
+### P0.4 — Demo* UI files PII audit
+
+- `web/src/pages/DemoAILeads.tsx` — никаких реальных телефонов / aicallscloud / recordingId. Уже синтетический showcase. Заменили `value="Private investor"` → `Частный инвестор` (русификация заодно).
+- `web/src/pages/DemoConversationAnalysis.tsx` — чисто, только синтетический `Алексей К.` (паттерн «имя + инициал», как в спеке).
+- `web/src/lib/demoMaterials.ts` — чисто, только URL'ы demo-assets для презентаций / финмоделей.
+- Server `aiLeadsService.ts` уже был очищен в Sprint 35 (маскированные телефоны + local recording URLs).
+- `PersonalManagerCard.tsx` с реальным телефоном `+7 999 120-45-80` — **специально не трогали**: это production-facing customer support контакт, не указан в P0.4 scope. Может быть реальным сотрудником.
+
+### P1 — Финальная русификация UI-строк
+
+Заменили все 10 английских строк, найденных в UI:
+
+- `AIPackagingHistory.tsx`: `Mock fallback` → `Резервный режим`; `AI generated materials` → `Материалы, подготовленные AI`; `Packaging Pipeline` → `процесс упаковки`.
+- `PackagingTasks.tsx`: `Internal prompt` → `Внутренний prompt`; `Preview URL` → `Ссылка для просмотра`; `Project URL` → `Ссылка на проект`; `AI generated materials` → `карточке материалов`.
+- `Templates.tsx`: `Packaging Pipeline` → `процесс упаковки`.
+- `DemoAILeads.tsx`: `Private investor` → `Частный инвестор`.
+- `AILeads.tsx`: `Investor strategy` → `Стратегия работы с инвестором`; `Key triggers` → `Ключевые триггеры`; `Ready for AI Leads` → `Готово к запуску AI-лидов`; `In Progress` → `В работе`; `Draft` → `Черновик`.
+- `SalesAssistant.tsx`: `AI live` → `AI слушает встречу`; `fallback prompt — проверьте шаблон` → `резервный prompt — проверьте шаблон`.
+- `AdminDashboard.tsx`: `Workspace status` → `Статус кабинета`.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-BUaCz2fX.js`.
+- grep по `aicallscloud` / real phones в server+web — чисто (кроме PersonalManagerCard, см. above).
+- grep по English strings из спеки — все закрыты.
+
+### Какие риски закрыты
+
+1. **Публичная утечка файлов через /uploads/** — закрыто.
+2. **Утечка AI-подсказок через чужой projectId в sales-assistant** — закрыто.
+3. **Опасные production defaults для DEMO_MODE / demo-login / header-auth в blueprint** — закрыто.
+4. **PII в Demo* UI** — проверено, чисто.
+
+### Файлы (15)
+
+- Server: `index.ts`, `routes/files.ts`, `routes/salesAssistant.ts`.
+- Web: `pages/AILeads.tsx`, `pages/AdminDashboard.tsx`, `pages/DemoAILeads.tsx`, `pages/SalesAssistant.tsx`, `pages/Templates.tsx`, `components/manager/PackagingTasks.tsx`, `components/ui/AIPackagingHistory.tsx`.
+- Infra/docs: `render.yaml`, `.env.example`.
+
+### Что осталось на Sprint 37
+
+- **DEMO_MODE flip в текущем Render dashboard** — yaml уже false, но возможно у инстанса остался dashboard-override = true. Пользователь должен зайти в Render → Environment → удалить или поставить `DEMO_MODE=false` если override остался.
+- Frontend пока не вызывает новый `GET /api/files/:projectId/:fileId/download` — UI до этого ничего не качал через `/uploads/`. Если в будущем понадобится скачать загруженный файл — фронт должен звать новый endpoint вместо построения URL.
+- `PersonalManagerCard.tsx` — решить: оставить как реальный customer support контакт или замаскировать. Требует подтверждения пользователя.
+- Sentinel: ownership-check для `/api/conversation-analysis/text` (Sprint 35 уже добавил, но стоит ре-аудитить).
+- Аudit-log на read-access (сейчас audit пишется только на mutations).
 
 ---
 

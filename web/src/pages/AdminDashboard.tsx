@@ -554,7 +554,7 @@ function InvitesPanel({ compact }: { compact?: boolean }) {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Select label="Роль" value={role} onChange={(e) => setRole(e.target.value)} options={ROLE_OPTIONS} />
-            <Select label="Workspace status" value={workspaceStatus} onChange={(e) => setWorkspaceStatus(e.target.value)} options={WORKSPACE_OPTIONS} />
+            <Select label="Статус кабинета" value={workspaceStatus} onChange={(e) => setWorkspaceStatus(e.target.value)} options={WORKSPACE_OPTIONS} />
           </div>
           <Input
             label="Комментарий"

@@ -50,7 +50,7 @@ const STATUS_LABEL_INTERNAL: Record<PackagingJob['status'], string> = {
   succeeded: 'Готово',
   running: 'Идёт сборка',
   queued: 'В очереди',
-  mock: 'Mock fallback',
+  mock: 'Резервный режим',
   failed: 'Ошибка',
   awaiting_manager: 'На ручной обработке',
 };
@@ -80,9 +80,9 @@ export function AIPackagingHistory({ projectId, onRegenerate, onOpenHistory }: P
 
   // Sprint 18: client UI — мягкий заголовок без «pipeline». Admin/manager
   // продолжают видеть технический термин.
-  const title = showVendors ? 'AI generated materials' : 'Материалы проекта от ZAPUSK AI';
+  const title = showVendors ? 'Материалы, подготовленные AI' : 'Материалы проекта от ZAPUSK AI';
   const subtitle = showVendors
-    ? 'История запусков Packaging Pipeline: какой AI собрал какой артефакт'
+    ? 'История запусков процесса упаковки: какой AI собрал какой артефакт'
     : 'История подготовки материалов: что уже готово, что готовится сейчас';
 
   // Sprint 18: для client рисуем сверху небольшую плашку «Лендинг готовится

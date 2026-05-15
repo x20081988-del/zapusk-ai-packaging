@@ -166,7 +166,7 @@ function PackagingTaskRow({
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold flex items-center gap-1.5">
                 <FileText size={11} />
-                Internal prompt
+                Внутренний prompt
               </span>
               <Button size="sm" variant="ghost" iconLeft={<Copy size={12} />} onClick={copyPrompt}>
                 {copied ? 'Скопировано' : 'Скопировать'}
@@ -179,15 +179,15 @@ function PackagingTaskRow({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Input
-              label="Preview URL"
+              label="Ссылка для просмотра"
               hint="Что увидит клиент в кнопке «Открыть результат»"
               value={previewUrl}
               onChange={(e) => setPreviewUrl(e.target.value)}
               placeholder="https://glavsnab.zapusk.tech"
             />
             <Input
-              label="Project URL (опционально)"
-              hint="Внутренний URL — Lovable IDE, Notion, и т.п."
+              label="Ссылка на проект (опционально)"
+              hint="Внутренняя ссылка — Lovable IDE, Notion, и т.п."
               value={resultUrl}
               onChange={(e) => setResultUrl(e.target.value)}
               placeholder="https://lovable.dev/projects/..."
@@ -195,7 +195,7 @@ function PackagingTaskRow({
           </div>
           <Textarea
             label="Комментарий для клиента"
-            hint="Будет показан в «AI generated materials» вместо системного preview. Можно оставить пустым."
+            hint="Будет показан в карточке материалов вместо системной ссылки. Можно оставить пустым."
             rows={2}
             value={comment}
             onChange={(e) => setComment(e.target.value)}

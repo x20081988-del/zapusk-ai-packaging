@@ -61,7 +61,7 @@ export default function DemoAILeads() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
                 <LeadFact icon={<Wallet size={13} />} label="Чек" value="от 1 млн ₽" />
                 <LeadFact icon={<Clock size={13} />} label="Решение" value="1 месяц" />
-                <LeadFact icon={<Target size={13} />} label="Профиль" value="Private investor" />
+                <LeadFact icon={<Target size={13} />} label="Профиль" value="Частный инвестор" />
               </div>
               <div className="rounded-md border border-ai/25 bg-ai/8 p-4 flex items-start gap-3">
                 <div className="w-9 h-9 rounded-full bg-grad-ai text-canvas flex items-center justify-center shadow-ai-glow shrink-0">

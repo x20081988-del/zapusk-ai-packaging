@@ -783,11 +783,11 @@ function GuaranteeCard({ policy }: { policy: AILeadsDashboard['replacementPolicy
 function StrategyCard({ positioning, triggers, investors }: { positioning: string; triggers: string[]; investors: string[] }) {
   return (
     <Card padded accent="ai">
-      <CardHeader title="Investor strategy" subtitle="Как AI будет продавать проект инвесторам" />
+      <CardHeader title="Стратегия работы с инвестором" subtitle="Как AI будет продавать проект инвесторам" />
       <p className="text-sm text-primary leading-relaxed">{positioning}</p>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <div>
-          <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-2">Key triggers</div>
+          <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold mb-2">Ключевые триггеры</div>
           <div className="flex flex-wrap gap-1.5">
             {triggers.map((trigger) => <StatusBadge key={trigger} tone="ai">{trigger}</StatusBadge>)}
           </div>
@@ -928,9 +928,9 @@ function channelIcon(channel: Channel) {
 }
 
 function stateLabel(state: BriefingState): string {
-  if (state === 'ready') return 'Ready for AI Leads';
-  if (state === 'in_progress') return 'In Progress';
-  return 'Draft';
+  if (state === 'ready') return 'Готово к запуску AI-лидов';
+  if (state === 'in_progress') return 'В работе';
+  return 'Черновик';
 }
 
 function relativeTime(iso: string): string {

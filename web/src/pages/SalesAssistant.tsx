@@ -614,15 +614,14 @@ export default function SalesAssistant() {
   };
   // Sprint 16: убрали vendor name из status badge. Раньше фаундер видел
   // «OpenAI» рядом со sales-карточкой — это размывает позиционирование
-  // «Zapusk AI оркестрирует AI стек». Теперь — «AI live» / «Демо-режим».
-  // Admin/manager при необходимости видит полное имя через role-gate
-  // (используем `role`, уже посчитанный выше в компоненте).
+  // «Zapusk AI оркестрирует AI стек». Теперь — «AI слушает встречу» /
+  // «Демо-режим». Admin/manager при необходимости видит полное имя.
   const isMock = card?.fellBackToMock || card?.source === 'mock';
   const providerLabel = isMock
     ? 'Демо-режим'
     : role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER'
       ? (card?.provider === 'openai' ? 'OpenAI' : card?.provider ?? 'AI')
-      : 'AI live';
+      : 'AI слушает встречу';
 
   return (
     <AppLayout
@@ -726,7 +725,7 @@ export default function SalesAssistant() {
               <StatusBadge tone="info" dot>шаблон из админки</StatusBadge>
             )}
             {card?.promptSource === 'fallback' && (
-              <StatusBadge tone="warning" dot>fallback prompt — проверьте шаблон</StatusBadge>
+              <StatusBadge tone="warning" dot>резервный prompt — проверьте шаблон</StatusBadge>
             )}
             </div>
           </div>

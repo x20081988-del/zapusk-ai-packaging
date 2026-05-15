@@ -149,7 +149,7 @@ export default function Templates() {
             <p className="text-xs text-secondary mt-1 leading-relaxed">
               Каждый шаблон — это не просто текст. Это правило оркестрации: какой AI-провайдер
               исполняет задание, каким инструментом, и какой тип артефакта получается на выходе.
-              Когда фаундер запускает Packaging Pipeline, мы используем именно эти настройки.
+              Когда фаундер запускает процесс упаковки, мы используем именно эти настройки.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <StatusBadge tone="ai" dot>4 провайдера</StatusBadge>

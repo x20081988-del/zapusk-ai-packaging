@@ -100,7 +100,11 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.use('/uploads', express.static(path.resolve(env.UPLOADS_DIR)));
+// Sprint 36 P0.1 — публичная раздача /uploads закрыта. Раньше любой человек с
+// URL мог скачать презентации, финмодели, записи разговоров и брифы клиентов.
+// Теперь файлы отдаёт только защищённый endpoint
+// `GET /api/files/:projectId/:fileId/download` (см. routes/files.ts) с проверкой
+// project ownership и роли пользователя.
 
 app.use('/api/auth', authRoutes);
 
@@ -133,7 +137,7 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }
 if (webDistPath) {
   app.use(express.static(webDistPath));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/uploads') || req.path === '/health') return next();
+    if (req.path.startsWith('/api') || req.path === '/health') return next();
     res.sendFile(path.join(webDistPath, 'index.html'));
   });
 }

@@ -43,16 +43,24 @@ services:
         value: 22.22.0
       - key: NODE_ENV
         value: production
+      # Sprint 36 P0.3 — blueprint defaults безопасны для production.
+      # DEMO_MODE=false → суперадмин может редактировать шаблоны в админке
+      # (PATCH /api/templates/:id больше не блокируется demoGuard'ом).
+      # ENABLE_DEMO_LOGIN=false → POST /api/auth/demo возвращает 403.
+      # ENABLE_HEADER_AUTH=false → x-user-email больше не создаёт пользователей.
+      #
+      # Если этот деплой — публичная демо-витрина и demo-login / header-auth
+      # нужны, ОВЕРРАЙДНИТЕ в Render dashboard → service → Environment:
+      #   ENABLE_DEMO_LOGIN=true
+      #   ENABLE_HEADER_AUTH=true
+      # Dashboard override побеждает yaml. Yaml остаётся safe-by-default —
+      # любой новый deploy из blueprint не подхватит опасное поведение.
       - key: DEMO_MODE
-        value: "true"
-      # Sprint 35 P0.4 — production по умолчанию выключает demo-login и
-      # x-user-email header auth. Этот инстанс — публичная демо-витрина,
-      # явно включаем оба flow. На реальном tenant'е эти переменные не
-      # задаются (или ENABLE_*=false) и обе небезопасные точки входа закрыты.
+        value: "false"
       - key: ENABLE_DEMO_LOGIN
-        value: "true"
+        value: "false"
       - key: ENABLE_HEADER_AUTH
-        value: "true"
+        value: "false"
       # Sprint 29: SQLite и uploads теперь живут на persistent disk.
       # Раньше file:./prod.db и ./uploads оба указывали на ephemeral working
       # directory — каждый deploy создавал новый контейнер с пустой БД,

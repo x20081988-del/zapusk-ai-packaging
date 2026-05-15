@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
+import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -7,6 +8,8 @@ import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { storage } from '../services/storage.js';
 import { recordAudit } from '../lib/audit.js';
+import { env } from '../env.js';
+import { getActorRole, isAdminLike } from '../lib/ownership.js';
 
 export const filesRoutes = Router();
 filesRoutes.use(authMiddleware);
@@ -16,6 +19,17 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 async function assertOwnership(userId: string, projectId: string) {
   const p = await prisma.project.findFirst({ where: { id: projectId, userId } });
   return Boolean(p);
+}
+
+// Sprint 36 P0.1 — admin/manager видят любой проект; founder — только свой.
+// Возвращаем «принадлежит ли user проекту» без 403/404 — это решает route.
+async function actorCanAccessProject(req: Parameters<typeof getUser>[0], projectId: string): Promise<boolean> {
+  const role = getActorRole(req);
+  if (isAdminLike(role)) {
+    const exists = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    return Boolean(exists);
+  }
+  return assertOwnership(getUser(req).id, projectId);
 }
 
 filesRoutes.post('/:projectId/upload', upload.array('files', 20), async (req, res) => {
@@ -88,6 +102,45 @@ filesRoutes.get('/:projectId', async (req, res) => {
     orderBy: { createdAt: 'desc' },
   });
   res.json({ files });
+});
+
+// Sprint 36 P0.1 — защищённый download. Раньше файлы раздавались публично через
+// `app.use('/uploads', express.static(...))` — любой с URL мог скачать
+// презентацию, финмодель или запись разговора клиента. Теперь:
+//   • SUPER_ADMIN / ADMIN / MANAGER могут скачать любой файл;
+//   • FOUNDER — только файлы своих проектов;
+//   • path traversal невозможен: путь строится из DB-row, а финальный путь
+//     явно проверяется на принадлежность storage-root.
+filesRoutes.get('/:projectId/:fileId/download', async (req, res) => {
+  const ok = await actorCanAccessProject(req, req.params.projectId);
+  if (!ok) return res.status(404).json({ error: 'project_not_found' });
+
+  const file = await prisma.uploadedFile.findFirst({
+    where: { id: req.params.fileId, projectId: req.params.projectId, archivedAt: null },
+  });
+  if (!file) return res.status(404).json({ error: 'file_not_found' });
+
+  // Sprint 36 P0.1 — link-files (внешние URL'ы) не отдаём через download:
+  // ничего на диске нет, только UploadedFile.url с типа 'text/uri-list'.
+  if (!file.path) return res.status(404).json({ error: 'file_not_downloadable' });
+
+  // Защита от path traversal: вычисляем абсолютный путь к файлу и проверяем,
+  // что он строго внутри storage-root. Даже если DB-row был испорчен —
+  // запрос вне директории не пройдёт.
+  const root = path.resolve(env.UPLOADS_DIR);
+  const absolute = path.resolve(storage.resolvePath(file.path));
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (absolute !== root && !absolute.startsWith(rootWithSep)) {
+    console.error('[files] download blocked — path traversal attempt:', { fileId: file.id, path: file.path });
+    return res.status(404).json({ error: 'file_not_found' });
+  }
+
+  if (!fs.existsSync(absolute)) {
+    return res.status(404).json({ error: 'file_missing_on_disk' });
+  }
+
+  res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+  return res.download(absolute, file.originalName || path.basename(absolute));
 });
 
 // Sprint 30 — soft-delete. Файл помечается archivedAt; физический файл на

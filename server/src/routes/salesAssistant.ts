@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware } from '../auth.js';
+import { assertProjectOwnership } from '../lib/ownership.js';
 import { analyzeSalesTurn, analyzeSalesTurnFast } from '../services/salesAssistantService.js';
 
 export const salesAssistantRoutes = Router();
@@ -19,6 +20,16 @@ const analyzeSchema = z.object({
 salesAssistantRoutes.post('/analyze', async (req, res) => {
   const parsed = analyzeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  // Sprint 36 P0.2 — если фронт передал projectId, проверяем владение. Иначе
+  // user A мог подставить projectId user B и получить AI-подсказку, построенную
+  // на чужом brief'е (utвечка контента). Если projectId не задан — анализ без
+  // project-context, это разрешено.
+  if (parsed.data.projectId) {
+    const ownership = await assertProjectOwnership(req, parsed.data.projectId);
+    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  }
+
   try {
     const card = await analyzeSalesTurn({
       transcript: parsed.data.transcript.trim(),
@@ -42,6 +53,13 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
 salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
   const parsed = analyzeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  // Sprint 36 P0.2 — те же ownership-правила, что и на /analyze.
+  if (parsed.data.projectId) {
+    const ownership = await assertProjectOwnership(req, parsed.data.projectId);
+    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  }
+
   try {
     const fast = await analyzeSalesTurnFast({
       transcript: parsed.data.transcript.trim(),
