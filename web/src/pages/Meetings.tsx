@@ -42,7 +42,14 @@ export default function Meetings() {
       .then(async (r) => {
         if (!alive) return;
         setSessions(r.sessions);
-        const outcomeRes = await listOutcomes(projectFilter ? { projectId: projectFilter } : {});
+        const sessionIds = r.sessions.map((s) => s.id);
+        if (sessionIds.length === 0) {
+          setOutcomesBySession({});
+          return;
+        }
+        const outcomeRes = await listOutcomes(projectFilter
+          ? { projectId: projectFilter, salesSessionIds: sessionIds }
+          : { salesSessionIds: sessionIds });
         if (!alive) return;
         const ids = new Set(r.sessions.map((s) => s.id));
         const grouped: Record<string, AssistantOutcome[]> = {};

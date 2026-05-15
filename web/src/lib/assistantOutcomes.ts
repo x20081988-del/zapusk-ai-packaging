@@ -45,10 +45,11 @@ export function createOutcome(input: CreateOutcomeInput) {
   return api.post<{ outcome: AssistantOutcome }>('/api/assistant-outcomes', input);
 }
 
-export function listOutcomes(filters: { projectId?: string; salesSessionId?: string } = {}) {
+export function listOutcomes(filters: { projectId?: string; salesSessionId?: string; salesSessionIds?: string[] } = {}) {
   const params = new URLSearchParams();
   if (filters.projectId) params.set('projectId', filters.projectId);
   if (filters.salesSessionId) params.set('salesSessionId', filters.salesSessionId);
+  if (filters.salesSessionIds?.length) params.set('salesSessionIds', filters.salesSessionIds.join(','));
   const qs = params.toString();
   return api.get<{ outcomes: AssistantOutcome[] }>(`/api/assistant-outcomes${qs ? `?${qs}` : ''}`);
 }

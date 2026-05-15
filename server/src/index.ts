@@ -143,6 +143,11 @@ app.use('/api/assistant-learning', assistantLearningRoutes);
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));
 
+// Sprint 45B — hard 404 for legacy/public uploads paths. Without this,
+// /uploads/* falls through to the SPA fallback and returns index.html. That is
+// not a file leak, but a clear 404 is safer and easier to smoke-test.
+app.use('/uploads', (_req, res) => res.status(404).json({ error: 'uploads_disabled' }));
+
 // Serve SPA whenever a built dist is available — independent of NODE_ENV so
 // `npm start` works the same locally and on hosts that don't set NODE_ENV.
 if (webDistPath) {

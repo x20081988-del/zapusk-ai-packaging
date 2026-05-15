@@ -227,14 +227,18 @@ assistantOutcomesRoutes.post('/', async (req, res) => {
 assistantOutcomesRoutes.get('/', async (req, res) => {
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
   const sessionId = typeof req.query.salesSessionId === 'string' ? req.query.salesSessionId : undefined;
+  const sessionIds = typeof req.query.salesSessionIds === 'string'
+    ? req.query.salesSessionIds.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100)
+    : [];
 
   const role = getActorRole(req);
   const user = getUser(req);
 
   // Founder: only own outcomes (own projects). Admin/manager: всё.
-  const where: { projectId?: string; salesSessionId?: string; archivedAt: null } = { archivedAt: null };
+  const where: { projectId?: string; salesSessionId?: string | { in: string[] }; archivedAt: null } = { archivedAt: null };
   if (projectId) where.projectId = projectId;
-  if (sessionId) where.salesSessionId = sessionId;
+  if (sessionIds.length > 0) where.salesSessionId = { in: sessionIds };
+  else if (sessionId) where.salesSessionId = sessionId;
 
   if (!isAdminLike(role)) {
     // Если projectId задан, проверим owner. Иначе ограничим списком своих
@@ -242,14 +246,18 @@ assistantOutcomesRoutes.get('/', async (req, res) => {
     if (projectId) {
       const ok = await assertProjectOwnership(req, projectId);
       if (!ok.ok) return res.status(ok.status).json({ error: ok.error });
-    } else if (sessionId) {
-      const s = await prisma.salesSession.findUnique({
-        where: { id: sessionId },
-        select: { projectId: true },
+    } else if (sessionId || sessionIds.length > 0) {
+      const ids = sessionIds.length > 0 ? sessionIds : [sessionId!];
+      const sessions = await prisma.salesSession.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, projectId: true },
       });
-      if (!s?.projectId) return res.status(404).json({ error: 'session_not_found' });
-      const p = await prisma.project.findUnique({ where: { id: s.projectId }, select: { userId: true } });
-      if (p?.userId !== user.id) return res.status(404).json({ error: 'session_not_found' });
+      if (sessions.length !== ids.length || sessions.some((s) => !s.projectId)) {
+        return res.status(404).json({ error: 'session_not_found' });
+      }
+      const projectIds = Array.from(new Set(sessions.map((s) => s.projectId).filter((x): x is string => Boolean(x))));
+      const count = await prisma.project.count({ where: { id: { in: projectIds }, userId: user.id } });
+      if (count !== projectIds.length) return res.status(404).json({ error: 'session_not_found' });
     } else {
       // founder без projectId — отдадим только outcomes им же созданные.
       // Это покрывает кейс «у меня есть проект, дай все мои outcomes» если фронт
