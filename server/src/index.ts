@@ -23,6 +23,7 @@ import { aiLeadsRoutes } from './routes/aiLeads.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
 import { initKnowledgeFts } from './services/knowledgeFts.js';
 import { assistantOutcomesRoutes } from './routes/assistantOutcomes.js';
+import { assistantLearningRoutes } from './routes/assistantLearning.js';
 import { managerRoutes } from './routes/manager.js';
 
 const app = express();
@@ -136,6 +137,8 @@ app.use('/api/ai-leads', aiLeadsRoutes);
 app.use('/api/knowledge', knowledgeRoutes);
 // Sprint 43 — AssistantOutcomeEvent CRUD (фиксация результата встречи).
 app.use('/api/assistant-outcomes', assistantOutcomesRoutes);
+// Sprint 44 — Learning Dashboard (manager/admin global analytics).
+app.use('/api/assistant-learning', assistantLearningRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

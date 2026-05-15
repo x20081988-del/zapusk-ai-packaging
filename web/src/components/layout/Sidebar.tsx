@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
-  Mail, TrendingUp, Repeat, X, Archive,
+  Mail, TrendingUp, Repeat, X, Archive, Activity,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
@@ -30,6 +30,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
       // Sprint 39 — управление базой знаний AI-продаж.
       { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
+      // Sprint 44 — learning dashboard.
+      { to: '/admin/learning',   icon: Activity,          label: 'Learning Dashboard' },
       { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
       { to: '/admin/settings',   icon: Settings,          label: 'Системные настройки' },
     ]},
@@ -46,6 +48,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
       // Sprint 39 — управление базой знаний AI-продаж.
       { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
+      // Sprint 44 — learning dashboard.
+      { to: '/admin/learning',   icon: Activity,          label: 'Learning Dashboard' },
       { to: '/admin/audit',      icon: Archive,           label: 'Журнал и архив' },
     ]},
   ],
@@ -62,6 +66,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       // Sprint 39 — менеджеры тоже могут управлять KB (загружать скрипты,
       // кейсы из своих сделок).
       { to: '/admin/knowledge',  icon: BookOpen,          label: 'База знаний AI-продаж' },
+      // Sprint 44 — learning dashboard для менеджеров.
+      { to: '/admin/learning',   icon: Activity,          label: 'Learning Dashboard' },
     ]},
   ],
   FOUNDER: [

@@ -21,6 +21,7 @@ import AILeads from './pages/AILeads';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminAudit from './pages/AdminAudit';
 import AdminKnowledge from './pages/AdminKnowledge';
+import AdminLearning from './pages/AdminLearning';
 import ManagerDashboard from './pages/ManagerDashboard';
 import DemoCabinet from './pages/DemoCabinet';
 import DemoAILeads from './pages/DemoAILeads';
@@ -80,6 +81,8 @@ export default function App() {
       {/* Sprint 39 — База знаний AI-продаж. MANAGER тоже допускается:
           менеджеры команды загружают свои скрипты, кейсы, объекции. */}
       <Route path="/admin/knowledge" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN', 'MANAGER']}><AdminKnowledge /></RequireRole>} />
+      {/* Sprint 44 — Learning Dashboard. Доступ как у KB: manager тоже допускается. */}
+      <Route path="/admin/learning" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN', 'MANAGER']}><AdminLearning /></RequireRole>} />
       <Route path="*" element={<Navigate to={home} replace />} />
     </Routes>
   );

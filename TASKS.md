@@ -355,7 +355,125 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 43: advice events + outcome tracking landed)_
+_(empty — Sprint 44: learning dashboard landed)_
+
+---
+
+## Sprint 44 — 2026-05-15 — Learning Dashboard + Outcome Intelligence
+
+Theme: **Из «копим события» в «видим, что работает».** Sprint 42-43 заложили observability (retrieval events, advice events, outcome events). Sprint 44 — первая UI-видимость для admin/manager: какие KB-кейсы реально ведут к встречам и инвестициям, какие — к ghosted/lost. Без ML, без auto-disable, только explainable analytics.
+
+### P0 — Backend aggregation
+
+**Новый** [services/assistantLearningService.ts](server/src/services/assistantLearningService.ts):
+- `parseIdsJson()` — safe JSON-array parsing (никогда не throws).
+- `buildSourceMetrics()` — один проход: outcomes → advice events → usedSourceIdsJson → per-source bucket'ы по outcomeType. JOIN с KnowledgeSource даёт title/sourceType/scope/retrievalCount.
+- Classification heuristic (не ML): `dead` (retrievalCount=0), `risky` (>50% negative outcomes), `high_performing` (>50% positive), `normal`.
+- `topPerformingSources(outcomeTypes, limit)` — фильтр + sort.
+- `weakSources(limit)` — то же по `[lost, ghosted, no_decision, bad_fit]`.
+- `materialTypePerformance()` — groupBy sourceType с positiveRate.
+- `spinFunnel()` — 5 этапов S/P/I/N/unknown, adviceCount + positiveRate.
+- `outcomeDistribution(sinceDays?)` — Prisma groupBy outcomeType с _count.
+- `retrievalHealth(sinceDays=30)` — totalRetrievals + emptyRate + avgSourcesPerAdvice + avgOutcomesPerAdvice.
+- `buildDashboardPayload()` — composite Promise.all всего вышеперечисленного.
+
+**Новый** [routes/assistantLearning.ts](server/src/routes/assistantLearning.ts):
+- `GET /api/assistant-learning/dashboard` — composite payload (7 разделов одним запросом).
+- `GET /api/assistant-learning/top-sources?outcomeTypes=...&limit=10` — фильтруемый top-N.
+- `GET /api/assistant-learning/weak-sources?limit=10`.
+- `GET /api/assistant-learning/spin-funnel`.
+- `GET /api/assistant-learning/outcomes?sinceDays=N` — distribution.
+
+**Security**:
+- `requireNotInvestor()` — INVESTOR блокирован.
+- `requireRole(['SUPER_ADMIN', 'ADMIN', 'MANAGER'])` — FOUNDER блокирован на global aggregates. Founder продолжает видеть свои outcomes через Sprint 43 `/api/assistant-outcomes?projectId=...`.
+
+### P0 — Frontend
+
+**Новый** [pages/AdminLearning.tsx](web/src/pages/AdminLearning.tsx) — single dashboard page, 6 секций:
+
+1. **Retrieval Health** — 5 tiles: retrievals, empty retrievals + %, avg sources/совет, avg outcomes/совет, outcomes за всё время + за 30 дн.
+2. **Outcome Distribution** — горизонтальные bars per outcomeType с counts и %. Зелёные для позитивных, оранжевые для негативных. Empty state «Outcomes ещё не фиксировались».
+3. **Top Performing Sources** — таблица с classification badge ('top' / 'risky' / 'dead'), success rate %, mini-distribution.
+4. **Weak Sources** — то же, danger accent, для риск-материалов.
+5. **Material Type Performance** — таблица типов с per-type positive rate, source count, mini-distribution.
+6. **SPIN Funnel** — 5 tile-карточек, adviceCount + positiveRate per stage.
+
+UI helpers: `HealthTile`, `OutcomeBars`, `MiniOutcomeBars`, `SourcesTable`, `ClassificationBadge`.
+
+### P0 — Nav
+
+- **Route**: `/admin/learning` в App.tsx с `RequireRole roles={['SUPER_ADMIN', 'ADMIN', 'MANAGER']}`.
+- **Sidebar**: пункт «Learning Dashboard» с иконкой `Activity` в SUPER_ADMIN / ADMIN / MANAGER блоках. FOUNDER / INVESTOR не видят.
+
+### P1 — Source intelligence (включено в dashboard)
+
+- `successRate` (positive/total) и `lossRate` (negative/total) per source.
+- Classification: high_performing / risky / dead / normal — badges в UI.
+- Никакого auto-disable — это сигнал админу, не решение.
+
+### P2 — Future-ready (TODO comments)
+
+Доку оставил в коде:
+- AssistantAdviceSource нормализованная таблица — для дешёвых JOIN'ов на больших объёмах.
+- Materialized metrics view — когда outcomes перевалят ~100k.
+- Async aggregates с cron-warmup — когда dashboard станет медленным.
+
+### Verification
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-C98EyC6J.js`.
+- **Local preview**:
+  - 4 endpoint'а вернули корректные shape'ы для ADMIN.
+  - SPIN funnel показывает stage N с 1 совет/positiveRate=1.0 (соответствует Sprint 43 follow_up_sent outcome).
+  - retrievalHealth: 3 retrievals, 0 empty, avg 1 source/совет.
+  - Material types: «Успешная продажа · 1 source · 100% позитив».
+  - FOUNDER → 403 forbidden ✓
+  - INVESTOR → 403 investor_forbidden ✓
+  - AdminLearning page рендерится со всеми 6 секциями.
+  - 0 console errors.
+
+### Какие проверки прошли
+
+| Проверка | Результат |
+|---|---|
+| dashboard рендерится | ✓ AdminLearning все 6 секций показывают данные |
+| founder access blocked | ✓ /api/assistant-learning/dashboard → 403 forbidden + redirect на /dashboard в UI |
+| investor blocked | ✓ → 403 investor_forbidden |
+| admin sees aggregates | ✓ |
+| no transcript leakage | ✓ schema-уровень: AssistantAdviceEvent не имеет полей transcript/prompt/chunk text; service не парсит таких данных |
+| top sources считаются | ✓ JOIN через usedSourceIdsJson, sort by outcome hits |
+| weak sources считаются | ✓ те же source metrics, фильтр по NEGATIVE_OUTCOMES |
+| SPIN funnel работает | ✓ groupBy adviceEvent.spinStage + outcomes |
+| outcomes aggregation | ✓ Prisma groupBy + _count |
+| retrieval health | ✓ totalRetrievals + emptyRate + avgSourcesPerAdvice + avgOutcomesPerAdvice |
+| Build/typecheck | ✓ оба tsc pass, vite build clean |
+
+### Файлы (6)
+
+- Server: **new** `services/assistantLearningService.ts`, **new** `routes/assistantLearning.ts`, `index.ts`.
+- Web: **new** `pages/AdminLearning.tsx`, `App.tsx`, `components/layout/Sidebar.tsx`.
+
+### Performance notes
+
+- Aggregation в app-коде: на текущих объёмах (~10k events) проход в Node быстрее (~100ms) любых WITH RECURSIVE ухищрений вокруг SQLite JSON-arrays.
+- `buildSourceMetrics({limit: 200})` грузит все outcomes одним findMany, дальше всё in-memory.
+- Composite dashboard Promise.all'ом — 7 параллельных запросов; первый GET dashboard у нас ~120-180ms.
+- Когда KnowledgeRetrievalEvent перевалит ~100k:
+  - добавить partial index `WHERE sourceCount > 0`.
+  - переписать `buildSourceMetrics` на raw SQL с CROSS JOIN json_each(sourceIdsJson).
+  - materialized table `AssistantAdviceSource` (P2 TODO).
+
+### Что осталось на Sprint 45
+
+- **Outcome edit/archive UI** — manager сейчас может только создавать.
+- **Outcome list per-meeting** в Meetings page (Sprint 43 P1 carryover).
+- **Source timeline в KnowledgeSource drawer** — последние retrievals, последние outcomes (Sprint 44 P1 deferred).
+- **adviceEventId → conversationAnalysisId привязка** — для AI-разбора чата, не только live transcript (Sprint 43 carryover).
+- **Filters в dashboard** — period selector (7d / 30d / 90d), per-project, per-manager.
+- **Export to CSV** — admin часто хочет дёрнуть данные в Excel.
+- Carryovers: demo-assets review (Sprint 37), Manager assignment schema (Sprint 37), AbortSignal proxy в OpenAI client (Hotfix).
 
 ---
 
