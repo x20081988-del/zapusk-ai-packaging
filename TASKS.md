@@ -355,7 +355,57 @@ zapusk-ai-packaging/
 
 ## In progress
 
-_(empty — Sprint 36: P0 security fixes from Codex audit landed)_
+_(empty — Hotfix 2026-05-15: AI-ассистент больше не зависает после повторных кликов)_
+
+---
+
+## Hotfix 2026-05-15 — AI-ассистент: устранение зависания при повторных обновлениях
+
+Причина зависания: в `runAnalyze()` стоял `if (analyzingRef.current) return;` плюс `<Button loading={analyzing}>`, который делает кнопку `disabled`. Пока шёл медленный `/api/sales-assistant/analyze` (3-7 секунд на OpenAI), все повторные клики молча игнорировались. Если запрос вис из-за сети/провайдера, UI оставался на старой подсказке навсегда. Вторично: `fastCard` всегда побеждал `card`, даже после успешного full-ответа — fallback «Расскажите подробнее…» мог висеть поверх свежей аналитики.
+
+### Что исправлено
+
+- **`web/src/lib/api.ts`** — добавлена поддержка `signal?: AbortSignal` через новый `ApiRequestOptions` параметр. Все методы (`get/post/patch/delete/upload`) теперь принимают опциональный signal, не ломая существующие вызовы.
+- **`web/src/pages/SalesAssistant.tsx`** — полная переделка `runAnalyze()`:
+  - **Sequence-id (`analysisRequestIdRef`)**: каждый клик +1; ответы старых запросов проверяются `if (myRequestId !== analysisRequestIdRef.current) return;` и логируются как `ignored stale response`.
+  - **AbortController (`analysisAbortRef`)**: на новом клике предыдущий controller вызывается `.abort()`, новый передаётся в `api.post({ signal })`. Хвост к OpenAI реально режется, а не висит фоном.
+  - **Frontend timeouts**: fast = 8s, full = 25s — `setTimeout(() => controller.abort(), TIMEOUT)`. По истечении срабатывает abort и UI выходит в state `'error'`.
+  - **State machine `analyzePhase: 'idle' | 'fast' | 'full' | 'error'`** — заменил два пересекающихся флага (`analyzing` + `analyzePhase`). Кнопка во всех состояниях кликабельна; убран `loading={analyzing}` который делал её disabled.
+  - **Лейбл кнопки**: `analyzeButtonLabel(phase, hasAnyCard)` → 'Получить подсказку сейчас' / 'Готовлю главный вопрос…' / 'Обновить ещё раз' / 'Повторить обновление'.
+  - **Приоритет card над fastCard**: `const action = card ? {...card} : fastCard;` (было `fastCard ?? card`). После успеха full дополнительно `setFastCard(null)` — defense-in-depth.
+  - **Бейдж «резервная подсказка»** показывается когда `fastCard.source === 'mock'` или `fellBackToMock === true` — пользователь видит, что главный вопрос — fallback, а не AI.
+  - **Cleanup на unmount + reset()**: висящий controller `.abort()`, `analysisRequestIdRef` инкремент → старые ответы игнорируются.
+  - **Debug logs**: `requestId`, `phase`, `latencyMs`, `spinStage`, `source`, без полного transcript'а в логах.
+- **`server/src/ai/client.ts`** — добавлен отдельный feature guard `sales_assistant.analyze_fast`: `timeoutMs: 8_000`, `modelRoute: 'fast'`, `maxOutputTokens: 600`. Раньше fast endpoint попадал в DEFAULT_GUARD (30 секунд) — это убивало само преимущество двухэтапной генерации. Параллельно `sales_assistant.analyze` поднят с 20 до 25 секунд — даём gpt-4o немного больше воздуха, но frontend abort'ит ровно в 25.
+- **`web/src/pages/SalesAssistant.tsx`** — `prompt → инструкция` для пользовательского badge: «резервная инструкция — проверьте шаблон».
+
+### Поведение кнопки
+
+| Phase | Лейбл | Disabled |
+|---|---|---|
+| `idle`, нет card | Получить подсказку сейчас | только если `!hasFinalTranscript` |
+| `fast` | Готовлю главный вопрос… | НЕТ |
+| `full` | Обновить ещё раз | НЕТ |
+| `error` | Повторить обновление | НЕТ |
+| `idle`, есть card | Обновить ещё раз | НЕТ |
+
+Каждый клик отменяет активный запрос (`AbortController.abort()`), увеличивает requestId и стартует новый цикл fast → full.
+
+### Проверки
+
+- `server/` `tsc --noEmit` — pass.
+- `web/` `tsc --noEmit` — pass.
+- `npm run build` — pass. Новый bundle: `index-DQ6CkR49.js`.
+- Локальный preview (`zapusk-api` + `zapusk-web`):
+  - `/sales-assistant` рендерится без ошибок, кнопка отображает «Получить подсказку сейчас».
+  - `fetch + AbortController` сценарий: первый запрос отменён → `AbortError`; второй запрос → HTTP 200. Подтверждает, что signal реально проходит через `api.post`.
+  - Console: 0 ошибок.
+
+### Что осталось / возможные следующие шаги
+
+- Backend всё ещё делает `await aiClient.generateJson(...)` без проброса request-level abort signal в SDK OpenAI/Anthropic. Если фронт abort'ит, сервер всё равно дожидает ответ от провайдера и выбрасывает результат в /dev/null. Не критично (юзер UI уже не видит), но это бюджетная утечка. Sprint 37: пробросить `signal` от Express request до `aiClient.generateJson({signal})`.
+- `lastAnalyzeAt` обновляется и на fast, и на full — UI показывает время последнего обновления, но не различает «fast пришёл» vs «full пришёл». Можно разделить, но текущее поведение не вводит в заблуждение.
+- Тесты е2е: имитировать fast/full timeout через mock-сервер с искусственной задержкой не реализовано (out of scope для hotfix'а).
 
 ---
 

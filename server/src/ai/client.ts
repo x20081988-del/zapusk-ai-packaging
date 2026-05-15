@@ -83,7 +83,22 @@ const FEATURE_GUARDS: Record<string, FeatureGuard> = {
     // Sprint 13 emotional layer: AssistantCard 26 полей в русском JSON.
     // 700 tokens (Sprint 11) клипает ответ, и парсинг падал → fallback на mock.
     maxOutputTokens: 3_000,
-    timeoutMs: 20_000,
+    // Hotfix 2026-05-15 — расширили window с 20 до 25 секунд: gpt-4o иногда
+    // отдаёт большую JSON-карточку медленнее. Frontend ставит свой 25-секундный
+    // AbortController; backend-timeout должен совпадать, чтобы пользователь
+    // видел понятную ошибку, а не «висел» дольше.
+    timeoutMs: 25_000,
+  },
+  // Hotfix 2026-05-15 — отдельный guard для двухэтапной генерации (Sprint 34В).
+  // Раньше analyze-fast попадал в DEFAULT_GUARD (30 секунд) — это полностью
+  // ломало преимущество «быстрого тактического ответа за 1-3 секунды». Теперь
+  // жёсткие 8 секунд: либо fast уложился и UI оживает, либо abort и пользователь
+  // видит «Не удалось быстро получить подсказку» вместо вечного спиннера.
+  'sales_assistant.analyze_fast': {
+    modelRoute: 'fast',
+    maxInputChars: 16_000,
+    maxOutputTokens: 600,
+    timeoutMs: 8_000,
   },
   classification: {
     modelRoute: 'fast',

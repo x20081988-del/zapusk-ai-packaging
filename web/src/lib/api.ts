@@ -2,6 +2,14 @@ import { getAuth } from './auth';
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
+// Hotfix 2026-05-15 — поддержка AbortSignal. SalesAssistant использует это,
+// чтобы отменять «висящий» AI-запрос, когда пользователь нажимает «Обновить
+// подсказку» во второй раз: новый запрос abort'ит предыдущий, и UI не остаётся
+// заблокированным на старом fetch'е к OpenAI.
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const auth = getAuth();
   const headers: Record<string, string> = {
@@ -25,13 +33,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
-  patch: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
-  upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
+  get: <T>(path: string, opts?: ApiRequestOptions) => request<T>(path, { signal: opts?.signal }),
+  post: <T>(path: string, body?: unknown, opts?: ApiRequestOptions) =>
+    request<T>(path, {
+      method: 'POST',
+      body: body ? JSON.stringify(body) : undefined,
+      signal: opts?.signal,
+    }),
+  patch: <T>(path: string, body?: unknown, opts?: ApiRequestOptions) =>
+    request<T>(path, {
+      method: 'PATCH',
+      body: body ? JSON.stringify(body) : undefined,
+      signal: opts?.signal,
+    }),
+  delete: <T>(path: string, opts?: ApiRequestOptions) =>
+    request<T>(path, { method: 'DELETE', signal: opts?.signal }),
+  upload: <T>(path: string, form: FormData, opts?: ApiRequestOptions) =>
+    request<T>(path, { method: 'POST', body: form, signal: opts?.signal }),
 };
 
 // ─── typed surface ───────────────────────────────────────────

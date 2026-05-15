@@ -95,6 +95,10 @@ interface FastCardShape {
   backupQuestions: string[];
   selfSaleQuestions: string[];
   spinStage: AssistantCard['spinStage'];
+  // Hotfix 2026-05-15 — backend возвращает source='mock', когда AI вернул
+  // пустоту / парсинг JSON упал. Используем это для бейджа «резервная подсказка»
+  // и для приоритезации полной аналитики над сырым fallback.
+  source?: 'ai' | 'mock';
   provider: string;
   model: string;
   fellBackToMock: boolean;
@@ -207,6 +211,19 @@ const MOMENTUM_TONE: Record<AssistantCard['momentum'], 'success' | 'neutral' | '
   NEGATIVE: 'danger',
 };
 
+// Hotfix 2026-05-15 — лейбл кнопки зависит от фазы. Кнопка всегда кликабельна
+// (новый клик abort'ит активный запрос), поэтому текст должен ясно показывать
+// текущее состояние, а не «спиннер навсегда».
+function analyzeButtonLabel(
+  phase: 'idle' | 'fast' | 'full' | 'error',
+  hasAnyCard: boolean,
+): string {
+  if (phase === 'fast') return 'Готовлю главный вопрос…';
+  if (phase === 'full') return 'Обновить ещё раз';
+  if (phase === 'error') return 'Повторить обновление';
+  return hasAnyCard ? 'Обновить ещё раз' : 'Получить подсказку сейчас';
+}
+
 export default function SalesAssistant() {
   const [projects, setProjects] = useState<Project[]>([]);
   const role = getAuth()?.role ?? 'client';
@@ -216,14 +233,17 @@ export default function SalesAssistant() {
   const [transcript, setTranscript] = useState<Array<{ ts: number; final: boolean; text: string }>>([]);
   const [interim, setInterim] = useState('');
   const [card, setCard] = useState<AssistantCard | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  // Sprint 34В — двухэтапная генерация:
-  //   • analyzePhase='fast'  — ждём ultra-fast tactical (~1-3 сек)
-  //   • analyzePhase='full'  — fast пришёл, ждём полную аналитику (~5-15 сек)
-  //   • analyzePhase=null    — idle
-  // fastCard рендерит action zone сразу после fast этапа. Analytics zone
-  // ждёт card (полную), пока показывает skeleton.
-  const [analyzePhase, setAnalyzePhase] = useState<'fast' | 'full' | null>(null);
+  // Hotfix 2026-05-15 — единый явный конечный автомат вместо двух пересекающихся
+  // флагов (analyzing + analyzePhase). Сейчас:
+  //   • idle  — нет активного запроса; кнопка «Получить подсказку сейчас» / «Обновить ещё раз»
+  //   • fast  — ждём ultra-fast tactical (~1-3 сек); кнопка «Готовлю главный вопрос…», но НЕ disabled
+  //   • full  — fast пришёл, тянем полную аналитику (~5-15 сек); кнопка «Обновить ещё раз»
+  //   • error — последний запуск упал; кнопка «Повторить обновление»
+  // Кнопка во всех состояниях кликабельна — новый клик abort'ит текущий запрос
+  // и стартует новый. Раньше `if (analyzingRef.current) return;` + loading=disabled
+  // приводили к «вечному» залипанию UI, если сеть/OpenAI отвечали медленно.
+  type AnalyzePhase = 'idle' | 'fast' | 'full' | 'error';
+  const [analyzePhase, setAnalyzePhase] = useState<AnalyzePhase>('idle');
   const [fastCard, setFastCard] = useState<FastCardShape | null>(null);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
@@ -242,7 +262,14 @@ export default function SalesAssistant() {
   const restartTimerRef = useRef<number | null>(null);
   const shouldListenRef = useRef(false);
   const recognitionActiveRef = useRef(false);
-  const analyzingRef = useRef(false);
+  // Hotfix 2026-05-15 — sequence-id + AbortController:
+  //   • analysisRequestIdRef растёт на каждый клик. Ответы старых запросов
+  //     игнорируются (stale-guard) — даже если abort не сработал.
+  //   • analysisAbortRef хранит текущий controller. На новом клике —
+  //     отменяем предыдущий и создаём новый. Это убирает «зависание» UI,
+  //     когда OpenAI отвечает долго и пользователь хочет нажать ещё раз.
+  const analysisRequestIdRef = useRef(0);
+  const analysisAbortRef = useRef<AbortController | null>(null);
   const transcriptLinesRef = useRef<Array<{ ts: number; final: boolean; text: string }>>([]);
   const speechStatusRef = useRef<SpeechStatus>('idle');
   const cardRef = useRef<AssistantCard | null>(null);
@@ -278,6 +305,11 @@ export default function SalesAssistant() {
     recognitionActiveRef.current = false;
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore unmount race */ }
+    // Hotfix 2026-05-15 — отменяем висящий AI-запрос при размонтировании.
+    if (analysisAbortRef.current) {
+      try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
+      analysisAbortRef.current = null;
+    }
   }, []);
 
   // Auto-scroll transcript to bottom on new lines
@@ -311,33 +343,66 @@ export default function SalesAssistant() {
     };
   }
 
-  // Sprint 34В — двухэтапная генерация. После клика «Обновить подсказку»:
-  //   Этап 1: /analyze-fast — за 1-3 секунды получаем mainQuestion +
-  //           backupQuestions + selfSaleQuestions. Action zone заполняется,
-  //           аналитика показывает skeleton.
-  //   Этап 2: /analyze — полная аналитика (5-15 сек), догоняет card.
-  // SpeechRecognition при этом не трогается — это полностью независимый поток.
+  // Hotfix 2026-05-15 — двухэтапная генерация теперь:
+  //   1. Имеет requestId-guard: если пользователь нажал кнопку второй раз,
+  //      результаты первого запроса игнорируются даже если они придут.
+  //   2. Использует AbortController на каждый клик. Старый запрос реально
+  //      отменяется в сети — мы не ждём «висящего» fetch'а к OpenAI.
+  //   3. Имеет жёсткие frontend-timeout'ы:
+  //        fast = 8 секунд (соответствует backend guard)
+  //        full = 25 секунд (соответствует backend guard)
+  //      По истечении срабатывает abort и UI выходит в state='error'.
+  //   4. После успешного full-ответа очищает fastCard, чтобы старая «резервная»
+  //      реплика не висела поверх свежей полной аналитики.
+  // SpeechRecognition при этом не трогается — это полностью независимый поток,
+  // ошибки/таймауты AI на него не влияют.
+  const FAST_TIMEOUT_MS = 8_000;
+  const FULL_TIMEOUT_MS = 25_000;
+
+  function isAbortError(err: unknown): boolean {
+    if (err instanceof DOMException && err.name === 'AbortError') return true;
+    if (err instanceof Error && /aborted|abort/i.test(err.message)) return true;
+    return false;
+  }
+
   async function runAnalyze() {
-    if (analyzingRef.current) return;
     const transcriptText = fullTranscript();
     if (transcriptText.trim().length < 10) {
       setPermError('Сначала начните прослушивание и скажите несколько фраз.');
       return;
     }
-    analyzingRef.current = true;
-    setAnalyzing(true);
+
+    // Отменяем предыдущий запрос (если был). Stale-guard ниже отбросит его
+    // результаты на случай, если abort не сработает мгновенно.
+    if (analysisAbortRef.current) {
+      console.debug('[sales-assistant] aborting previous request');
+      try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
+    }
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
+    const myRequestId = ++analysisRequestIdRef.current;
+    const isStale = () => myRequestId !== analysisRequestIdRef.current;
+
     setAnalyzePhase('fast');
     setAiError(null);
-    setFastCard(null);
-    // Rolling window: 8k chars + recentContext(6k) overlap. Не взрываемся на 30+ мин встречи.
+    // Старый fastCard оставляем на экране до прихода нового результата —
+    // меньше визуального «прыжка». Очистится либо новым fast, либо setCard.
     const windowed = transcriptText.slice(-8_000);
     const previousAdvice = cardRef.current;
     const previousSpinStage = cardRef.current?.spinStage ?? null;
     const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
     const tFastStart = performance.now();
-    console.log(`[sales-assistant] phase=fast chars=${windowed.length} total=${transcriptText.length}`);
+    console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast start chars=${windowed.length} total=${transcriptText.length}`);
 
     // ── ЭТАП 1: ultra-fast tactical reply ───────────────────────────────
+    const fastTimer = window.setTimeout(() => {
+      if (!isStale()) {
+        console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast timeout ${FAST_TIMEOUT_MS}ms`);
+        controller.abort();
+      }
+    }, FAST_TIMEOUT_MS);
+
+    let fastOk = false;
     try {
       const r = await api.post<{ fast: FastCardShape }>(
         '/api/sales-assistant/analyze-fast',
@@ -349,53 +414,95 @@ export default function SalesAssistant() {
           adviceHistory: adviceHistorySnapshot,
           projectId: projectId || null,
         },
+        { signal: controller.signal },
       );
+      window.clearTimeout(fastTimer);
+      if (isStale()) {
+        console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast stale, ignoring`);
+        return;
+      }
       const latencyMs = Math.round(performance.now() - tFastStart);
-      console.log(`[sales-assistant] phase=fast ok latencyMs=${latencyMs} spinStage=${r.fast.spinStage}`);
+      console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast done latencyMs=${latencyMs} spinStage=${r.fast.spinStage} source=${r.fast.source ?? 'ai'}`);
       setFastCard(r.fast);
       setLastAnalyzeAt(Date.now());
       setPermError(null);
+      fastOk = true;
     } catch (err) {
+      window.clearTimeout(fastTimer);
+      if (isStale()) return;
       const message = err instanceof Error ? err.message : 'unknown';
-      console.warn(`[sales-assistant] phase=fast error message="${message}"`);
-      if (message.includes('workspace_readonly') || message.includes('403')) {
+      const wasAbort = isAbortError(err) || controller.signal.aborted;
+      console.warn(`[sales-assistant] requestId=${myRequestId} phase=fast error message="${message}" abort=${wasAbort}`);
+      if (wasAbort) {
+        // Если abort — значит timeout сработал или пользователь нажал ещё раз.
+        // В первом случае показываем понятную ошибку; во втором новый клик уже
+        // увеличил requestId и эта ветка не выполнится (стreаgs выше).
+        setAiError('Не удалось быстро получить подсказку, попробуйте ещё раз.');
+      } else if (message.includes('workspace_readonly') || message.includes('403')) {
         setAiError('Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.');
       } else {
         setAiError('Не удалось обновить подсказку. Транскрипция продолжается. Попробуйте ещё раз.');
       }
-      analyzingRef.current = false;
-      setAnalyzing(false);
-      setAnalyzePhase(null);
+      setAnalyzePhase('error');
+      if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
       return;
     }
+
+    if (!fastOk || isStale()) return;
 
     // ── ЭТАП 2: полная аналитика (догоняет в фоне) ──────────────────────
     setAnalyzePhase('full');
     const tFullStart = performance.now();
+    const fullTimer = window.setTimeout(() => {
+      if (!isStale()) {
+        console.debug(`[sales-assistant] requestId=${myRequestId} phase=full timeout ${FULL_TIMEOUT_MS}ms`);
+        controller.abort();
+      }
+    }, FULL_TIMEOUT_MS);
+
     try {
-      const r = await api.post<{ card: AssistantCard }>('/api/sales-assistant/analyze', {
-        transcript: windowed,
-        recentContext: recentContext(),
-        previousAdvice,
-        previousSpinStage,
-        adviceHistory: adviceHistorySnapshot,
-        projectId: projectId || null,
-      });
+      const r = await api.post<{ card: AssistantCard }>(
+        '/api/sales-assistant/analyze',
+        {
+          transcript: windowed,
+          recentContext: recentContext(),
+          previousAdvice,
+          previousSpinStage,
+          adviceHistory: adviceHistorySnapshot,
+          projectId: projectId || null,
+        },
+        { signal: controller.signal },
+      );
+      window.clearTimeout(fullTimer);
+      if (isStale()) {
+        console.debug(`[sales-assistant] requestId=${myRequestId} phase=full stale, ignoring`);
+        return;
+      }
       const latencyMs = Math.round(performance.now() - tFullStart);
-      console.log(`[sales-assistant] phase=full ok latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
+      console.debug(`[sales-assistant] requestId=${myRequestId} phase=full done latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
       setCard(r.card);
+      // Полная аналитика свежее fast — снимаем fastCard, чтобы AdviceCard
+      // взяла mainQuestion из card, а не из старого fallback'а.
+      setFastCard(null);
       setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
       setLastAnalyzeAt(Date.now());
       setAiError(null);
+      setAnalyzePhase('idle');
     } catch (err) {
+      window.clearTimeout(fullTimer);
+      if (isStale()) return;
       const message = err instanceof Error ? err.message : 'unknown';
-      console.warn(`[sales-assistant] phase=full error message="${message}"`);
-      // Фаст-карточка уже на экране — мягкая ошибка про аналитику.
-      setAiError('Аналитика временно недоступна. Главный вопрос и запасные показаны. Попробуйте обновить подсказку.');
+      const wasAbort = isAbortError(err) || controller.signal.aborted;
+      console.warn(`[sales-assistant] requestId=${myRequestId} phase=full error message="${message}" abort=${wasAbort}`);
+      // Fast уже на экране — мягкая ошибка про аналитику, без сброса fastCard.
+      if (wasAbort) {
+        setAiError('Полный разбор не обновился, можно повторить.');
+      } else {
+        setAiError('Аналитика временно недоступна. Главный вопрос и запасные показаны. Попробуйте обновить подсказку.');
+      }
+      setAnalyzePhase('error');
     } finally {
-      analyzingRef.current = false;
-      setAnalyzing(false);
-      setAnalyzePhase(null);
+      if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
     }
   }
 
@@ -545,7 +652,7 @@ export default function SalesAssistant() {
     setLastAnalyzeAt(null);
     setAiError(null);
     setFastCard(null);
-    setAnalyzePhase(null);
+    setAnalyzePhase('idle');
   }
 
   function stop() {
@@ -572,7 +679,13 @@ export default function SalesAssistant() {
     setLastAnalyzeAt(null);
     setAiError(null);
     setFastCard(null);
-    setAnalyzePhase(null);
+    setAnalyzePhase('idle');
+    // Hotfix 2026-05-15 — обнуляем sequence-id и abort'им висящий запрос.
+    if (analysisAbortRef.current) {
+      try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
+      analysisAbortRef.current = null;
+    }
+    analysisRequestIdRef.current++;
   }
 
   const wordCount = useMemo(
@@ -645,14 +758,17 @@ export default function SalesAssistant() {
           {listening
             ? <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop}>Остановить</Button>
             : <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start}>Начать прослушивание</Button>}
+          {/* Hotfix 2026-05-15 — кнопка КЛИКАБЕЛЬНА всегда, даже во время
+              активного запроса. Новый клик abort'ит предыдущий и стартует
+              новый. Раньше loading=disabled + analyzingRef.current return
+              приводили к «зависанию», когда сеть/OpenAI отвечали медленно. */}
           <Button
             variant="ai"
             iconLeft={<RefreshCw size={14} />}
             onClick={() => runAnalyze()}
-            loading={analyzing}
             disabled={!hasFinalTranscript}
           >
-            Обновить подсказку
+            {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
           </Button>
           <Button
             variant="primary"
@@ -702,30 +818,36 @@ export default function SalesAssistant() {
             </div>
             <div className="flex items-center gap-3 flex-wrap justify-end">
               <span className="text-[9px] uppercase tracking-[0.12em] text-muted font-semibold">AI-подсказка:</span>
-              {analyzing && analyzePhase === 'fast' && (
+              {analyzePhase === 'fast' && (
                 <StatusBadge tone="ai" dot>AI готовит ответ…</StatusBadge>
               )}
-              {analyzing && analyzePhase === 'full' && (
+              {analyzePhase === 'full' && (
                 <StatusBadge tone="ai" dot>AI анализирует диалог…</StatusBadge>
               )}
-              {!analyzing && !lastAnalyzeAt && (
+              {analyzePhase === 'idle' && !lastAnalyzeAt && (
                 <span className="text-muted">подсказка ещё не запрашивалась</span>
               )}
-              {!analyzing && lastAnalyzeAt && (
+              {analyzePhase === 'idle' && lastAnalyzeAt && (
                 <span className="text-muted">
                   обновлена в <span className="text-secondary">{new Date(lastAnalyzeAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span>
                 </span>
               )}
               {aiError && <StatusBadge tone="warning" dot>{aiError.length > 60 ? 'Не удалось обновить' : aiError}</StatusBadge>}
+              {/* Hotfix 2026-05-15 — бейдж «резервная подсказка», когда быстрый
+                  блок отдал mock из-за пустого AI-ответа. Помогает понять, что
+                  главный вопрос — не реальная аналитика, а fallback. */}
+              {!card && fastCard && (fastCard.source === 'mock' || fastCard.fellBackToMock) && (
+                <StatusBadge tone="warning" dot>резервная подсказка</StatusBadge>
+              )}
               {card && <StatusBadge tone={card.fellBackToMock || card.source === 'mock' ? 'neutral' : 'success'} dot>{providerLabel}</StatusBadge>}
-            {/* Sprint 34Б.2 — источник prompt'а. 'db' = template из суперадминки
+            {/* Sprint 34Б.2 — источник инструкции. 'db' = шаблон из суперадминки
                 (правильно, prompt управляется без deploy). 'fallback' = hardcoded —
                 означает что template отсутствует/выключен и нужно вмешательство admin'а. */}
             {card?.promptSource === 'db' && (
               <StatusBadge tone="info" dot>шаблон из админки</StatusBadge>
             )}
             {card?.promptSource === 'fallback' && (
-              <StatusBadge tone="warning" dot>резервный prompt — проверьте шаблон</StatusBadge>
+              <StatusBadge tone="warning" dot>резервная инструкция — проверьте шаблон</StatusBadge>
             )}
             </div>
           </div>
@@ -847,21 +969,27 @@ function AdviceCard({
 }: {
   card: AssistantCard | null;
   fastCard: FastCardShape | null;
-  analyzePhase: 'fast' | 'full' | null;
+  analyzePhase: 'idle' | 'fast' | 'full' | 'error';
 }) {
-  // Sprint 34В — action zone использует fastCard (приходит первым) если он
-  // свежее card; analytics zone использует card (приходит вторым).
-  const action = fastCard ?? (card ? {
-    mainQuestion: card.mainQuestion,
-    backupQuestions: card.backupQuestions,
-    selfSaleQuestions: card.selfSaleQuestions,
-    spinStage: card.spinStage,
-    provider: card.provider,
-    model: card.model,
-    fellBackToMock: card.fellBackToMock,
-    promptSource: card.promptSource,
-    promptTemplateId: card.promptTemplateId,
-  } : null);
+  // Hotfix 2026-05-15 — приоритезация фикснута. Раньше `fastCard ?? card`
+  // оставлял fast-ответ навсегда поверх card даже после успешного полного
+  // ответа. Теперь: если есть свежий card — берём mainQuestion из него.
+  // fastCard используется как «опережающий» рендер только пока card=null.
+  // Дополнительно: runAnalyze() сейчас setFastCard(null) после успеха full,
+  // так что эта проверка — defense-in-depth.
+  const action = card
+    ? {
+        mainQuestion: card.mainQuestion,
+        backupQuestions: card.backupQuestions,
+        selfSaleQuestions: card.selfSaleQuestions,
+        spinStage: card.spinStage,
+        provider: card.provider,
+        model: card.model,
+        fellBackToMock: card.fellBackToMock,
+        promptSource: card.promptSource,
+        promptTemplateId: card.promptTemplateId,
+      }
+    : fastCard;
   if (!action) return null;
 
   return (
@@ -971,7 +1099,7 @@ function AdviceCard({
           <span className="text-[10px] uppercase tracking-[0.14em] text-muted font-semibold">
             Аналитика разговора
           </span>
-          {!card && analyzePhase && (
+          {!card && (analyzePhase === 'fast' || analyzePhase === 'full') && (
             <StatusBadge tone="ai" dot>AI анализирует диалог…</StatusBadge>
           )}
         </div>
