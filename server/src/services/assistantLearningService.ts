@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 
 // Sprint 44 — agg-функции для learning dashboard.
@@ -41,6 +42,7 @@ export interface SourceMetrics {
   sourceType: string;
   scope: string;
   retrievalCount: number;
+  lastRetrievedAt: Date | null;
   // Counts per outcomeType (sum across all outcomes linked to advice events
   // that retrieved this source).
   outcomes: Partial<Record<OutcomeType, number>>;
@@ -66,6 +68,12 @@ export interface RetrievalHealth {
   emptyRate: number;
   avgSourcesPerAdvice: number;
   avgOutcomesPerAdvice: number;
+}
+
+export interface LearningFilters {
+  since?: Date;
+  projectId?: string;
+  outcomeType?: OutcomeType;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────
@@ -108,9 +116,15 @@ function classify(positiveRate: number, lossRate: number, retrievalCount: number
 //   • since — фильтр по дате (опционально, для «за 7 дней»)
 async function buildSourceMetrics(opts: {
   limit?: number;
-  since?: Date;
+  filters?: LearningFilters;
 } = {}): Promise<SourceMetrics[]> {
-  const outcomeWhere = opts.since ? { createdAt: { gt: opts.since } } : {};
+  const filters = opts.filters ?? {};
+  const outcomeWhere: Prisma.AssistantOutcomeEventWhereInput = {
+    archivedAt: null,
+    ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
+    ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    ...(filters.outcomeType ? { outcomeType: filters.outcomeType } : {}),
+  };
   const outcomes = await prisma.assistantOutcomeEvent.findMany({
     where: outcomeWhere,
     select: {
@@ -149,10 +163,16 @@ async function buildSourceMetrics(opts: {
     // Нет outcome-данных. Возвращаем top retrievalCount источников чтобы
     // дашборд показал хоть что-то осмысленное.
     const sources = await prisma.knowledgeSource.findMany({
-      where: { archivedAt: null, status: 'published' },
+      where: {
+        archivedAt: null,
+        status: 'published',
+        ...(filters.projectId
+          ? { OR: [{ projectId: filters.projectId }, { scope: 'global' }] }
+          : {}),
+      },
       orderBy: { retrievalCount: 'desc' },
       take: opts.limit ?? 50,
-      select: { id: true, title: true, sourceType: true, scope: true, retrievalCount: true },
+      select: { id: true, title: true, sourceType: true, scope: true, retrievalCount: true, lastRetrievedAt: true },
     });
     return sources.map<SourceMetrics>((s) => ({
       sourceId: s.id,
@@ -160,6 +180,7 @@ async function buildSourceMetrics(opts: {
       sourceType: s.sourceType,
       scope: s.scope,
       retrievalCount: s.retrievalCount,
+      lastRetrievedAt: s.lastRetrievedAt,
       outcomes: {},
       outcomesTotal: 0,
       positive: 0,
@@ -171,8 +192,8 @@ async function buildSourceMetrics(opts: {
   }
 
   const sources = await prisma.knowledgeSource.findMany({
-    where: { id: { in: sourceIds } },
-    select: { id: true, title: true, sourceType: true, scope: true, retrievalCount: true },
+    where: { id: { in: sourceIds }, archivedAt: null },
+    select: { id: true, title: true, sourceType: true, scope: true, retrievalCount: true, lastRetrievedAt: true },
   });
 
   const result: SourceMetrics[] = sources.map((s) => {
@@ -191,6 +212,7 @@ async function buildSourceMetrics(opts: {
       sourceType: s.sourceType,
       scope: s.scope,
       retrievalCount: s.retrievalCount,
+      lastRetrievedAt: s.lastRetrievedAt,
       outcomes: counts,
       outcomesTotal: total,
       positive,
@@ -211,13 +233,19 @@ async function buildSourceMetrics(opts: {
 export async function topPerformingSources(
   outcomeTypes: OutcomeType[],
   limit = 10,
+  filters: LearningFilters = {},
 ): Promise<SourceMetrics[]> {
-  const all = await buildSourceMetrics({ limit: 200 });
+  const mergedFilters: LearningFilters = {
+    ...filters,
+    outcomeType: filters.outcomeType,
+  };
+  const all = await buildSourceMetrics({ limit: 200, filters: mergedFilters });
   // Sort by sum of outcome counts in the filter.
+  const activeOutcomeTypes = filters.outcomeType ? [filters.outcomeType] : outcomeTypes;
   return all
     .map((s) => ({
       s,
-      hits: outcomeTypes.reduce((acc, ot) => acc + (s.outcomes[ot] ?? 0), 0),
+      hits: activeOutcomeTypes.reduce((acc, ot) => acc + (s.outcomes[ot] ?? 0), 0),
     }))
     .filter((x) => x.hits > 0)
     .sort((a, b) => b.hits - a.hits)
@@ -225,18 +253,18 @@ export async function topPerformingSources(
     .map((x) => x.s);
 }
 
-export async function weakSources(limit = 10): Promise<SourceMetrics[]> {
-  return topPerformingSources(NEGATIVE_OUTCOMES, limit);
+export async function weakSources(limit = 10, filters: LearningFilters = {}): Promise<SourceMetrics[]> {
+  return topPerformingSources(NEGATIVE_OUTCOMES, limit, filters);
 }
 
-export async function materialTypePerformance(): Promise<Array<{
+export async function materialTypePerformance(filters: LearningFilters = {}): Promise<Array<{
   sourceType: string;
   sourceCount: number;
   outcomes: Partial<Record<OutcomeType, number>>;
   outcomesTotal: number;
   positiveRate: number;
 }>> {
-  const all = await buildSourceMetrics({ limit: 500 });
+  const all = await buildSourceMetrics({ limit: 500, filters });
   const byType: Record<string, {
     sourceCount: number;
     outcomes: Partial<Record<OutcomeType, number>>;
@@ -269,11 +297,23 @@ export async function materialTypePerformance(): Promise<Array<{
   }).sort((a, b) => b.outcomesTotal - a.outcomesTotal);
 }
 
-export async function spinFunnel(): Promise<SpinFunnelStage[]> {
+export async function spinFunnel(filters: LearningFilters = {}): Promise<SpinFunnelStage[]> {
   // Sprint 44 — funnel по SPIN-этапу. AssistantAdviceEvent.spinStage уже хранит
   // на момент совета, какой это был этап. Outcome через FK adviceEventId.
+  const outcomeWhere: Prisma.AssistantOutcomeEventWhereInput = {
+    archivedAt: null,
+    ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
+    ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    ...(filters.outcomeType ? { outcomeType: filters.outcomeType } : {}),
+  };
+  const adviceWhere: Prisma.AssistantAdviceEventWhereInput = {
+    ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
+    ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    ...(filters.outcomeType ? { outcomes: { some: outcomeWhere } } : {}),
+  };
   const advices = await prisma.assistantAdviceEvent.findMany({
-    select: { id: true, spinStage: true, outcomes: { select: { outcomeType: true } } },
+    where: adviceWhere,
+    select: { id: true, spinStage: true, outcomes: { where: outcomeWhere, select: { outcomeType: true } } },
   });
 
   const stages: Array<SpinFunnelStage['stage']> = ['S', 'P', 'I', 'N', 'unknown'];
@@ -305,14 +345,18 @@ export async function spinFunnel(): Promise<SpinFunnelStage[]> {
   return result;
 }
 
-export async function outcomeDistribution(sinceDays?: number): Promise<{
+export async function outcomeDistribution(filters: LearningFilters = {}): Promise<{
   byType: Partial<Record<OutcomeType, number>>;
   total: number;
 }> {
-  const since = sinceDays ? new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000) : undefined;
   const rows = await prisma.assistantOutcomeEvent.groupBy({
     by: ['outcomeType'],
-    where: since ? { createdAt: { gt: since } } : {},
+    where: {
+      archivedAt: null,
+      ...(filters.since ? { createdAt: { gt: filters.since } } : {}),
+      ...(filters.projectId ? { projectId: filters.projectId } : {}),
+      ...(filters.outcomeType ? { outcomeType: filters.outcomeType } : {}),
+    },
     _count: { _all: true },
   });
   const byType: Partial<Record<OutcomeType, number>> = {};
@@ -324,20 +368,37 @@ export async function outcomeDistribution(sinceDays?: number): Promise<{
   return { byType, total };
 }
 
-export async function retrievalHealth(sinceDays = 30): Promise<RetrievalHealth> {
-  const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
+export async function retrievalHealth(filters: LearningFilters = {}): Promise<RetrievalHealth> {
+  const since = filters.since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const retrievalWhere: Prisma.KnowledgeRetrievalEventWhereInput = {
+    createdAt: { gt: since },
+    ...(filters.projectId ? { projectId: filters.projectId } : {}),
+  };
   const totalRetrievals = await prisma.knowledgeRetrievalEvent.count({
-    where: { createdAt: { gt: since } },
+    where: retrievalWhere,
   });
   const emptyRetrievals = await prisma.knowledgeRetrievalEvent.count({
-    where: { createdAt: { gt: since }, sourceCount: 0 },
+    where: { ...retrievalWhere, sourceCount: 0 },
   });
 
   // avg sources per advice — берём только full-phase события (Sprint 43 P0.3
   // fast не пишет advice, так что фильтра не нужно — все advices full).
   const advices = await prisma.assistantAdviceEvent.findMany({
-    where: { createdAt: { gt: since } },
-    select: { usedSourceIdsJson: true, outcomes: { select: { id: true } } },
+    where: {
+      createdAt: { gt: since },
+      ...(filters.projectId ? { projectId: filters.projectId } : {}),
+    },
+    select: {
+      usedSourceIdsJson: true,
+      outcomes: {
+        where: {
+          archivedAt: null,
+          ...(filters.projectId ? { projectId: filters.projectId } : {}),
+          ...(filters.outcomeType ? { outcomeType: filters.outcomeType } : {}),
+        },
+        select: { id: true },
+      },
+    },
   });
   const adviceCount = advices.length;
   let totalSourcesAcross = 0;
@@ -356,7 +417,7 @@ export async function retrievalHealth(sinceDays = 30): Promise<RetrievalHealth> 
 }
 
 // Composite dashboard payload.
-export async function buildDashboardPayload(): Promise<{
+export async function buildDashboardPayload(filters: LearningFilters = {}): Promise<{
   topPerforming: SourceMetrics[];
   weak: SourceMetrics[];
   materialTypes: Awaited<ReturnType<typeof materialTypePerformance>>;
@@ -365,14 +426,62 @@ export async function buildDashboardPayload(): Promise<{
   outcomes30d: Awaited<ReturnType<typeof outcomeDistribution>>;
   retrievalHealth: RetrievalHealth;
 }> {
+  const outcomes30dFilters: LearningFilters = {
+    ...filters,
+    since: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  };
   const [topPerforming, weak, materialTypes, funnel, outcomesAll, outcomes30d, health] = await Promise.all([
-    topPerformingSources(['investment_received', 'next_meeting_booked', 'investor_interested'], 10),
-    weakSources(10),
-    materialTypePerformance(),
-    spinFunnel(),
-    outcomeDistribution(),
-    outcomeDistribution(30),
-    retrievalHealth(30),
+    topPerformingSources(['investment_received', 'next_meeting_booked', 'investor_interested'], 10, filters),
+    weakSources(10, filters),
+    materialTypePerformance(filters),
+    spinFunnel(filters),
+    outcomeDistribution(filters),
+    outcomeDistribution(outcomes30dFilters),
+    retrievalHealth(filters),
   ]);
   return { topPerforming, weak, materialTypes, spinFunnel: funnel, outcomes: outcomesAll, outcomes30d, retrievalHealth: health };
+}
+
+export async function exportLearningCsv(filters: LearningFilters = {}): Promise<string> {
+  const sources = await buildSourceMetrics({ limit: 1000, filters });
+  const header = [
+    'source title',
+    'materialType',
+    'retrievalCount',
+    'follow_up_sent',
+    'next_meeting_booked',
+    'investor_requested_docs',
+    'investor_interested',
+    'investment_received',
+    'lost',
+    'ghosted',
+    'no_decision',
+    'bad_fit',
+    'success rate',
+    'lost rate',
+    'lastRetrievedAt',
+  ];
+  const rows = sources.map((s) => [
+    s.title,
+    s.sourceType,
+    String(s.retrievalCount),
+    String(s.outcomes.follow_up_sent ?? 0),
+    String(s.outcomes.next_meeting_booked ?? 0),
+    String(s.outcomes.investor_requested_docs ?? 0),
+    String(s.outcomes.investor_interested ?? 0),
+    String(s.outcomes.investment_received ?? 0),
+    String(s.outcomes.lost ?? 0),
+    String(s.outcomes.ghosted ?? 0),
+    String(s.outcomes.no_decision ?? 0),
+    String(s.outcomes.bad_fit ?? 0),
+    String(s.successRate),
+    String(s.lossRate),
+    s.lastRetrievedAt ? s.lastRetrievedAt.toISOString() : '',
+  ]);
+  return [header, ...rows].map((row) => row.map(csvEscape).join(',')).join('\n');
+}
+
+function csvEscape(value: string): string {
+  if (!/[",\n\r]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
 }

@@ -15,6 +15,8 @@ import {
 // POST /api/assistant-outcomes — manager/founder фиксирует, что произошло после
 // AI-подсказки (отправил follow-up, инвестор согласился, потеряли).
 // GET  /api/assistant-outcomes — список outcomes (фильтр по projectId).
+// PATCH /api/assistant-outcomes/:id — правка user-facing metadata outcome.
+// DELETE /api/assistant-outcomes/:id — soft-delete через archivedAt.
 //
 // SECURITY:
 //   • INVESTOR заблокирован глобально (requireNotInvestor).
@@ -55,6 +57,74 @@ const createOutcomeSchema = z.object({
   (d) => Boolean(d.projectId || d.salesSessionId || d.conversationAnalysisId || d.adviceEventId),
   { message: 'at_least_one_of_projectId_salesSessionId_conversationAnalysisId_adviceEventId' },
 );
+
+const updateOutcomeSchema = z.object({
+  investorName: z.string().trim().max(200).optional().nullable(),
+  outcomeType: z.enum(OUTCOME_TYPES).optional(),
+  valueRub: z.number().min(0).max(1_000_000_000).optional().nullable(),
+  probabilityAfter: z.number().int().min(0).max(100).optional().nullable(),
+  note: z.string().trim().max(2_000).optional().nullable(),
+}).refine((d) => Object.keys(d).length > 0, { message: 'no_fields_to_update' });
+
+type OutcomeRecord = Awaited<ReturnType<typeof prisma.assistantOutcomeEvent.findUnique>>;
+
+async function assertOutcomeAccess(
+  req: Parameters<typeof getUser>[0],
+  outcomeId: string,
+): Promise<{ ok: true; outcome: NonNullable<OutcomeRecord> } | { ok: false; status: number; error: string }> {
+  const outcome = await prisma.assistantOutcomeEvent.findUnique({ where: { id: outcomeId } });
+  if (!outcome || outcome.archivedAt) return { ok: false, status: 404, error: 'outcome_not_found' };
+
+  const role = getActorRole(req);
+  if (isAdminLike(role)) return { ok: true, outcome };
+
+  const user = getUser(req);
+  if (outcome.projectId) {
+    const ok = await assertProjectOwnership(req, outcome.projectId);
+    if (ok.ok) return { ok: true, outcome };
+    return { ok: false, status: 404, error: 'outcome_not_found' };
+  }
+
+  if (outcome.salesSessionId) {
+    const s = await prisma.salesSession.findUnique({
+      where: { id: outcome.salesSessionId },
+      select: { projectId: true },
+    });
+    if (s?.projectId) {
+      const p = await prisma.project.findUnique({ where: { id: s.projectId }, select: { userId: true } });
+      if (p?.userId === user.id) return { ok: true, outcome };
+    }
+    return { ok: false, status: 404, error: 'outcome_not_found' };
+  }
+
+  if (outcome.conversationAnalysisId) {
+    const c = await prisma.conversationAnalysis.findUnique({
+      where: { id: outcome.conversationAnalysisId },
+      select: { projectId: true },
+    });
+    if (c?.projectId) {
+      const p = await prisma.project.findUnique({ where: { id: c.projectId }, select: { userId: true } });
+      if (p?.userId === user.id) return { ok: true, outcome };
+    }
+    return { ok: false, status: 404, error: 'outcome_not_found' };
+  }
+
+  if (outcome.adviceEventId) {
+    const ev = await prisma.assistantAdviceEvent.findUnique({
+      where: { id: outcome.adviceEventId },
+      select: { actorId: true, projectId: true },
+    });
+    if (ev?.actorId === user.id) return { ok: true, outcome };
+    if (ev?.projectId) {
+      const ok = await assertProjectOwnership(req, ev.projectId);
+      if (ok.ok) return { ok: true, outcome };
+    }
+    return { ok: false, status: 404, error: 'outcome_not_found' };
+  }
+
+  if (outcome.createdById === user.id) return { ok: true, outcome };
+  return { ok: false, status: 404, error: 'outcome_not_found' };
+}
 
 assistantOutcomesRoutes.post('/', async (req, res) => {
   const parsed = createOutcomeSchema.safeParse(req.body);
@@ -162,7 +232,7 @@ assistantOutcomesRoutes.get('/', async (req, res) => {
   const user = getUser(req);
 
   // Founder: only own outcomes (own projects). Admin/manager: всё.
-  const where: { projectId?: string; salesSessionId?: string; project?: { is: { userId: string } } } = {};
+  const where: { projectId?: string; salesSessionId?: string; archivedAt: null } = { archivedAt: null };
   if (projectId) where.projectId = projectId;
   if (sessionId) where.salesSessionId = sessionId;
 
@@ -186,7 +256,7 @@ assistantOutcomesRoutes.get('/', async (req, res) => {
       // забыл передать projectId.
       return res.json({
         outcomes: await prisma.assistantOutcomeEvent.findMany({
-          where: { createdById: user.id },
+          where: { createdById: user.id, archivedAt: null },
           orderBy: { createdAt: 'desc' },
           take: 200,
         }),
@@ -200,4 +270,65 @@ assistantOutcomesRoutes.get('/', async (req, res) => {
     take: 200,
   });
   res.json({ outcomes });
+});
+
+assistantOutcomesRoutes.patch('/:id', async (req, res) => {
+  const parsed = updateOutcomeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const access = await assertOutcomeAccess(req, req.params.id);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+  const d = parsed.data;
+  const outcome = await prisma.assistantOutcomeEvent.update({
+    where: { id: access.outcome.id },
+    data: {
+      ...(Object.prototype.hasOwnProperty.call(d, 'investorName') ? { investorName: d.investorName ?? null } : {}),
+      ...(Object.prototype.hasOwnProperty.call(d, 'outcomeType') ? { outcomeType: d.outcomeType } : {}),
+      ...(Object.prototype.hasOwnProperty.call(d, 'valueRub') ? { valueRub: d.valueRub ?? null } : {}),
+      ...(Object.prototype.hasOwnProperty.call(d, 'probabilityAfter') ? { probabilityAfter: d.probabilityAfter ?? null } : {}),
+      ...(Object.prototype.hasOwnProperty.call(d, 'note') ? { note: d.note ?? null } : {}),
+    },
+  });
+
+  await recordAudit(req, {
+    action: 'assistant_outcome.update',
+    targetType: 'AssistantOutcomeEvent',
+    targetId: outcome.id,
+    payload: {
+      projectId: outcome.projectId,
+      outcomeType: outcome.outcomeType,
+      previousOutcomeType: access.outcome.outcomeType,
+      changedFields: Object.keys(d),
+      hasNote: Boolean(outcome.note),
+      valueRub: outcome.valueRub,
+      probabilityAfter: outcome.probabilityAfter,
+    },
+  });
+
+  res.json({ outcome });
+});
+
+assistantOutcomesRoutes.delete('/:id', async (req, res) => {
+  const access = await assertOutcomeAccess(req, req.params.id);
+  if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+  const outcome = await prisma.assistantOutcomeEvent.update({
+    where: { id: access.outcome.id },
+    data: { archivedAt: new Date() },
+  });
+
+  await recordAudit(req, {
+    action: 'assistant_outcome.archive',
+    targetType: 'AssistantOutcomeEvent',
+    targetId: outcome.id,
+    payload: {
+      projectId: outcome.projectId,
+      outcomeType: outcome.outcomeType,
+      adviceEventId: outcome.adviceEventId,
+      salesSessionId: outcome.salesSessionId,
+    },
+  });
+
+  res.json({ outcome });
 });

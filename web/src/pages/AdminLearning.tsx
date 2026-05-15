@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  ArrowLeft, Sparkles, TrendingUp, TrendingDown, RefreshCw, AlertTriangle,
+  ArrowLeft, Sparkles, TrendingUp, TrendingDown, RefreshCw, AlertTriangle, Download,
   Activity, BookOpen, Target, Gauge,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { Select } from '../components/ui/Input';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
-import { api } from '../lib/api';
+import { api, downloadBlob, type Project } from '../lib/api';
 
 // Sprint 44 — Learning Dashboard.
 //
@@ -100,6 +101,14 @@ interface DashboardPayload {
   };
 }
 
+type PeriodFilter = '7' | '30' | '90' | 'all';
+
+interface LearningFilters {
+  period: PeriodFilter;
+  projectId: string;
+  outcomeType: '' | OutcomeType;
+}
+
 const SPIN_LABELS: Record<SpinFunnelStage['stage'], string> = {
   S: 'С — Ситуация',
   P: 'П — Проблема',
@@ -110,14 +119,25 @@ const SPIN_LABELS: Record<SpinFunnelStage['stage'], string> = {
 
 export default function AdminLearning() {
   const [data, setData] = useState<DashboardPayload | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [filters, setFilters] = useState<LearningFilters>({ period: '30', projectId: '', outcomeType: '' });
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function queryString() {
+    const params = new URLSearchParams();
+    params.set('period', filters.period);
+    if (filters.projectId) params.set('projectId', filters.projectId);
+    if (filters.outcomeType) params.set('outcomeType', filters.outcomeType);
+    return params.toString();
+  }
 
   async function load() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.get<DashboardPayload>('/api/assistant-learning/dashboard');
+      const r = await api.get<DashboardPayload>(`/api/assistant-learning/dashboard?${queryString()}`);
       setData(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'load_failed');
@@ -125,7 +145,24 @@ export default function AdminLearning() {
       setBusy(false);
     }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    api.get<{ projects: Project[] }>('/api/projects')
+      .then((r) => setProjects(r.projects))
+      .catch(() => setProjects([]));
+  }, []);
+  useEffect(() => { load(); }, [filters.period, filters.projectId, filters.outcomeType]);
+
+  async function exportCsv() {
+    setExporting(true);
+    setError(null);
+    try {
+      await downloadBlob(`/api/assistant-learning/export.csv?${queryString()}`, 'assistant-learning.csv');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'export_failed');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <AppLayout
@@ -137,6 +174,9 @@ export default function AdminLearning() {
           </Link>
           <Button variant="ghost" size="sm" iconLeft={<RefreshCw size={14} />} loading={busy} onClick={load}>
             Обновить
+          </Button>
+          <Button variant="secondary" size="sm" iconLeft={<Download size={14} />} loading={exporting} onClick={exportCsv}>
+            Экспорт CSV
           </Button>
         </div>
       }
@@ -150,6 +190,34 @@ export default function AdminLearning() {
           Метрики собираются из цепочки: <code>KnowledgeSource</code> → <code>KnowledgeRetrievalEvent</code> →{' '}
           <code>AssistantAdviceEvent</code> → <code>AssistantOutcomeEvent</code>. Outcome'ы фиксирует команда
           вручную в Sales Assistant. Чем больше outcomes тем точнее цифры — пока KB маленькая, статистика будет шумной.
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-5">
+          <Select
+            label="Период"
+            value={filters.period}
+            onChange={(e) => setFilters((f) => ({ ...f, period: e.target.value as PeriodFilter }))}
+            options={[
+              { value: '7', label: '7 дней' },
+              { value: '30', label: '30 дней' },
+              { value: '90', label: '90 дней' },
+              { value: 'all', label: 'Всё время' },
+            ]}
+          />
+          <Select
+            label="Проект"
+            value={filters.projectId}
+            onChange={(e) => setFilters((f) => ({ ...f, projectId: e.target.value }))}
+            options={[{ value: '', label: 'Все проекты' }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+          />
+          <Select
+            label="Результат"
+            value={filters.outcomeType}
+            onChange={(e) => setFilters((f) => ({ ...f, outcomeType: e.target.value as LearningFilters['outcomeType'] }))}
+            options={[
+              { value: '', label: 'Все результаты' },
+              ...Object.entries(OUTCOME_LABELS).map(([value, label]) => ({ value, label })),
+            ]}
+          />
         </div>
       </Card>
 

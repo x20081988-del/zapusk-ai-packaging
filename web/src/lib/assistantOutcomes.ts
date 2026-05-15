@@ -26,6 +26,7 @@ export interface AssistantOutcome {
   note: string | null;
   createdById: string | null;
   createdAt: string;
+  archivedAt: string | null;
 }
 
 export interface CreateOutcomeInput {
@@ -50,6 +51,19 @@ export function listOutcomes(filters: { projectId?: string; salesSessionId?: str
   if (filters.salesSessionId) params.set('salesSessionId', filters.salesSessionId);
   const qs = params.toString();
   return api.get<{ outcomes: AssistantOutcome[] }>(`/api/assistant-outcomes${qs ? `?${qs}` : ''}`);
+}
+
+export type UpdateOutcomeInput = Partial<Pick<
+  CreateOutcomeInput,
+  'investorName' | 'outcomeType' | 'valueRub' | 'probabilityAfter' | 'note'
+>>;
+
+export function updateOutcome(id: string, input: UpdateOutcomeInput) {
+  return api.patch<{ outcome: AssistantOutcome }>(`/api/assistant-outcomes/${id}`, input);
+}
+
+export function archiveOutcome(id: string) {
+  return api.delete<{ outcome: AssistantOutcome }>(`/api/assistant-outcomes/${id}`);
 }
 
 // Sprint 43 — лейблы для UI. Order = порядок отображения кнопок.

@@ -767,6 +767,7 @@ model AssistantOutcomeEvent {
 
   createdById            String?
   createdAt              DateTime @default(now())
+  archivedAt             DateTime?
 
   @@index([adviceEventId, createdAt])
   @@index([projectId, createdAt])
@@ -774,4 +775,5 @@ model AssistantOutcomeEvent {
   @@index([conversationAnalysisId, createdAt])
   @@index([outcomeType, createdAt])
   @@index([createdById, createdAt])
+  @@index([archivedAt])
 }
