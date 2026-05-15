@@ -168,6 +168,9 @@ export interface AssistantCard {
   // Sprint 40 — meta для audit-write (route пишет, не сам сервис, чтобы
   // recordAudit имел доступ к Request).
   knowledgeRetrievalMeta: KnowledgeRetrievalMeta;
+  // Sprint 48A — детерминированные сигналы контекста, которые сервер
+  // распознал до/после AI-ответа и использовал для safety-override карточки.
+  contextSignals?: Array<'investor_requests_project_details'>;
 }
 
 type CoreCard = Omit<AssistantCard, 'source' | 'provider' | 'model' | 'fellBackToMock' | 'promptSource' | 'promptTemplateId' | 'usedKnowledgeSources' | 'knowledgeRetrievalMeta'>;
@@ -237,11 +240,129 @@ const SALES_ASSISTANT_RESPONSE_SCHEMA = {
   ],
 } satisfies Record<string, unknown>;
 
+const PROJECT_DETAILS_TRANSITION_PHRASE = 'Да, понял, давайте тогда коротко по сути проекта...';
+
+interface ProjectDetailsSignal {
+  active: boolean;
+  count: number;
+  labels: string[];
+  projectName: string | null;
+}
+
+function detectProjectDetailsRequest(input: AnalyzeInput): ProjectDetailsSignal {
+  const text = `${input.recentContext ?? ''}\n${input.transcript}`.toLowerCase();
+  const patterns: Array<{ label: string; re: RegExp }> = [
+    { label: 'расскажите про проект', re: /расскаж(?:ите|и|ем|у|ать)?[\s\S]{0,80}?про\s+проект/giu },
+    { label: 'дайте конкретику', re: /дайте\s+конкретик[уы]/giu },
+    { label: 'мне нужна информация', re: /мне\s+нужн[аы]?\s+информац(?:ия|ии|ию)/giu },
+    { label: 'говорить про проект', re: /говор(?:ить|ите|им|ю)[\s\S]{0,80}?про\s+проект/giu },
+    { label: 'что за проект', re: /что\s+за\s+проект/giu },
+    { label: 'покажите проект', re: /покаж(?:ите|и)[\s\S]{0,60}?проект/giu },
+    { label: 'проект Delphi / DLFY', re: /проект\s+(?:delphi|dlfy|делфи|дэлфи|длфи)/giu },
+  ];
+
+  let count = 0;
+  const labels = new Set<string>();
+  for (const pattern of patterns) {
+    pattern.re.lastIndex = 0;
+    const matches = text.match(pattern.re);
+    if (matches?.length) {
+      count += matches.length;
+      labels.add(pattern.label);
+    }
+  }
+
+  const projectNameMatch = text.match(/проект\s+(delphi|dlfy|делфи|дэлфи|длфи)/iu);
+  const projectName = projectNameMatch?.[1]
+    ? /dlfy|длфи/iu.test(projectNameMatch[1])
+      ? 'DLFY'
+      : 'Delphi'
+    : null;
+
+  return {
+    active: count >= 2,
+    count,
+    labels: Array.from(labels),
+    projectName,
+  };
+}
+
+function formatProjectDetailsPromptRule(signal: ProjectDetailsSignal): string {
+  if (!signal.active) {
+    return [
+      'Правило контекста:',
+      `Если инвестор 2+ раза просит конкретику по проекту, презентацию, детали, цифры или говорит «расскажите про проект», НЕ продолжай абстрактный СПИН.`,
+      `В этом случае признай запрос, перейди к короткому мини-питчу проекта фразой «${PROJECT_DETAILS_TRANSITION_PHRASE}», затем верни контроль уточняющим вопросом.`,
+    ].join('\n');
+  }
+
+  return [
+    'ВАЖНЫЙ ДЕТЕКТОР КОНТЕКСТА: investor_requests_project_details.',
+    `Сработал сигнал: инвестор ${signal.count} раз просит конкретику по проекту${signal.projectName ? ` ${signal.projectName}` : ''}.`,
+    `Нельзя продолжать абстрактный СПИН. Сейчас нужно признать запрос, перейти к краткому питчу проекта и начать mainQuestion с: «${PROJECT_DETAILS_TRANSITION_PHRASE}».`,
+    'В whatNotToDo обязательно добавь: «Не продолжать задавать общие вопросы, инвестор уже просит конкретику».',
+  ].join('\n');
+}
+
+function applyProjectDetailsOverride(card: CoreCard, signal: ProjectDetailsSignal): CoreCard {
+  if (!signal.active) return card;
+
+  const projectLabel = signal.projectName ? ` ${signal.projectName}` : '';
+  const whatNotToDo = [
+    'Не продолжать задавать общие вопросы, инвестор уже просит конкретику.',
+    ...card.whatNotToDo.filter((line) => !/общие вопросы|конкретик|спин/i.test(line)),
+  ].slice(0, 4);
+
+  return {
+    ...card,
+    situation: `Инвестор несколько раз просит конкретику по проекту${projectLabel}. Сейчас он ждёт не новый общий вопрос, а короткое объяснение сути, цифр и условий.`,
+    riskOrMissed: 'Если продолжить задавать абстрактные СПИН-вопросы, разговор будет выглядеть как уход от прямого запроса инвестора.',
+    whatToDo: [
+      'Признать запрос и перейти к мини-питчу проекта: что это, кому нужно, экономика, условия участия.',
+      'Через 30-45 секунд вернуть контроль вопросом: что инвестору проверить первым — модель дохода, цифры или условия входа?',
+    ],
+    whatNotToDo,
+    mainQuestion: PROJECT_DETAILS_TRANSITION_PHRASE,
+    backupQuestions: [
+      'Если коротко по проекту: сначала показать модель дохода, рынок или условия входа?',
+      'Что вам важнее услышать первым: экономику проекта, команду или механику сделки?',
+      ...card.backupQuestions.filter((q) => !/портфел|горизонт|интерес/i.test(q)),
+    ].slice(0, 4),
+    selfSaleQuestions: [],
+    miniPitch: card.miniPitch ?? 'Коротко: объясните проект через 3 опоры — какую задачу решает, на чём зарабатывает, какие условия участия и следующий проверочный шаг для инвестора.',
+    conversationObjective: 'Ответить на прямой запрос инвестора конкретикой по проекту и вернуть управляемый диалог.',
+    conversationDirection: 'Мини-питч проекта → уточнить, какой блок инвестор хочет проверить глубже.',
+    dealNextStep: card.dealNextStep ?? 'После мини-питча отправить материалы или назначить созвон по цифрам.',
+    recommendation: 'Перейти к короткому мини-питчу проекта и затем вернуть контроль вопросом.',
+    suggestedPhrase: PROJECT_DETAILS_TRANSITION_PHRASE,
+    nextStep: card.nextStep ?? 'Дать конкретику по проекту и согласовать, какие материалы отправить.',
+    confidence: Math.max(card.confidence, 82),
+    contextSignals: ['investor_requests_project_details'],
+  };
+}
+
+function applyProjectDetailsOverrideFast(card: FastAssistantCard, signal: ProjectDetailsSignal): FastAssistantCard {
+  if (!signal.active) return card;
+
+  return {
+    ...card,
+    mainQuestion: PROJECT_DETAILS_TRANSITION_PHRASE,
+    backupQuestions: [
+      'Что вам важнее услышать первым: экономику проекта, команду или условия входа?',
+      'После короткого обзора вам удобнее посмотреть презентацию или сразу пройтись по цифрам?',
+    ],
+    selfSaleQuestions: [],
+    spinStage: 'S',
+    contextSignals: ['investor_requests_project_details'],
+  };
+}
+
 export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCard> {
   const projectContext = await loadProjectContext(input.projectId ?? undefined);
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const adviceHistory = formatAdviceHistory(input.adviceHistory);
+  const projectDetailsSignal = detectProjectDetailsRequest(input);
   // Sprint 34Б.2 — system-prompt теперь из template `sales_gpt`. Изменения
   // в админке отражаются на следующем запросе AI, без deploy.
   const promptDecision = await resolveSalesPrompt();
@@ -302,6 +423,8 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     '',
     `Полный transcript встречи на текущий момент:\n${input.transcript}`,
     '',
+    formatProjectDetailsPromptRule(projectDetailsSignal),
+    '',
     [
       'Задача:',
       '1. Определи spinStage и какие spinGaps ещё открыты в разговоре.',
@@ -341,7 +464,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   }
 
   if (!parsed || !parsed.situation || !parsed.mainQuestion) {
-    const card = heuristicCard(input);
+    const card = applyProjectDetailsOverride(heuristicCard(input), projectDetailsSignal);
     return {
       ...card,
       source: 'mock',
@@ -413,9 +536,10 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     suggestedPhrase: mainQuestion,
     nextStep: nullableString(parsed.dealNextStep),
   };
+  const finalCard = applyProjectDetailsOverride(card, projectDetailsSignal);
 
   return {
-    ...card,
+    ...finalCard,
     source: ai.provider === 'mock' ? 'mock' : 'ai',
     provider: ai.provider,
     model: ai.model,
@@ -447,6 +571,7 @@ export interface FastAssistantCard {
   usedKnowledgeSources: UsedKnowledgeSource[];
   // Sprint 40 — meta для retrieval audit-event.
   knowledgeRetrievalMeta: KnowledgeRetrievalMeta;
+  contextSignals?: Array<'investor_requests_project_details'>;
 }
 
 const SALES_FAST_RESPONSE_SCHEMA = {
@@ -465,6 +590,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const projectContext = await loadProjectContext(input.projectId ?? undefined);
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
+  const projectDetailsSignal = detectProjectDetailsRequest(input);
   const promptDecision = await resolveSalesPrompt();
   console.log(`[sales-assistant:fast] prompt source=${promptDecision.source}`);
 
@@ -509,6 +635,8 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     '',
     `Последний контекст разговора:\n${recentContext}`,
     '',
+    formatProjectDetailsPromptRule(projectDetailsSignal),
+    '',
     [
       'Задача (только 4 поля):',
       '1. spinStage — текущий этап (S/P/I/N).',
@@ -546,7 +674,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const selfSaleQuestions = arrStrings(parsed?.selfSaleQuestions, 4);
   const stage = normalizeStage(parsed?.spinStage);
 
-  return {
+  return applyProjectDetailsOverrideFast({
     mainQuestion,
     backupQuestions: backupQuestions.length ? backupQuestions : ['Что для вас сейчас приоритет в инвестициях?'],
     selfSaleQuestions,
@@ -559,7 +687,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     promptTemplateId: promptDecision.templateId,
     usedKnowledgeSources: knowledgeForUi,
     knowledgeRetrievalMeta,
-  };
+  }, projectDetailsSignal);
 }
 
 async function loadProjectContext(projectId?: string): Promise<string> {

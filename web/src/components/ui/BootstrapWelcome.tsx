@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Sparkles, Compass, ShieldCheck, Presentation } from 'lucide-react';
 import { Card, CardHeader } from './Card';
 import { Button } from './Button';
@@ -11,6 +11,7 @@ import { BOOTSTRAP_PROJECT_JOURNEY } from '../../lib/projectJourney';
 // остальные locked). Никаких fake AI-лидов, AEO-баннеров или готовых
 // материалов — это пустое начало, не витрина.
 export function BootstrapWelcome({ userName }: { userName?: string | null }) {
+  const navigate = useNavigate();
   const greeting = userName ? `${userName}, добро пожаловать в ZAPUSK AI` : 'Добро пожаловать в ZAPUSK AI';
   return (
     <div className="space-y-6">
@@ -32,11 +33,9 @@ export function BootstrapWelcome({ userName }: { userName?: string | null }) {
               На каждом этапе с вами рядом — персональный менеджер и AI-инструменты ZAPUSK.
             </p>
             <div className="flex flex-wrap gap-2 mt-6">
-              <Link to="/projects/new">
-                <Button size="lg" iconLeft={<Plus size={16} strokeWidth={2.5} />}>
-                  Создать проект
-                </Button>
-              </Link>
+              <Button size="lg" iconLeft={<Plus size={16} strokeWidth={2.5} />} onClick={() => navigate('/projects/new')}>
+                Создать проект
+              </Button>
               <Link to="/demo">
                 <Button size="lg" variant="secondary" iconLeft={<Presentation size={16} />}>
                   Посмотреть демо-кабинет
@@ -65,9 +64,9 @@ export function BootstrapWelcome({ userName }: { userName?: string | null }) {
             title="Создайте проект"
             text="Дайте проекту имя — это займёт меньше минуты."
             cta={
-              <Link to="/projects/new">
-                <Button size="sm" iconLeft={<Plus size={13} />}>Создать проект</Button>
-              </Link>
+              <Button size="sm" iconLeft={<Plus size={13} />} onClick={() => navigate('/projects/new')}>
+                Создать проект
+              </Button>
             }
           />
           <NextStep

@@ -427,7 +427,7 @@ function buildMeetingsStage(ctx: Context): Stage {
       {
         id: 'objections',
         title: 'AI-разбор переговоров',
-        hint: 'Транскрипт, score, рекомендации после каждого звонка.',
+        hint: 'Транскрипт, оценка и рекомендации после каждого звонка.',
         by: 'AI',
         status: ctx.hasMeetings ? 'в_работе' : 'не_начато',
       },

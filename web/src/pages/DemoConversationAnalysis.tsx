@@ -38,7 +38,7 @@ export default function DemoConversationAnalysis() {
               </h2>
               <p className="text-xs text-secondary mt-1 leading-relaxed max-w-3xl">
                 Это показательный кейс. Загрузите свой звонок в разделе AI-разбор переговоров —
-                получите такой же отчёт со score, эмоциональным контекстом и рекомендациями
+                получите такой же отчёт с оценкой, эмоциональным контекстом и рекомендациями
                 для следующего шага.
               </p>
             </div>
@@ -66,7 +66,7 @@ export default function DemoConversationAnalysis() {
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <ScoreCard label="Общий score" value="87" tone="success" />
+                <ScoreCard label="Общая оценка" value="87" tone="success" />
                 <ScoreCard label="Понимание" value="92" tone="ai" />
                 <ScoreCard label="Возражения" value="83" tone="zapusk" />
                 <ScoreCard label="Решение" value="78" tone="ai" />
@@ -126,7 +126,7 @@ export default function DemoConversationAnalysis() {
               <CardHeader title="Что ещё умеет AI-разбор" />
               <div className="space-y-2 text-xs text-secondary">
                 <Feature icon={<MessageSquare size={13} />} text="Извлекает возражения и ответы из транскрипта" />
-                <Feature icon={<Brain size={13} />} text="Считает score по 6 параметрам разговора" />
+                <Feature icon={<Brain size={13} />} text="Считает оценку по 6 параметрам разговора" />
                 <Feature icon={<FileText size={13} />} text="Сохраняет историю разборов в кабинете" />
               </div>
             </Card>

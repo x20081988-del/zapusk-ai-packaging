@@ -37,9 +37,13 @@ conversationAnalysisRoutes.post('/', upload.single('file'), async (req, res) => 
       return res.status(400).json({ error: 'no_input', message: 'Прикрепите файл, вставьте transcript или укажите audioUrl.' });
     }
 
-    // Sprint 35 P0.3 — founder может анализировать только свои проекты.
-    const ownership = await assertProjectOwnership(req, projectId);
-    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+    // Sprint 48A — projectId опционален. Если проект выбран, проверяем
+    // владение; если нет — сохраняем разбор как личный createdById текущего
+    // пользователя и не требуем project_required.
+    if (projectId) {
+      const ownership = await assertProjectOwnership(req, projectId);
+      if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+    }
 
     const result = await ingestConversation({
       audioBuffer: file?.buffer ?? null,
@@ -50,6 +54,7 @@ conversationAnalysisRoutes.post('/', upload.single('file'), async (req, res) => 
       pastedTranscript: transcript,
       projectId,
       investorName,
+      createdById: getUser(req).id,
     });
 
     // Sprint 40 P0.3 — auto-capture candidate в KB. Fire-and-forget.
@@ -81,15 +86,19 @@ conversationAnalysisRoutes.post('/text', async (req, res) => {
   const parsed = analyzeOnlySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  // Sprint 35 P0.3 — founder может анализировать только свои проекты.
-  const ownership = await assertProjectOwnership(req, parsed.data.projectId ?? null);
-  if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  // Sprint 48A — projectId опционален. Без проекта анализируем только transcript
+  // и привязываем запись к текущему пользователю через createdById.
+  if (parsed.data.projectId) {
+    const ownership = await assertProjectOwnership(req, parsed.data.projectId);
+    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  }
 
   try {
     const result = await ingestConversation({
       pastedTranscript: parsed.data.transcript,
       projectId: parsed.data.projectId ?? null,
       investorName: parsed.data.investorName ?? null,
+      createdById: getUser(req).id,
     });
     // Sprint 40 P0.3 — auto-capture для /text endpoint тоже.
     captureCandidateFromConversationAnalysis((result.row as { id: string }).id, getUser(req).id)
@@ -119,12 +128,16 @@ conversationAnalysisRoutes.get('/:id', async (req, res) => {
   const row = await getAnalysis(req.params.id);
   if (!row) return res.status(404).json({ error: 'not_found' });
 
-  // Sprint 35 P0.3 — founder может открыть запись только если она привязана к
-  // его проекту. 404 чтобы не палить факт существования чужой записи.
+  // Sprint 48A — founder может открыть запись своего проекта или собственный
+  // projectless-разбор (createdById). 404 чтобы не палить чужие записи.
   const role = getActorRole(req);
   if (!isAdminLike(role)) {
-    const ownership = await assertProjectOwnership(req, row.projectId ?? null);
-    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    const userId = getUser(req).id;
+    if (row.createdById !== userId) {
+      if (!row.projectId) return res.status(404).json({ error: 'not_found' });
+      const ownership = await assertProjectOwnership(req, row.projectId);
+      if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    }
   }
 
   // Sprint 37 P0.3 — audit на чтение анализа. Содержит transcript разговора
@@ -150,11 +163,16 @@ conversationAnalysisRoutes.delete('/:id', async (req, res) => {
   const existing = await prisma.conversationAnalysis.findUnique({ where: { id: req.params.id } });
   if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
 
-  // Sprint 35 P0.3 — founder может архивировать только свою запись.
+  // Sprint 48A — founder может архивировать свой projectless-разбор или запись
+  // своего проекта.
   const role = getActorRole(req);
   if (!isAdminLike(role)) {
-    const ownership = await assertProjectOwnership(req, existing.projectId ?? null);
-    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    const userId = getUser(req).id;
+    if (existing.createdById !== userId) {
+      if (!existing.projectId) return res.status(404).json({ error: 'not_found' });
+      const ownership = await assertProjectOwnership(req, existing.projectId);
+      if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    }
   }
 
   await prisma.conversationAnalysis.update({

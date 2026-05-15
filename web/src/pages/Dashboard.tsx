@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Sparkles, TrendingUp, FolderOpen, Radio, PhoneCall, MessageSquare, UserCheck, ShieldCheck } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProjectCard } from '../components/ui/ProjectCard';
@@ -14,6 +14,7 @@ import { isLegacyDemoProject } from '../lib/demoMaterials';
 import { getAuth } from '../lib/auth';
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const auth = getAuth();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const role = auth?.role ?? 'FOUNDER';
@@ -52,11 +53,9 @@ export default function Dashboard() {
         // Sprint 24: «Новый проект» виден только в активном кабинете. Demo —
         // только просмотр, никаких CTA на создание.
         !isDemoMode ? (
-          <Link to="/projects/new">
-            <Button size="md" iconLeft={<Plus size={14} strokeWidth={2.5} />}>
-              Новый проект
-            </Button>
-          </Link>
+          <Button size="md" iconLeft={<Plus size={14} strokeWidth={2.5} />} onClick={() => navigate('/projects/new')}>
+            Новый проект
+          </Button>
         ) : (
           <a href="mailto:hello@zapusk.tech?subject=Получить%20рабочий%20кабинет%20ZAPUSK%20AI">
             <Button size="md" variant="primary">
@@ -165,9 +164,9 @@ export default function Dashboard() {
               title="Пока нет проектов"
               description="Создайте первый проект, загрузите материалы — и система соберёт «бизнес на салфетке» за минуту."
               action={
-                <Link to="/projects/new">
-                  <Button iconLeft={<Plus size={14} strokeWidth={2.5} />}>Создать проект</Button>
-                </Link>
+                <Button iconLeft={<Plus size={14} strokeWidth={2.5} />} onClick={() => navigate('/projects/new')}>
+                  Создать проект
+                </Button>
               }
             />
           )}

@@ -1,5 +1,4 @@
 import { api } from './api';
-import { getAuth } from './auth';
 
 export type Sentiment = 'positive' | 'neutral' | 'negative';
 export type SpinStage = 'S' | 'P' | 'I' | 'N';
@@ -65,26 +64,11 @@ export interface AnalyzeResult {
   row: ConversationAnalysisRow;
 }
 
-// Multipart upload — для аудио. Использует тот же x-user-email header что и
-// остальной API (см. lib/api.ts).
+// Multipart upload — для аудио. Использует общий api.upload, поэтому в prod
+// уходит Authorization: Bearer <token>. Content-Type вручную не ставим:
+// браузер сам добавляет multipart boundary.
 export async function analyzeConversationUpload(form: FormData): Promise<AnalyzeResult> {
-  const base = import.meta.env.VITE_API_BASE_URL ?? '';
-  const auth = getAuth();
-  const headers: Record<string, string> = {};
-  if (auth) {
-    headers['x-user-email'] = auth.email;
-    headers['x-user-role'] = auth.role;
-  }
-  const res = await fetch(`${base}/api/conversation-analysis`, {
-    method: 'POST',
-    body: form,
-    headers,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}: ${text}`);
-  }
-  return res.json() as Promise<AnalyzeResult>;
+  return api.upload<AnalyzeResult>('/api/conversation-analysis', form);
 }
 
 // Text-only — paste transcript или audio URL.

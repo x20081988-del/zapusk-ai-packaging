@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Clock, Mail, MessageCircle, Phone, Send, UserRound, ArrowRight, ChevronRight } from 'lucide-react';
+import { CheckCircle2, Clock, Mail, MessageCircle, Phone, UserRound, ArrowRight, ChevronRight } from 'lucide-react';
 import { Card, CardHeader } from './Card';
 import { Button } from './Button';
 import { StatusBadge } from './StatusBadge';
@@ -117,10 +117,6 @@ export function PersonalManagerCard({
             <Contact icon={<MessageCircle size={13} />} label="Telegram" value={PERSONAL_MANAGER.telegram} />
             <Contact icon={<Mail size={13} />} label="Email" value={PERSONAL_MANAGER.email} />
             <Contact icon={<Phone size={13} />} label="Телефон" value={PERSONAL_MANAGER.phone} />
-          </div>
-          <div className="flex flex-wrap gap-2 mt-4">
-            <Button size="sm" iconLeft={<Send size={13} />}>Задать вопрос менеджеру</Button>
-            <Button size="sm" variant="secondary" iconLeft={<MessageCircle size={13} />}>Запросить помощь по этапу</Button>
           </div>
         </div>
       </div>

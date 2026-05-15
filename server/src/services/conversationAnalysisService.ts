@@ -57,6 +57,7 @@ export interface IngestInput {
   pastedTranscript?: string | null;
   projectId?: string | null;
   investorName?: string | null;
+  createdById?: string | null;
 }
 
 const ANALYSIS_SCHEMA = {
@@ -241,6 +242,7 @@ export async function ingestConversation(input: IngestInput) {
   const row = await prisma.conversationAnalysis.create({
     data: {
       projectId: input.projectId ?? null,
+      createdById: input.createdById ?? null,
       investorName: input.investorName ?? null,
       source: input.audioBuffer ? 'audio_upload' : input.audioUrl ? 'url' : 'paste',
       originalFileName: input.originalFileName ?? null,
@@ -276,7 +278,12 @@ export async function listAnalyses(filters: {
       archivedAt: null,
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
       ...(filters.ownerUserId
-        ? { project: { is: { userId: filters.ownerUserId } } }
+        ? {
+            OR: [
+              { createdById: filters.ownerUserId },
+              { project: { is: { userId: filters.ownerUserId } } },
+            ],
+          }
         : {}),
     },
     orderBy: { createdAt: 'desc' },

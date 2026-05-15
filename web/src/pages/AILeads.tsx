@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -153,6 +153,9 @@ export default function AILeads() {
   const [loading, setLoading] = useState(true);
   const [launched, setLaunched] = useState(false);
   const [briefReply, setBriefReply] = useState('');
+  const [briefingNotice, setBriefingNotice] = useState<string | null>(null);
+  const [uploadingBriefingFile, setUploadingBriefingFile] = useState(false);
+  const briefingFileInputRef = useRef<HTMLInputElement>(null);
   const role = getAuth()?.role ?? 'client';
 
   useEffect(() => {
@@ -176,18 +179,37 @@ export default function AILeads() {
   }, [selectedProjectId]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
+  const activeProjectId = dashboard?.projectId ?? selectedProjectId ?? projects[0]?.id ?? '';
   // Sprint 14: state-aware CTA для брифа. Если выбран проект — ведём в его
   // бриф. Если проектов нет — в New Project. Если есть, но дашборд ещё без
   // projectId — мягко в New Project (это редкий fallback на серверной стороне).
-  const briefHref = dashboard?.projectId
-    ? `/projects/${dashboard.projectId}/brief`
-    : projects[0]?.id
-      ? `/projects/${projects[0].id}/brief`
-      : '/projects/new';
-  const interviewHref = dashboard?.projectId ? `/projects/${dashboard.projectId}/interview` : '/projects/new';
+  const briefHref = activeProjectId ? `/projects/${activeProjectId}/brief` : '/projects/new';
+  const interviewHref = activeProjectId ? `/projects/${activeProjectId}/interview` : '';
   // Sprint 14: единый source-of-truth — статус брифа выбранного проекта.
   const briefStatus = selectedProject ? getBriefStatus(selectedProject) : null;
   const briefCtaLabel = briefStatus?.cta ?? 'Заполнить бриф';
+
+  async function uploadBriefingFiles(files: FileList | null) {
+    if (!activeProjectId) {
+      setBriefingNotice('Сначала создайте проект, затем можно будет прикрепить материалы для интервью.');
+      return;
+    }
+    if (!files?.length) return;
+    setUploadingBriefingFile(true);
+    setBriefingNotice(null);
+    try {
+      const form = new FormData();
+      Array.from(files).forEach((file) => form.append('files', file));
+      form.append('category', 'reference');
+      await api.upload(`/api/files/${activeProjectId}/upload`, form);
+      setBriefingNotice('Файл прикреплён к проекту. AI сможет использовать его при подготовке брифа.');
+    } catch {
+      setBriefingNotice('Не удалось прикрепить файл. Обновите страницу или попробуйте загрузить файл на странице проекта.');
+    } finally {
+      setUploadingBriefingFile(false);
+      if (briefingFileInputRef.current) briefingFileInputRef.current.value = '';
+    }
+  }
 
   return (
     <AppLayout title="AI-лиды инвесторов">
@@ -247,6 +269,24 @@ export default function AILeads() {
                   reply={briefReply}
                   onReply={setBriefReply}
                   interviewHref={interviewHref}
+                  hasProject={Boolean(activeProjectId)}
+                  notice={briefingNotice}
+                  uploading={uploadingBriefingFile}
+                  onOpenInterviewFallback={() => setBriefingNotice('Сначала создайте проект, затем откроется интервью.')}
+                  onAttachClick={() => {
+                    if (!activeProjectId) {
+                      setBriefingNotice('Сначала создайте проект, затем можно будет прикрепить файл.');
+                      return;
+                    }
+                    briefingFileInputRef.current?.click();
+                  }}
+                />
+                <input
+                  ref={briefingFileInputRef}
+                  type="file"
+                  className="hidden"
+                  multiple
+                  onChange={(e) => uploadBriefingFiles(e.target.files)}
                 />
 
                 {dashboard.readiness.criticalReady && (
@@ -462,11 +502,21 @@ function BriefingAnalyzer({
   reply,
   onReply,
   interviewHref,
+  hasProject,
+  notice,
+  uploading,
+  onOpenInterviewFallback,
+  onAttachClick,
 }: {
   dashboard: AILeadsDashboard;
   reply: string;
   onReply: (value: string) => void;
   interviewHref: string;
+  hasProject: boolean;
+  notice: string | null;
+  uploading: boolean;
+  onOpenInterviewFallback: () => void;
+  onAttachClick: () => void;
 }) {
   return (
     <Card padded>
@@ -558,11 +608,24 @@ function BriefingAnalyzer({
           />
           <div className="flex flex-wrap gap-2 mt-3">
             <VoiceInputButton label="Ответить голосом" onTranscript={(text) => onReply(reply.trim() ? `${reply.trim()} ${text}` : text)} />
-            <Button size="sm" variant="ghost" iconLeft={<Upload size={12} />}>Прикрепить файл</Button>
-            <Link to={interviewHref}>
-              <Button size="sm" variant="secondary" iconLeft={<Send size={12} />}>Открыть интервью</Button>
-            </Link>
+            <Button size="sm" variant="ghost" iconLeft={<Upload size={12} />} onClick={onAttachClick} loading={uploading}>
+              Прикрепить файл
+            </Button>
+            {hasProject ? (
+              <Link to={interviewHref}>
+                <Button size="sm" variant="secondary" iconLeft={<Send size={12} />}>Открыть интервью</Button>
+              </Link>
+            ) : (
+              <Button size="sm" variant="secondary" iconLeft={<Send size={12} />} onClick={onOpenInterviewFallback}>
+                Открыть интервью
+              </Button>
+            )}
           </div>
+          {notice && (
+            <div className="mt-3 rounded-md border border-warning/25 bg-warning/8 px-3 py-2 text-xs text-warning">
+              {notice}
+            </div>
+          )}
         </div>
       </div>
     </Card>

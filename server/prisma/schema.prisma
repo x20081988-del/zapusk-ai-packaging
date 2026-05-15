@@ -373,6 +373,10 @@ model ConversationAnalysis {
   id                    String   @id @default(cuid())
   projectId             String?
   project               Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  // Sprint 48A — owner for projectless conversation analyses. Without this,
+  // "Без привязки к проекту" could only be safely visible to admins because
+  // ownership used to flow only through project.userId.
+  createdById           String?
 
   investorName          String?
   source                String   @default("audio_upload")
@@ -403,6 +407,7 @@ model ConversationAnalysis {
   updatedAt             DateTime @updatedAt
 
   @@index([projectId])
+  @@index([createdById])
   @@index([createdAt])
 }
 

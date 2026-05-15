@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   UploadCloud, FileAudio, Link2, ClipboardPaste, Sparkles, AlertTriangle, CheckCircle2,
-  XCircle, MessageSquare, Wand2, Copy, Check, History, Headphones,
+  XCircle, MessageSquare, Wand2, Copy, Check, History, Headphones, FileText,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -37,6 +37,7 @@ export default function ConversationAnalysis() {
   const [history, setHistory] = useState<ConversationAnalysisRow[]>([]);
   const [drag, setDrag] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const transcriptFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
@@ -77,9 +78,29 @@ export default function ConversationAnalysis() {
       setResult(res.analysis);
       refreshHistory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'analysis_failed');
+      setError(humanizeAnalysisError(err));
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function loadTranscriptTxt(file: File | null | undefined) {
+    if (!file) return;
+    const isTxt = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt');
+    if (!isTxt) {
+      setError('Можно загрузить только текстовый .txt файл с транскриптом.');
+      if (transcriptFileInputRef.current) transcriptFileInputRef.current.value = '';
+      return;
+    }
+    try {
+      const text = await file.text();
+      setTranscriptText(text);
+      setMode('paste');
+      setError(null);
+    } catch {
+      setError('Не удалось прочитать файл. Проверьте, что это текстовый файл в UTF-8.');
+    } finally {
+      if (transcriptFileInputRef.current) transcriptFileInputRef.current.value = '';
     }
   }
 
@@ -110,7 +131,7 @@ export default function ConversationAnalysis() {
         {/* Mode tabs */}
         <div className="flex flex-wrap gap-2 mb-4">
           <TabButton active={mode === 'upload'} onClick={() => setMode('upload')} icon={<UploadCloud size={13} />} label="Загрузить аудио" />
-          <TabButton active={mode === 'paste'} onClick={() => setMode('paste')} icon={<ClipboardPaste size={13} />} label="Вставить transcript" />
+          <TabButton active={mode === 'paste'} onClick={() => setMode('paste')} icon={<ClipboardPaste size={13} />} label="Вставить транскрипт" />
           <TabButton active={mode === 'url'} onClick={() => setMode('url')} icon={<Link2 size={13} />} label="Ссылка на запись" />
         </div>
 
@@ -168,13 +189,36 @@ export default function ConversationAnalysis() {
         )}
 
         {mode === 'paste' && (
-          <Textarea
-            label="Transcript разговора"
-            rows={10}
-            value={transcriptText}
-            onChange={(e) => setTranscriptText(e.target.value)}
-            placeholder={'Менеджер: ...\nИнвестор: ...\n\nИли просто вставьте текст разговора как есть.'}
-          />
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-medium text-secondary">Транскрипт разговора</div>
+                <p className="text-[11px] text-muted mt-0.5">Вставьте текст вручную или загрузите .txt файл.</p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                iconLeft={<FileText size={13} />}
+                onClick={() => transcriptFileInputRef.current?.click()}
+              >
+                Загрузить .txt
+              </Button>
+              <input
+                ref={transcriptFileInputRef}
+                type="file"
+                accept=".txt,text/plain"
+                className="hidden"
+                onChange={(e) => loadTranscriptTxt(e.target.files?.[0])}
+              />
+            </div>
+            <Textarea
+              rows={10}
+              value={transcriptText}
+              onChange={(e) => setTranscriptText(e.target.value)}
+              placeholder={'Менеджер: ...\nИнвестор: ...\n\nИли просто вставьте текст разговора как есть.'}
+            />
+          </div>
         )}
 
         {mode === 'url' && (
@@ -292,6 +336,23 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
       {label}
     </button>
   );
+}
+
+function humanizeAnalysisError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (/401|unauthenticated|header_auth_disabled|invalid_token/i.test(message)) {
+    return 'Не удалось запустить разбор. Проверьте авторизацию или обновите страницу.';
+  }
+  if (/project_required/i.test(message)) {
+    return 'Можно запустить разбор без проекта. Если ошибка повторится, выберите проект или обратитесь к менеджеру.';
+  }
+  if (/transcript_too_short/i.test(message)) {
+    return 'Транскрипт слишком короткий — нужно минимум 20 символов.';
+  }
+  if (/413|too large|file/i.test(message)) {
+    return 'Файл слишком большой или не подходит для загрузки. Попробуйте другой файл или вставьте транскрипт текстом.';
+  }
+  return 'Не удалось запустить разбор. Проверьте файл, ссылку или текст и попробуйте ещё раз.';
 }
 
 function ResultBlocks({ card }: { card: ConversationAnalysisCard }) {

@@ -91,6 +91,7 @@ interface AssistantCard {
   // Sprint 38 — KB-источники, использованные в подсказке. Founder получает
   // только title + sourceType + summary; admin/manager — также snippet.
   usedKnowledgeSources?: UsedKnowledgeSource[];
+  contextSignals?: Array<'investor_requests_project_details'>;
 }
 
 // Sprint 38 — KB-источник, использованный AI-подсказкой.
@@ -121,6 +122,7 @@ interface FastCardShape {
   promptTemplateId?: string | null;
   // Sprint 38 — KB-источники в fast-ответе тоже.
   usedKnowledgeSources?: UsedKnowledgeSource[];
+  contextSignals?: Array<'investor_requests_project_details'>;
 }
 
 type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
@@ -238,7 +240,7 @@ function analyzeButtonLabel(
   if (phase === 'fast') return 'Готовлю главный вопрос…';
   if (phase === 'full') return 'Обновить ещё раз';
   if (phase === 'error') return 'Повторить обновление';
-  return hasAnyCard ? 'Обновить ещё раз' : 'Получить подсказку сейчас';
+  return hasAnyCard ? 'Обновить ещё раз' : 'Получить подсказку';
 }
 
 export default function SalesAssistant() {
@@ -252,7 +254,7 @@ export default function SalesAssistant() {
   const [card, setCard] = useState<AssistantCard | null>(null);
   // Hotfix 2026-05-15 — единый явный конечный автомат вместо двух пересекающихся
   // флагов (analyzing + analyzePhase). Сейчас:
-  //   • idle  — нет активного запроса; кнопка «Получить подсказку сейчас» / «Обновить ещё раз»
+  //   • idle  — нет активного запроса; кнопка «Получить подсказку» / «Обновить ещё раз»
   //   • fast  — ждём ultra-fast tactical (~1-3 сек); кнопка «Готовлю главный вопрос…», но НЕ disabled
   //   • full  — fast пришёл, тянем полную аналитику (~5-15 сек); кнопка «Обновить ещё раз»
   //   • error — последний запуск упал; кнопка «Повторить обновление»
@@ -411,12 +413,18 @@ export default function SalesAssistant() {
     setAiError(null);
     // Старый fastCard оставляем на экране до прихода нового результата —
     // меньше визуального «прыжка». Очистится либо новым fast, либо setCard.
+    // Sprint 48A — главный bugfix: раньше в поле `transcript` уходило только
+    // последние 8k символов. Из-за этого AI мог не видеть, что инвестор уже
+    // несколько раз просил конкретику по проекту. Теперь `transcript` = полный
+    // актуальный снимок в пределах backend-лимита, а recentContext остаётся
+    // коротким окном для быстрого фокуса.
+    const transcriptForApi = transcriptText.slice(-32_000);
     const windowed = transcriptText.slice(-8_000);
     const previousAdvice = cardRef.current;
     const previousSpinStage = cardRef.current?.spinStage ?? null;
     const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
     const tFastStart = performance.now();
-    console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast start chars=${windowed.length} total=${transcriptText.length}`);
+    console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast start recentChars=${windowed.length} transcriptChars=${transcriptForApi.length} total=${transcriptText.length}`);
 
     // ── ЭТАП 1: ultra-fast tactical reply ───────────────────────────────
     const fastTimer = window.setTimeout(() => {
@@ -431,7 +439,7 @@ export default function SalesAssistant() {
       const r = await api.post<{ fast: FastCardShape }>(
         '/api/sales-assistant/analyze-fast',
         {
-          transcript: windowed,
+          transcript: transcriptForApi,
           recentContext: recentContext(),
           previousAdvice,
           previousSpinStage,
@@ -488,7 +496,7 @@ export default function SalesAssistant() {
       const r = await api.post<{ card: AssistantCard; adviceEventId?: string | null }>(
         '/api/sales-assistant/analyze',
         {
-          transcript: windowed,
+          transcript: transcriptForApi,
           recentContext: recentContext(),
           previousAdvice,
           previousSpinStage,
@@ -777,7 +785,7 @@ export default function SalesAssistant() {
 
   return (
     <AppLayout
-      title="AI-ассистент на продажах"
+      title="AI-ассистент"
       action={
         <div className="flex items-center gap-2">
           {visibleProjects.length > 0 && (
@@ -954,7 +962,7 @@ export default function SalesAssistant() {
               </div>
               <h3 className="text-base font-semibold text-primary mb-1">Подсказки появятся здесь</h3>
               <p className="text-xs text-secondary max-w-sm mx-auto">
-                Скажите несколько фраз, затем нажмите «Обновить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.
+                Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.
               </p>
             </Card>
           )}
@@ -963,11 +971,23 @@ export default function SalesAssistant() {
               аналитика догоняет в фоне. Если есть только fastCard (этап 2
               ещё в работе) — рендерим compact-карточку без analytics. */}
           {(card || fastCard) && (
-            <AdviceCard
-              card={card}
-              fastCard={fastCard}
-              analyzePhase={analyzePhase}
-            />
+            <>
+              <AdviceCard
+                card={card}
+                fastCard={fastCard}
+                analyzePhase={analyzePhase}
+              />
+              <div className="flex justify-end">
+                <Button
+                  variant="ai"
+                  iconLeft={<RefreshCw size={14} />}
+                  onClick={() => runAnalyze()}
+                  disabled={!hasFinalTranscript}
+                >
+                  {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
+                </Button>
+              </div>
+            </>
           )}
 
           {/* Sprint 43 P0.7 — кнопки «Зафиксировать результат». Показываем
