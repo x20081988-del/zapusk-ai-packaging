@@ -256,6 +256,14 @@ export default function SalesAssistant() {
   const [permError, setPermError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<Array<{ ts: number; final: boolean; text: string }>>([]);
   const [interim, setInterim] = useState('');
+  // Sprint 50 hotfix — manual transcript paste mode. Founder can paste a
+  // Zoom Notes / Telegram / voice-memo transcript and run advice on it
+  // without ever turning the mic on. If they later DO start listening, the
+  // live transcript appends below the manual block — no destructive merge.
+  const [manualTranscript, setManualTranscript] = useState('');
+  const [isEditingTranscript, setIsEditingTranscript] = useState(false);
+  const [manualDraft, setManualDraft] = useState('');
+  const manualTranscriptRef = useRef('');
   const [card, setCard] = useState<AssistantCard | null>(null);
   // Sprint 50 hotfix — fast and full are now independent pipelines.
   //   • Each click bumps separate request ids (fastRequestIdRef, fullRequestIdRef)
@@ -374,6 +382,12 @@ export default function SalesAssistant() {
     fastCardRef.current = fastCard;
   }, [fastCard]);
 
+  // Sprint 50 hotfix — manual transcript ref so fullTranscript() (called
+  // outside React render) can read the latest value without a re-render dep.
+  useEffect(() => {
+    manualTranscriptRef.current = manualTranscript;
+  }, [manualTranscript]);
+
   useEffect(() => {
     speechStatusRef.current = speechStatus;
   }, [speechStatus]);
@@ -415,8 +429,15 @@ export default function SalesAssistant() {
     }
   }, [transcript, interim]);
 
+  // Sprint 50 hotfix — combined transcript = pasted text (if any) + live
+  // final segments. Order matters: manual goes first because it usually
+  // represents the conversation that already happened (Zoom Notes, prior
+  // call), and the live mic continues from where the founder is now.
   function fullTranscript(): string {
-    return transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n');
+    const live = transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n');
+    const manual = manualTranscriptRef.current.trim();
+    if (manual && live) return `${manual}\n${live}`;
+    return manual || live;
   }
 
   // Sprint 49 hotfix 9 — для AI analyze важна и interim-фраза (то что только
@@ -1068,6 +1089,10 @@ export default function SalesAssistant() {
     // — менеджеру обычно нужно проводить серию встреч с одним проектом.
     setTranscript([]);
     setInterim('');
+    // Sprint 50 hotfix — manual paste cleared between meetings too.
+    setManualTranscript('');
+    setIsEditingTranscript(false);
+    setManualDraft('');
     setCard(null);
     setAdviceHistory([]);
     startedAtRef.current = null;
@@ -1124,6 +1149,10 @@ export default function SalesAssistant() {
   function reset() {
     setTranscript([]);
     setInterim('');
+    // Sprint 50 hotfix — reset also clears manual paste, per user spec.
+    setManualTranscript('');
+    setIsEditingTranscript(false);
+    setManualDraft('');
     setCard(null);
     setAdviceHistory([]);
     speechStatusRef.current = 'idle';
@@ -1157,7 +1186,10 @@ export default function SalesAssistant() {
     () => transcript.filter((t) => t.final).reduce((acc, t) => acc + t.text.split(/\s+/).length, 0),
     [transcript],
   );
-  const hasFinalTranscript = transcript.some((t) => t.final);
+  // Sprint 50 hotfix — manual transcript also satisfies the "we have
+  // something to analyze" gate. Require ≥10 chars on manual to avoid
+  // a trivially-pasted "test" enabling the button.
+  const hasFinalTranscript = transcript.some((t) => t.final) || manualTranscript.trim().length >= 10;
   const visibleProjects = useMemo(
     () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
     [role, projects],
@@ -1407,25 +1439,102 @@ export default function SalesAssistant() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-6">
         {/* TRANSCRIPT */}
         <Card padded>
-          <CardHeader title="Живая транскрипция" subtitle="Слева растёт диалог встречи в реальном времени" />
-          <div
-            ref={transcriptRef}
-            className="bg-canvas border border-hairline rounded-md p-4 h-[60vh] overflow-y-auto space-y-2"
-          >
-            {transcript.length === 0 && !interim && (
-              <p className="text-sm text-muted text-center py-8">
-                Транскрипция появится здесь после старта.
-              </p>
-            )}
-            {transcript.filter((t) => t.final).map((t, i) => (
-              <p key={i} className="text-[13.5px] text-primary leading-relaxed">
-                {t.text}
-              </p>
-            ))}
-            {interim && (
-              <p className="text-[13.5px] text-muted italic leading-relaxed">{interim}…</p>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <CardHeader title="Живая транскрипция" subtitle="Слева растёт диалог встречи в реальном времени" />
+            {/* Sprint 50 hotfix — manual paste mode. Founders import Zoom Notes /
+                Telegram transcripts and run advice without ever turning the
+                mic on. Combined with live transcript when both present. */}
+            {!isEditingTranscript && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setManualDraft(manualTranscript);
+                  setIsEditingTranscript(true);
+                }}
+              >
+                Вставить текст
+              </Button>
             )}
           </div>
+
+          {isEditingTranscript ? (
+            <div className="space-y-3">
+              <textarea
+                value={manualDraft}
+                onChange={(e) => setManualDraft(e.target.value)}
+                placeholder="Вставьте transcript из Zoom Notes, Telegram, диктофона — что угодно. Можно 5–10 тыс. символов; backend сам обрежет хвост, если потребуется."
+                className="w-full h-[55vh] bg-canvas border border-hairline rounded-md p-3 text-[13.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-muted">{manualDraft.length.toLocaleString('ru-RU')} символов</span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setIsEditingTranscript(false); setManualDraft(''); }}
+                  >
+                    Отмена
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      setManualTranscript(manualDraft.trim());
+                      setIsEditingTranscript(false);
+                      setPermError(null);
+                    }}
+                    disabled={manualDraft.trim().length < 10}
+                  >
+                    Сохранить текст
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {manualTranscript && (
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <StatusBadge tone="info" dot>Текст вставлен вручную</StatusBadge>
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted hover:text-primary underline"
+                    onClick={() => {
+                      setManualDraft(manualTranscript);
+                      setIsEditingTranscript(true);
+                    }}
+                  >
+                    Редактировать
+                  </button>
+                </div>
+              )}
+              <div
+                ref={transcriptRef}
+                className="bg-canvas border border-hairline rounded-md p-4 h-[60vh] overflow-y-auto space-y-2"
+              >
+                {transcript.length === 0 && !interim && !manualTranscript && (
+                  <p className="text-sm text-muted text-center py-8">
+                    Включите микрофон или нажмите «Вставить текст», чтобы добавить запись разговора.
+                  </p>
+                )}
+                {/* Manual block — renders first, distinct dimmer style so the
+                    live segments below stand out by contrast. */}
+                {manualTranscript && (
+                  <p className="text-[13.5px] text-secondary leading-relaxed whitespace-pre-wrap border-l-2 border-info/40 pl-3">
+                    {manualTranscript}
+                  </p>
+                )}
+                {transcript.filter((t) => t.final).map((t, i) => (
+                  <p key={i} className="text-[13.5px] text-primary leading-relaxed">
+                    {t.text}
+                  </p>
+                ))}
+                {interim && (
+                  <p className="text-[13.5px] text-muted italic leading-relaxed">{interim}…</p>
+                )}
+              </div>
+            </>
+          )}
         </Card>
 
         {/* AI ADVICE */}
@@ -1568,32 +1677,39 @@ function AdviceCard({
 
       {/* Sprint 34В — ГЛАВНАЯ ЗОНА ДЕЙСТВИЯ. Использует action (fastCard или card).
           Рендерится сразу после ultra-fast этапа — фаундер получает реплику
-          через 1-3 секунды, не дожидаясь полной аналитики. */}
-      <div className="rounded-lg border border-ai/30 bg-ai/4 px-4 py-3">
-        <div className="flex items-center gap-1.5 mb-3">
-          <Zap size={13} className="text-ai-glow" />
-          <span className="text-[10px] uppercase tracking-[0.14em] text-ai-glow font-semibold">
+          через 1-3 секунды, не дожидаясь полной аналитики.
+          Sprint 50 hotfix — visual prominence pass. Founder reads this from
+          across a Zoom call: brighter border, stronger background contrast,
+          mainQuestion bumped to text-lg/leading-loose so it's legible at a
+          glance, header reads as the dominant element in the card. */}
+      <div className="rounded-xl border-2 border-ai/50 bg-gradient-to-br from-ai/10 to-zapusk/5 px-5 py-4 shadow-ai-glow">
+        <div className="flex items-center gap-2 mb-4">
+          <Zap size={16} className="text-ai-glow" />
+          <h2 className="text-[13px] uppercase tracking-[0.16em] text-ai-glow font-bold">
             Что сказать прямо сейчас
-          </span>
+          </h2>
         </div>
 
-        {/* MAIN QUESTION — flagship live phrase */}
+        {/* MAIN QUESTION — flagship live phrase. Bumped from text-[14.5px] to
+            text-lg + leading-relaxed; quotes around it removed in favour of
+            larger sans-serif so it reads like a script line, not a citation. */}
         <div>
-          <SectionLabel icon={<MessageSquare size={12} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
-          <blockquote className="bg-canvas border border-ai/30 rounded-md px-4 py-3 text-[14.5px] leading-relaxed text-primary">
+          <SectionLabel icon={<MessageSquare size={14} className="text-ai-glow" />}>Главный вопрос сейчас</SectionLabel>
+          <blockquote className="bg-canvas border-2 border-ai/40 rounded-lg px-5 py-4 text-lg leading-relaxed text-primary font-medium">
             «{action.mainQuestion}»
           </blockquote>
         </div>
 
-        {/* BACKUP QUESTIONS */}
+        {/* BACKUP QUESTIONS — bumped 13px → 14px so they're readable beside
+            the main question without crowding it. */}
         {action.backupQuestions.length > 0 && (
-          <div className="mt-3">
-            <SectionLabel icon={<HelpCircle size={12} className="text-muted" />}>
+          <div className="mt-4">
+            <SectionLabel icon={<HelpCircle size={13} className="text-muted" />}>
               Запасные вопросы ({action.backupQuestions.length})
             </SectionLabel>
-            <ul className="space-y-1.5">
+            <ul className="space-y-2">
               {action.backupQuestions.map((q, i) => (
-                <li key={i} className="text-[13px] text-secondary leading-relaxed border-l-2 border-line pl-3">
+                <li key={i} className="text-[14px] text-secondary leading-relaxed border-l-2 border-ai/30 pl-3">
                   {q}
                 </li>
               ))}
@@ -1601,41 +1717,42 @@ function AdviceCard({
           </div>
         )}
 
-        {/* SELF-SALE QUESTIONS — separate purple-ish block */}
+        {/* SELF-SALE QUESTIONS — same bump for legibility. */}
         {action.selfSaleQuestions.length > 0 && (
-          <div className="mt-4 rounded-md border border-ai/30 bg-ai/8 px-3 py-2.5">
-            <SectionLabel icon={<Sparkles size={12} className="text-ai-glow" />}>
+          <div className="mt-4 rounded-lg border border-ai/40 bg-ai/12 px-4 py-3">
+            <SectionLabel icon={<Sparkles size={13} className="text-ai-glow" />}>
               Self-sale: пусть он сам себе продаст
             </SectionLabel>
-            <ul className="space-y-1">
+            <ul className="space-y-1.5">
               {action.selfSaleQuestions.map((q, i) => (
-                <li key={i} className="text-[13px] text-primary leading-relaxed">• {q}</li>
+                <li key={i} className="text-[14px] text-primary leading-relaxed">• {q}</li>
               ))}
             </ul>
           </div>
         )}
 
-        {/* Sprint 13: EMOTIONAL RISKS — доступно только из полной аналитики. */}
+        {/* Sprint 13: EMOTIONAL RISKS — доступно только из полной аналитики.
+            Sprint 50 hotfix — same readability bump + bolder warning border. */}
         {card && card.emotionalRisks.length > 0 && (
-          <div className="mt-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2.5">
-            <SectionLabel icon={<HeartCrack size={12} className="text-danger" />}>
+          <div className="mt-4 rounded-lg border-2 border-danger/40 bg-danger/10 px-4 py-3">
+            <SectionLabel icon={<HeartCrack size={13} className="text-danger" />}>
               Что может сломать сделку
             </SectionLabel>
-            <ul className="space-y-1">
+            <ul className="space-y-1.5">
               {card.emotionalRisks.map((line, i) => (
-                <li key={i} className="text-[13px] text-primary leading-relaxed">⚠ {line}</li>
+                <li key={i} className="text-[14px] text-primary leading-relaxed">⚠ {line}</li>
               ))}
             </ul>
           </div>
         )}
 
-        {/* WHAT NOT TO DO — из полной аналитики */}
+        {/* WHAT NOT TO DO — same treatment. */}
         {card && card.whatNotToDo.length > 0 && (
-          <div className="mt-4 rounded-md border border-danger/25 bg-danger/8 px-3 py-2.5">
-            <SectionLabel icon={<Ban size={12} className="text-danger" />}>Что НЕ делать сейчас</SectionLabel>
-            <ul className="space-y-1">
+          <div className="mt-4 rounded-lg border-2 border-danger/35 bg-danger/10 px-4 py-3">
+            <SectionLabel icon={<Ban size={13} className="text-danger" />}>Что НЕ делать сейчас</SectionLabel>
+            <ul className="space-y-1.5">
               {card.whatNotToDo.map((line, i) => (
-                <li key={i} className="text-[13px] text-primary leading-relaxed">— {line}</li>
+                <li key={i} className="text-[14px] text-primary leading-relaxed">— {line}</li>
               ))}
             </ul>
           </div>
