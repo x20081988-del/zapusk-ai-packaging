@@ -5,6 +5,7 @@ import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
 import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 import { captureCandidateFromSalesSession } from '../services/knowledgeService.js';
+import { isAIGuardrailError } from '../ai/client.js';
 import {
   completeSession,
   persistSession,
@@ -105,6 +106,13 @@ salesSessionsRoutes.post('/complete', async (req, res) => {
 
     res.status(201).json({ summary, session });
   } catch (err) {
+    // Sprint 49 hotfix 15 — guardrail propagation. Finalize that hits the
+    // daily quota wall must surface 429/402-equivalent to the UI, not 500.
+    // friendlyFinalizeError() (frontend, hotfix 10) already classifies these
+    // by status code.
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[sales-sessions/complete]', err instanceof Error ? err.message : err);
     res.status(500).json({ error: 'complete_session_failed' });
   }
