@@ -1348,67 +1348,120 @@ export default function SalesAssistant() {
     : role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER'
       ? (card?.provider === 'openai' ? 'OpenAI' : card?.provider ?? 'AI')
       : 'AI слушает встречу';
+  const isLiveMeetingLayout = meetingState === 'listening' || listening;
+  const showPreparationBlocks = !isLiveMeetingLayout;
+  const actionButtonClass = 'w-full sm:w-auto min-w-0 sm:min-w-[132px] lg:min-w-[168px] whitespace-nowrap';
 
   return (
     <AppLayout
       title="AI-ассистент"
-      action={
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Sprint 50 hotfix — project selector moved out of the action bar
-              into a labelled card on the page (see «Проект для этой встречи»
-              below the status row). Founders kept missing the silently-
-              auto-picked first-project selection in the corner. */}
-          <Link to="/conversation-analysis">
-            <Button variant="secondary" size="md" iconLeft={<Upload size={14} />} title="Загрузить запись разговора для AI-разбора">
-              Загрузить запись
-            </Button>
-          </Link>
-          {listening
-            ? <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop}>Остановить</Button>
-            : <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start}>Начать прослушивание</Button>}
-          {/* Sprint 50 hotfix — prep CTA when live transcript is empty but
-              prep context exists; otherwise the live-advice CTA. Both buttons
-              hold their loading state independently so the user can switch
-              between modes without losing track. */}
-          {inPrepMode ? (
-            <Button
-              variant="ai"
-              iconLeft={<Sparkles size={14} />}
-              onClick={() => runPrepare()}
-              disabled={!hasMeaningfulPrepContext}
-              loading={isPreparing}
-              className="shadow-ai-glow"
-            >
-              Подготовиться ко встрече
-            </Button>
-          ) : (
-            <Button
-              variant="ai"
-              iconLeft={<RefreshCw size={14} />}
-              onClick={() => runAnalyze()}
-              disabled={!hasFinalTranscript}
-              loading={isFastLoading}
-            >
-              {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            iconLeft={<Save size={14} />}
-            onClick={finishMeeting}
-            loading={finishing}
-            disabled={!hasFinalTranscript || meetingState === 'finalized' || meetingState === 'finalizing'}
-            title={meetingState === 'finalized' ? 'Встреча уже сохранена' : 'Превратить разговор в карточку сделки'}
-          >
-            {meetingState === 'finalized' ? 'Встреча сохранена' : 'Завершить встречу'}
-          </Button>
-          {transcript.length > 0 && !listening && (
-            <Button variant="ghost" onClick={reset}>Сбросить</Button>
-          )}
-        </div>
-      }
     >
+      <Card padded className="mb-6">
+        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-primary">
+              {isLiveMeetingLayout ? 'Живая встреча' : 'Управление встречей'}
+            </div>
+            <div className="text-xs text-muted">
+              {isLiveMeetingLayout
+                ? 'Сфокусируйтесь на разговоре: транскрипция и подсказка ниже.'
+                : 'Сначала добавьте контекст и подготовьте план, затем запускайте встречу.'}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:flex sm:flex-wrap xl:flex-nowrap gap-2 w-full xl:w-auto">
+            <Link to="/conversation-analysis" className="min-w-0">
+              <Button
+                variant="secondary"
+                size="md"
+                iconLeft={<Upload size={14} />}
+                title="Загрузить запись разговора для AI-разбора"
+                className={actionButtonClass}
+              >
+                <span className="hidden lg:inline">Загрузить запись</span>
+                <span className="lg:hidden">Запись</span>
+              </Button>
+            </Link>
+            {isLiveMeetingLayout ? (
+              <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop} className={actionButtonClass}>
+                Остановить
+              </Button>
+            ) : (
+              <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start} className={actionButtonClass}>
+                <span className="hidden lg:inline">Начать прослушивание</span>
+                <span className="lg:hidden">Начать</span>
+              </Button>
+            )}
+            {inPrepMode ? (
+              <Button
+                variant="ai"
+                iconLeft={<Sparkles size={14} />}
+                onClick={() => runPrepare()}
+                disabled={!hasMeaningfulPrepContext}
+                loading={isPreparing}
+                className={clsx(actionButtonClass, 'shadow-ai-glow')}
+              >
+                <span className="hidden lg:inline">Подготовиться ко встрече</span>
+                <span className="lg:hidden">Подготовиться</span>
+              </Button>
+            ) : (
+              <Button
+                variant="ai"
+                iconLeft={<RefreshCw size={14} />}
+                onClick={() => runAnalyze()}
+                disabled={!hasFinalTranscript}
+                loading={isFastLoading}
+                className={actionButtonClass}
+              >
+                <span className="hidden lg:inline">{analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}</span>
+                <span className="lg:hidden">Подсказка</span>
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              iconLeft={<Save size={14} />}
+              onClick={finishMeeting}
+              loading={finishing}
+              disabled={!hasFinalTranscript || meetingState === 'finalized' || meetingState === 'finalizing'}
+              title={meetingState === 'finalized' ? 'Встреча уже сохранена' : 'Превратить разговор в карточку сделки'}
+              className={actionButtonClass}
+            >
+              <span className="hidden lg:inline">{meetingState === 'finalized' ? 'Встреча сохранена' : 'Завершить встречу'}</span>
+              <span className="lg:hidden">{meetingState === 'finalized' ? 'Сохранена' : 'Завершить'}</span>
+            </Button>
+            {transcript.length > 0 && !isLiveMeetingLayout && (
+              <Button variant="ghost" onClick={reset} className="w-full sm:w-auto whitespace-nowrap">
+                Сбросить
+              </Button>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {isLiveMeetingLayout && permError && (
+        <div className="mb-6 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          {permError}
+        </div>
+      )}
+      {isLiveMeetingLayout && finalizeError && meetingState === 'finalize_failed' && (
+        <div className="mb-6 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <div>{finalizeError}</div>
+            <button
+              type="button"
+              className="mt-1 underline text-warning hover:text-primary"
+              onClick={finishMeeting}
+              disabled={finishingRef.current}
+            >
+              Попробовать ещё раз
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Status row */}
+      {showPreparationBlocks && (
       <Card padded className="mb-6">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
@@ -1510,6 +1563,7 @@ export default function SalesAssistant() {
           </div>
         )}
       </Card>
+      )}
 
       {/* Sprint 50 hotfix — explicit project picker. Pre-hotfix the project
           selection was a small dropdown in the page header that defaulted
@@ -1518,6 +1572,7 @@ export default function SalesAssistant() {
           labelled section on the page; default is "Без проекта" so the
           user makes an explicit choice. Orphan-finalize (Sprint 49 hotfix 10)
           handles the no-project case end-to-end. */}
+      {showPreparationBlocks && (
       <Card padded className="mb-6">
         <div className="flex items-center gap-3 mb-3">
           <BriefcaseBusiness size={16} className="text-zapusk-400" />
@@ -1542,8 +1597,10 @@ export default function SalesAssistant() {
           </p>
         )}
       </Card>
+      )}
 
       {/* Investor identification — нужно для Meeting Memory */}
+      {showPreparationBlocks && (
       <Card padded className="mb-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Input
@@ -1563,7 +1620,9 @@ export default function SalesAssistant() {
           Эти поля попадут в карточку встречи. Можно оставить пустыми — система сохранит «инвестор без имени».
         </p>
       </Card>
+      )}
 
+      {showPreparationBlocks && (
       <Card padded className="mb-6 border-ai/25 bg-ai/8">
         <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-4">
           <PrepFlowStep
@@ -1586,6 +1645,7 @@ export default function SalesAssistant() {
           Сначала подготовьте структуру встречи, затем запускайте живую транскрипцию.
         </p>
       </Card>
+      )}
 
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-6">
@@ -1596,7 +1656,7 @@ export default function SalesAssistant() {
             {/* Sprint 50 hotfix — manual paste mode. Founders import Zoom Notes /
                 Telegram transcripts and run advice without ever turning the
                 mic on. Combined with live transcript when both present. */}
-            {!isEditingTranscript && (
+            {showPreparationBlocks && !isEditingTranscript && (
               <div className="flex flex-col items-end gap-1.5">
                 <Button
                   variant={manualTranscript ? 'secondary' : 'ai'}
@@ -1622,12 +1682,12 @@ export default function SalesAssistant() {
             )}
           </div>
 
-          {isEditingTranscript ? (
+          {showPreparationBlocks && isEditingTranscript ? (
             <div className="space-y-3">
               <textarea
                 value={manualDraft}
                 onChange={(e) => setManualDraft(e.target.value)}
-                placeholder="Вставьте transcript из Zoom Notes, Telegram, диктофона — что угодно. Можно 5–10 тыс. символов; backend сам обрежет хвост, если потребуется."
+                placeholder="Вставьте контекст встречи: переписку, заметки, описание проекта или расшифровку разговора. Система подготовит план встречи и первые вопросы."
                 className="w-full h-[55vh] bg-canvas border border-hairline rounded-md p-3 text-[13.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
               />
               <div className="flex items-center justify-between gap-2">
@@ -1681,7 +1741,9 @@ export default function SalesAssistant() {
               >
                 {transcript.length === 0 && !interim && !manualTranscript && (
                   <p className="text-sm text-muted text-center py-8">
-                    Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.
+                    {isLiveMeetingLayout
+                      ? 'Слушаю встречу. Первые фразы появятся здесь.'
+                      : 'Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.'}
                   </p>
                 )}
                 {/* Manual block — renders first, distinct dimmer style so the
