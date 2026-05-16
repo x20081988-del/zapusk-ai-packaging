@@ -79,7 +79,7 @@ export default function Templates() {
     if (!d.name.trim()) return 'Название обязательно.';
     if (!d.category.trim()) return 'Категория обязательна.';
     if (!d.body.trim()) return 'Текст задания обязателен.';
-    if (!current && !/^[a-z0-9_-]+$/.test(d.key.trim())) return 'Ключ: только lowercase, цифры, _ или -.';
+    if (!current && !/^[a-z0-9_.-]+$/.test(d.key.trim())) return 'Ключ: lowercase, цифры, точка, _ или -.';
     return null;
   }
 
@@ -194,7 +194,7 @@ export default function Templates() {
             </div>
             <Input
               label="Ключ"
-              hint={current ? 'Ключ нельзя менять после создания.' : 'Например: investor_update или partner_email'}
+              hint={current ? 'Ключ нельзя менять после создания.' : 'Например: investor_update или sales_assistant.prepare_meeting'}
               value={draft.key}
               disabled={Boolean(current)}
               onChange={(e) => setDraft({ ...draft, key: e.target.value })}

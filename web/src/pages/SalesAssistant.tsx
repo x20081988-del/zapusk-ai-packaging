@@ -149,6 +149,9 @@ interface MeetingPlan {
   provider: string;
   model: string;
   fellBackToMock: boolean;
+  promptSource?: 'db' | 'fallback';
+  promptTemplateId?: string | null;
+  promptVersion?: number | null;
 }
 
 type MeetingMode = 'live' | 'plan';
@@ -730,6 +733,8 @@ export default function SalesAssistant() {
         `[sales-assistant/prepare] done ` +
         `provider=${r.plan.provider} model=${r.plan.model} ` +
         `fellBackToMock=${r.plan.fellBackToMock} ` +
+        `promptSource=${r.plan.promptSource ?? '-'} promptVersion=${r.plan.promptVersion ?? '-'} ` +
+        `templateId=${r.plan.promptTemplateId ?? '-'} ` +
         `stages=${r.plan.stages.length} openingQs=${r.plan.openingQuestions.length}`,
       );
     } catch (err) {
@@ -1348,7 +1353,7 @@ export default function SalesAssistant() {
     <AppLayout
       title="AI-ассистент"
       action={
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Sprint 50 hotfix — project selector moved out of the action bar
               into a labelled card on the page (see «Проект для этой встречи»
               below the status row). Founders kept missing the silently-
@@ -1372,6 +1377,7 @@ export default function SalesAssistant() {
               onClick={() => runPrepare()}
               disabled={!hasMeaningfulPrepContext}
               loading={isPreparing}
+              className="shadow-ai-glow"
             >
               Подготовиться ко встрече
             </Button>
@@ -1558,6 +1564,29 @@ export default function SalesAssistant() {
         </p>
       </Card>
 
+      <Card padded className="mb-6 border-ai/25 bg-ai/8">
+        <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-4">
+          <PrepFlowStep
+            step="ЭТАП 1"
+            title="Подготовка"
+            text="Контекст встречи и план разговора"
+            active={inPrepMode || meetingMode === 'plan'}
+            done={Boolean(meetingPlan)}
+          />
+          <ChevronRight size={18} className="hidden lg:block text-ai-glow shrink-0" />
+          <PrepFlowStep
+            step="ЭТАП 2"
+            title="Живая встреча + подсказки"
+            text="Транскрипция и ручное обновление подсказок"
+            active={listening || meetingMode === 'live'}
+            done={Boolean(card || fastCard)}
+          />
+        </div>
+        <p className="mt-3 text-xs text-secondary">
+          Сначала подготовьте структуру встречи, затем запускайте живую транскрипцию.
+        </p>
+      </Card>
+
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-6">
         {/* TRANSCRIPT */}
@@ -1568,16 +1597,28 @@ export default function SalesAssistant() {
                 Telegram transcripts and run advice without ever turning the
                 mic on. Combined with live transcript when both present. */}
             {!isEditingTranscript && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setManualDraft(manualTranscript);
-                  setIsEditingTranscript(true);
-                }}
-              >
-                Вставить текст
-              </Button>
+              <div className="flex flex-col items-end gap-1.5">
+                <Button
+                  variant={manualTranscript ? 'secondary' : 'ai'}
+                  size="sm"
+                  iconLeft={<BookOpen size={13} />}
+                  className={clsx(
+                    'whitespace-normal text-center leading-tight',
+                    !manualTranscript && 'shadow-ai-glow',
+                  )}
+                  onClick={() => {
+                    setManualDraft(manualTranscript);
+                    setIsEditingTranscript(true);
+                  }}
+                >
+                  {manualTranscript ? 'Дальше вставить текст' : 'Вставить контекст встречи'}
+                </Button>
+                {!manualTranscript && (
+                  <span className="max-w-[220px] text-right text-[11px] leading-snug text-muted">
+                    Добавьте контекст инвестора или проекта перед встречей
+                  </span>
+                )}
+              </div>
             )}
           </div>
 
@@ -1618,7 +1659,10 @@ export default function SalesAssistant() {
             <>
               {manualTranscript && (
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <StatusBadge tone="info" dot>Текст вставлен вручную</StatusBadge>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusBadge tone="success" dot>Контекст встречи добавлен</StatusBadge>
+                    <StatusBadge tone="info">Текст вставлен вручную</StatusBadge>
+                  </div>
                   <button
                     type="button"
                     className="text-[11px] text-muted hover:text-primary underline"
@@ -1637,7 +1681,7 @@ export default function SalesAssistant() {
               >
                 {transcript.length === 0 && !interim && !manualTranscript && (
                   <p className="text-sm text-muted text-center py-8">
-                    Включите микрофон или нажмите «Вставить текст», чтобы добавить запись разговора.
+                    Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.
                   </p>
                 )}
                 {/* Manual block — renders first, distinct dimmer style so the
@@ -1666,7 +1710,7 @@ export default function SalesAssistant() {
               План встречи (prep plan). Both views can coexist: prep plan stays
               available even after the mic starts; live advice shows up once
               the user clicks «Получить подсказку». */}
-          {(card || fastCard || meetingPlan) && (
+          {(card || fastCard || meetingPlan || inPrepMode) && (
             <div className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs">
               <button
                 type="button"
@@ -1685,8 +1729,9 @@ export default function SalesAssistant() {
                 className={clsx(
                   'px-3 h-7 rounded font-semibold transition-colors',
                   meetingMode === 'plan'
-                    ? 'bg-ai/15 text-ai-glow'
+                    ? 'bg-grad-ai text-canvas shadow-ai-glow'
                     : 'text-secondary hover:text-primary',
+                  inPrepMode && !meetingPlan && 'border border-ai/30 text-ai-glow',
                   !meetingPlan && 'opacity-40 cursor-not-allowed',
                 )}
                 onClick={() => meetingPlan && setMeetingMode('plan')}
@@ -1708,7 +1753,7 @@ export default function SalesAssistant() {
               </h3>
               <p className="text-xs text-secondary max-w-sm mx-auto">
                 {inPrepMode
-                  ? 'Нажмите «Подготовиться ко встрече» — AI соберёт цели, стратегию, опорные вопросы и план разговора.'
+                  ? 'Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.'
                   : 'Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.'}
               </p>
             </Card>
@@ -2319,6 +2364,8 @@ function MeetingPlanCard({ plan }: { plan: MeetingPlan }) {
         <h2 className="text-[13px] uppercase tracking-[0.16em] text-ai-glow font-bold">
           План встречи
         </h2>
+        {plan.promptSource === 'db' && <StatusBadge tone="success" dot>шаблон из админки</StatusBadge>}
+        {plan.promptSource === 'fallback' && !plan.fellBackToMock && <StatusBadge tone="warning" dot>резервный шаблон</StatusBadge>}
         {plan.fellBackToMock && <StatusBadge tone="warning" dot>резервная подготовка</StatusBadge>}
       </div>
 
@@ -2412,6 +2459,36 @@ function MeetingPlanCard({ plan }: { plan: MeetingPlan }) {
         </div>
       )}
     </Card>
+  );
+}
+
+function PrepFlowStep({
+  step,
+  title,
+  text,
+  active,
+  done,
+}: {
+  step: string;
+  title: string;
+  text: string;
+  active: boolean;
+  done: boolean;
+}) {
+  return (
+    <div
+      className={clsx(
+        'flex-1 rounded-lg border px-4 py-3 transition-colors',
+        active ? 'border-ai/45 bg-canvas shadow-ai-glow' : 'border-line bg-surface',
+      )}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[10px] uppercase tracking-[0.16em] text-muted font-bold">{step}</span>
+        {done && <StatusBadge tone="success" dot>готово</StatusBadge>}
+      </div>
+      <div className="mt-1 text-sm font-semibold text-primary">{title}</div>
+      <div className="mt-1 text-xs text-secondary leading-relaxed">{text}</div>
+    </div>
   );
 }
 
