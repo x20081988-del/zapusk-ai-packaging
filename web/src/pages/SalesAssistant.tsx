@@ -307,6 +307,10 @@ export default function SalesAssistant() {
   const analysisRequestIdRef = useRef(0);
   const analysisAbortRef = useRef<AbortController | null>(null);
   const transcriptLinesRef = useRef<Array<{ ts: number; final: boolean; text: string }>>([]);
+  // Sprint 49 hotfix 9 — interim в ref'е, чтобы recentContext/fullTranscript
+  // могли подмешивать самую свежую (ещё не финализированную) фразу без
+  // ре-рендера компонента.
+  const interimRef = useRef<string>('');
   const speechStatusRef = useRef<SpeechStatus>('idle');
   const cardRef = useRef<AssistantCard | null>(null);
   const adviceHistoryRef = useRef<AdviceHistoryItem[]>([]);
@@ -335,6 +339,12 @@ export default function SalesAssistant() {
   useEffect(() => {
     adviceHistoryRef.current = adviceHistory;
   }, [adviceHistory]);
+
+  // Sprint 49 hotfix 9 — синхронизируем interim ref, чтобы transcript payload
+  // мог включать самую свежую interim-фразу без перерендера компонента.
+  useEffect(() => {
+    interimRef.current = interim;
+  }, [interim]);
 
   useEffect(() => () => {
     shouldListenRef.current = false;
@@ -365,8 +375,20 @@ export default function SalesAssistant() {
     return transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n');
   }
 
+  // Sprint 49 hotfix 9 — для AI analyze важна и interim-фраза (то что только
+  // что произнёс инвестор и ещё не закоммитилось как final). Без неё AI часто
+  // отстаёт на одну реплику и теряет свежий контекст. Дедуп: если interim
+  // полностью совпадает с хвостом final transcript — не дублируем.
+  function transcriptWithInterim(): string {
+    const base = fullTranscript();
+    const interimText = interimRef.current?.trim();
+    if (!interimText) return base;
+    if (base && base.endsWith(interimText)) return base;
+    return base ? `${base}\n${interimText}` : interimText;
+  }
+
   function recentContext(): string {
-    const text = fullTranscript();
+    const text = transcriptWithInterim();
     return text.length > 6_000 ? text.slice(-6_000) : text;
   }
 
@@ -462,8 +484,12 @@ export default function SalesAssistant() {
   //      реплика не висела поверх свежей полной аналитики.
   // SpeechRecognition при этом не трогается — это полностью независимый поток,
   // ошибки/таймауты AI на него не влияют.
-  const FAST_TIMEOUT_MS = 8_000;
-  const FULL_TIMEOUT_MS = 25_000;
+  // Sprint 49 hotfix 9 — frontend всегда даёт backend немного больше времени,
+  // чтобы поймать его собственный 4xx/5xx с осмысленным reason, а не
+  // абортить на 8s раньше serverного guard'а на 8s. Buffer = 3 секунды на
+  // network/serialization.
+  const FAST_TIMEOUT_MS = 11_000;   // backend guard 8_000 + 3s
+  const FULL_TIMEOUT_MS = 28_000;   // backend guard 25_000 + 3s
 
   function isAbortError(err: unknown): boolean {
     if (err instanceof DOMException && err.name === 'AbortError') return true;
@@ -549,7 +575,9 @@ export default function SalesAssistant() {
   }
 
   async function runAnalyze() {
-    const transcriptText = fullTranscript();
+    // Sprint 49 hotfix 9 — analyze видит final + interim (дедуплицируется
+    // против хвоста final), чтобы AI не отставал на одну реплику.
+    const transcriptText = transcriptWithInterim();
     if (transcriptText.trim().length < 10) {
       setPermError('Сначала начните прослушивание и скажите несколько фраз.');
       return;
@@ -619,23 +647,34 @@ export default function SalesAssistant() {
     } catch (err) {
       window.clearTimeout(fastTimer);
       if (isStale()) return;
-      // Sprint 49 hotfix 8 — структурный лог + гранулярная UX-копия.
-      // Карточку (card) не трогаем — предыдущая успешная подсказка остаётся.
-      // Чистим только fastCard, если он сейчас отображается как «резервный».
+      // Sprint 49 hotfix 9 — fast fail БОЛЬШЕ НЕ блокирует full. Раньше при
+      // fast timeout мы возвращали `return` и UI зависал на error до второго
+      // клика. Теперь: показываем мягкую ошибку, но идём в full (25-сек guard)
+      // — он чаще успевает. Card в это время остаётся прежней (sticky guard
+      // hotfix 7), не «пустеет».
       const failure = classifyAnalyzeError(err, controller);
       const durationMs = Math.round(performance.now() - tFastStart);
       console.warn(
         `[sales-assistant] requestId=${myRequestId} phase=fast FAIL ` +
         `reason=${failure.reason} status=${failure.status ?? '-'} durationMs=${durationMs} ` +
-        `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}"`,
+        `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}" — continuing to full`,
       );
+      // Для guardrail/auth-ошибок full тоже упадёт — там не имеет смысла
+      // продолжать, фронт прерывается.
+      const HARD_STOP: AnalyzeFailureReason[] = ['unauthenticated', 'workspace_readonly', 'guardrail_cost', 'guardrail_quota'];
+      if (HARD_STOP.includes(failure.reason)) {
+        setAiError(failure.userMessage);
+        setAnalyzePhase('error');
+        if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
+        return;
+      }
+      // Мягкая ошибка — full может ещё успеть. Информируем пользователя,
+      // но не останавливаем pipeline.
       setAiError(failure.userMessage);
-      setAnalyzePhase('error');
-      if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
-      return;
+      // fastOk остаётся false; код ниже больше не блокирует full на !fastOk.
     }
 
-    if (!fastOk || isStale()) return;
+    if (isStale()) return;
 
     // ── ЭТАП 2: полная аналитика (догоняет в фоне) ──────────────────────
     setAnalyzePhase('full');

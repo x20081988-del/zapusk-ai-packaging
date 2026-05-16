@@ -260,12 +260,22 @@ function prepareCall(opts: AICallOptions): PreparedCall {
     modelRoute: opts.modelRoute ?? routeForFeature(feature),
   };
   const maxInputChars = Math.min(opts.maxInputChars ?? guard.maxInputChars, guard.maxInputChars);
+  // Sprint 49 hotfix 9 — для разговорных фич (sales_assistant.* / conversation
+  // analysis / summary) самая важная часть payload'а — хвост (последние
+  // реплики, недавно произнесённое). Раньше slice(0, max) резал хвост, и AI
+  // отвечал по устаревшему контексту. Теперь tail-preserving truncation для
+  // этих фич; для prompt-генерации (brief/packaging) оставляем head-preserve,
+  // потому что system-prompt и project-context живут в начале payload'а.
+  const TAIL_PRESERVE_PREFIXES = ['sales_assistant.', 'conversation', 'summary'];
+  const preserveTail = TAIL_PRESERVE_PREFIXES.some((p) => feature.startsWith(p) || feature === p);
   const user = opts.user.length > maxInputChars
-    ? `${opts.user.slice(0, maxInputChars)}\n\n[INPUT TRUNCATED BY AI GUARDRAIL]`
+    ? preserveTail
+      ? `[INPUT TRUNCATED BY AI GUARDRAIL — TAIL PRESERVED]\n\n${opts.user.slice(-maxInputChars)}`
+      : `${opts.user.slice(0, maxInputChars)}\n\n[INPUT TRUNCATED BY AI GUARDRAIL]`
     : opts.user;
 
   if (user.length !== opts.user.length) {
-    console.warn(`[ai] feature=${feature} input_truncated maxInputChars=${maxInputChars}`);
+    console.warn(`[ai] feature=${feature} input_truncated maxInputChars=${maxInputChars} preserveTail=${preserveTail}`);
   }
 
   return {
@@ -507,7 +517,16 @@ function mockResult(
   fellBackToMock: boolean,
   ledgerOverride: Partial<AIUsage & { provider: AIProvider; model: string; fallbackUsed: boolean }> = {},
 ): AIResult {
-  const text = opts.asJSON ? JSON.stringify(mockBrief(opts.user), null, 2) : mockText(opts);
+  // Sprint 49 hotfix 9 — feature-aware mock JSON. Раньше любой asJSON=true
+  // fallback возвращал mockBrief shape (businessSummary / monetization / …)
+  // — это валидный JSON, но для sales_assistant.analyze парсер ловил
+  // отсутствующие поля и падал в heuristicCard (generic SPIN). Теперь mock
+  // для sales-фич возвращает минимальный, но СОВМЕСТИМЫЙ AssistantCard /
+  // FastAssistantCard shape — UI получает «честный» mock-card с пометкой
+  // source='mock' вместо тихого heuristic-fallback.
+  const text = opts.asJSON
+    ? JSON.stringify(mockJsonForFeature(opts), null, 2)
+    : mockText(opts);
   const result = {
     text,
     provider: 'mock' as const,
@@ -575,6 +594,61 @@ function extractResponsesText(response: {
 
 function mockText(opts: AICallOptions): string {
   return `# Mock AI response\n\n_Provider: mock — set ANTHROPIC_API_KEY or OPENAI_API_KEY to use real model._\n\n## System prompt (excerpt)\n${opts.system.slice(0, 200)}…\n\n## User input (excerpt)\n${opts.user.slice(0, 200)}…`;
+}
+
+// Sprint 49 hotfix 9 — выбор JSON shape для mock fallback по фиче.
+// sales_assistant.analyze ждёт AssistantCard (situation/mainQuestion/spinStage/…),
+// analyze_fast ждёт FastAssistantCard (mainQuestion/backupQuestions/spinStage/…).
+// Если отдать им mockBrief, downstream-парсер уйдёт в heuristicCard и user
+// видит generic SPIN — этого Codex audit и просил починить.
+function mockJsonForFeature(opts: AICallOptions): Record<string, unknown> {
+  const feature = opts.feature ?? '';
+  if (feature === 'sales_assistant.analyze_fast') {
+    return {
+      mainQuestion: 'Что для вас сейчас главный фактор по этой сделке — доходность, сроки или выход?',
+      backupQuestions: [
+        'Какой чек комфортен для первого захода?',
+        'Что должно быть в материалах, чтобы вы согласились на встречу?',
+        'С кем ещё вы обычно сравниваете подобные проекты?',
+      ],
+      selfSaleQuestions: [
+        'Если получится, какой результат для вас важнее всего?',
+      ],
+      spinStage: 'S',
+    };
+  }
+  if (feature === 'sales_assistant.analyze') {
+    return {
+      situation: 'Идёт установочный разговор. AI не получил расширенного контекста, отвечаем на базовом уровне.',
+      riskOrMissed: null,
+      whatToDo: ['Уточнить мотив инвестора', 'Зафиксировать комфортный чек'],
+      whatNotToDo: ['Не уходить в продуктовую глубину раньше времени'],
+      mainQuestion: 'Что для вас сейчас главный фактор — доходность, сроки или выход?',
+      backupQuestions: ['Какой чек комфортен?', 'С чем сравниваете?'],
+      selfSaleQuestions: ['Если получится, какой результат важнее?'],
+      miniPitch: null,
+      conversationObjective: 'Выровнять ожидания по цели сделки',
+      conversationDirection: 'Двигаться к фиксации следующего шага',
+      dealNextStep: 'Договориться о следующей встрече с материалами',
+      spinStage: 'S',
+      spinGaps: ['P', 'I', 'N'],
+      tone: 'SOFT',
+      dealControlLevel: 'LOW',
+      engagementSignal: 'passive',
+      confidence: 35,
+      objection: null,
+      emotionalState: 'нейтрально',
+      whyBehavior: 'Недостаточно сигналов в записи',
+      investorState: 'CURIOUS',
+      momentum: 'NEUTRAL',
+      momentumReason: 'Не хватает данных',
+      conversationTemperature: 'COLD',
+      emotionalRisks: [],
+      toneShiftGuidance: 'Сохранять мягкий тон, задать уточняющий вопрос',
+    };
+  }
+  // Default — brief shape (back-compat for brief.generate, ai_visibility_report, etc.)
+  return mockBrief(opts.user);
 }
 
 function safeErrorCode(err: unknown): string {
