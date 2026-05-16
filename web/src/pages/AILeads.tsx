@@ -179,7 +179,7 @@ export default function AILeads() {
   }, [selectedProjectId]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null;
-  const activeProjectId = dashboard?.projectId ?? selectedProjectId ?? projects[0]?.id ?? '';
+  const activeProjectId = selectedProject?.id ?? (projects.length ? dashboard?.projectId ?? projects[0]?.id ?? '' : '');
   // Sprint 14: state-aware CTA для брифа. Если выбран проект — ведём в его
   // бриф. Если проектов нет — в New Project. Если есть, но дашборд ещё без
   // projectId — мягко в New Project (это редкий fallback на серверной стороне).

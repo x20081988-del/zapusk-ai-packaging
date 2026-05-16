@@ -23,6 +23,7 @@ const FOCUS_OPTIONS = [
 export default function ProjectBrief() {
   const { id } = useParams<{ id: string }>();
   const [project, setProject] = useState<Project | null>(null);
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
   const [generating, setGenerating] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [focus, setFocus] = useState(FOCUS_OPTIONS[0].value);
@@ -30,9 +31,21 @@ export default function ProjectBrief() {
   const [feedbackStatus, setFeedbackStatus] = useState<string | null>(null);
 
   async function load() {
-    if (!id) return;
-    const r = await api.get<{ project: Project }>(`/api/projects/${id}`);
-    setProject(r.project);
+    if (!id || id === 'undefined' || id === 'null') {
+      setProject(null);
+      setLoadState('missing');
+      return;
+    }
+    setLoadState('loading');
+    try {
+      const r = await api.get<{ project: Project }>(`/api/projects/${id}`);
+      setProject(r.project);
+      setLoadState('ready');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setProject(null);
+      setLoadState(msg.includes('404') || msg.includes('403') ? 'missing' : 'error');
+    }
   }
 
   useEffect(() => { load(); }, [id]);
@@ -68,8 +81,32 @@ export default function ProjectBrief() {
     }
   }
 
-  if (!project) {
+  if (!project && loadState === 'loading') {
     return <AppLayout title="Бриф"><Card><div className="text-sm text-muted text-center py-8">Загрузка…</div></Card></AppLayout>;
+  }
+
+  if (!project) {
+    const isMissing = loadState === 'missing';
+    return (
+      <AppLayout title="Бриф проекта">
+        <Card padded>
+          <EmptyState
+            icon={<Sparkles size={20} />}
+            title={isMissing ? 'Пока нет проектов' : 'Не удалось открыть бриф'}
+            description={
+              isMissing
+                ? 'Создайте первый проект — это займет меньше минуты.'
+                : 'Бриф временно недоступен. Обновите страницу или создайте новый проект.'
+            }
+            action={(
+              <Link to="/projects/new">
+                <Button iconLeft={<Sparkles size={14} />}>Создать проект</Button>
+              </Link>
+            )}
+          />
+        </Card>
+      </AppLayout>
+    );
   }
 
   const brief = project.brief;
