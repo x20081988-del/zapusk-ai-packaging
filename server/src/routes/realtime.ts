@@ -51,6 +51,19 @@ function supportsRealtimeTranscriptionPrompt(model: string): boolean {
   return !REALTIME_PROMPT_UNSUPPORTED_MODELS.has(model);
 }
 
+// Sprint 49 hotfix 5 — `gpt-realtime-whisper` также не принимает
+// session.audio.input.turn_detection (OpenAI: "Turn detection is not
+// supported for this transcription model"). Эта модель работает
+// в continuous streaming-режиме, OpenAI сама режет на сегменты.
+// gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1 — принимают server_vad.
+const REALTIME_TURN_DETECTION_UNSUPPORTED_MODELS = new Set<string>([
+  'gpt-realtime-whisper',
+]);
+
+function supportsRealtimeTurnDetection(model: string): boolean {
+  return !REALTIME_TURN_DETECTION_UNSUPPORTED_MODELS.has(model);
+}
+
 export const realtimeRoutes = Router();
 realtimeRoutes.use(authMiddleware);
 realtimeRoutes.use(requireNotInvestor());
@@ -96,30 +109,45 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
     : { prompt: '', length: 0, trimmed: false };
   const promptSkippedReason = promptSupported ? null : 'model_does_not_support_prompt';
 
+  // Sprint 49 hotfix 5 — gpt-realtime-whisper не принимает turn_detection.
+  // Модель сама режет на сегменты по своей внутренней VAD-логике. Для
+  // других моделей (gpt-4o-transcribe, whisper-1) оставляем server_vad.
+  const turnDetectionSupported = supportsRealtimeTurnDetection(model);
+  const turnDetectionSkippedReason = turnDetectionSupported ? null : 'model_does_not_support_turn_detection';
+
   // Sprint 49 hotfix 2 — GA payload для /v1/realtime/client_secrets.
   // Структура: session.type='transcription' с audio.input.{transcription,
   // turn_detection}. language='ru' всегда. prompt — только когда модель его
-  // поддерживает. Никаких response.create / output audio — transcription-only.
+  // поддерживает. turn_detection — только когда модель его поддерживает.
+  // Никаких response.create / output audio — transcription-only.
   const transcriptionConfig: { model: string; language: string; prompt?: string } = {
     model,
     language: 'ru',
   };
   if (promptSupported && built.prompt) transcriptionConfig.prompt = built.prompt;
 
+  const audioInput: {
+    transcription: typeof transcriptionConfig;
+    turn_detection?: {
+      type: 'server_vad';
+      threshold: number;
+      prefix_padding_ms: number;
+      silence_duration_ms: number;
+    };
+  } = { transcription: transcriptionConfig };
+  if (turnDetectionSupported) {
+    audioInput.turn_detection = {
+      type: 'server_vad',
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 700,
+    };
+  }
+
   const requestBody = {
     session: {
       type: 'transcription' as const,
-      audio: {
-        input: {
-          transcription: transcriptionConfig,
-          turn_detection: {
-            type: 'server_vad' as const,
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 700,
-          },
-        },
-      },
+      audio: { input: audioInput },
     },
   };
 
@@ -146,6 +174,7 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       console.warn(
         `[realtime] openai ${upstream.status} model=${model} modelSource=${modelSource} ` +
         `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
+        `turnDetectionSupported=${turnDetectionSupported} ` +
         `errorType=${upErr?.type ?? 'unknown'} errorCode=${upErr?.code ?? 'none'} ` +
         `param=${upErr?.param ?? 'none'} message="${(upErr?.message ?? errText).slice(0, 400)}"`,
       );
@@ -157,6 +186,8 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
         promptLength: built.length,
         promptTrimmed: built.trimmed,
         promptSkippedReason,
+        turnDetectionSupported,
+        turnDetectionSkippedReason,
         upstreamType: upErr?.type ?? null,
         upstreamCode: upErr?.code ?? null,
         upstreamParam: upErr?.param ?? null,
@@ -181,6 +212,7 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
         model, modelSource,
         promptSupported,
         promptLength: built.length, promptTrimmed: built.trimmed,
+        turnDetectionSupported,
         templateVersion: tpl.version,
       },
     });
@@ -194,12 +226,15 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       promptLength: built.length,
       promptTrimmed: built.trimmed,
       promptSkippedReason,
+      turnDetectionSupported,
+      turnDetectionSkippedReason,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
     console.warn(
       `[realtime] session bootstrap failed model=${model} modelSource=${modelSource} ` +
-      `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} err="${msg}"`,
+      `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
+      `turnDetectionSupported=${turnDetectionSupported} err="${msg}"`,
     );
     res.status(502).json({
       error: 'openai_session_failed',
@@ -208,6 +243,8 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       promptLength: built.length,
       promptTrimmed: built.trimmed,
       promptSkippedReason,
+      turnDetectionSupported,
+      turnDetectionSkippedReason,
       upstreamMessage: msg.slice(0, 240),
     });
   }
