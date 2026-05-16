@@ -18,10 +18,14 @@ import { requireNotInvestor } from '../lib/ownership.js';
 // Speech API. Так пользователь не остаётся без транскрипции при сбое.
 
 const REALTIME_TEMPLATE_KEY = 'realtime_transcription';
-const REALTIME_SESSIONS_ENDPOINT = 'https://api.openai.com/v1/realtime/transcription_sessions';
-// Sprint 49 hotfix — hard fallback на случай, если и template.model, и
-// env.OPENAI_MODEL_REALTIME_TRANSCRIBE пустые. `gpt-realtime-whisper` —
-// текущая GA realtime streaming transcription модель OpenAI.
+// Sprint 49 hotfix 2 — переход на GA endpoint /v1/realtime/client_secrets и
+// session-wrapped payload. Старый /v1/realtime/transcription_sessions помечен
+// в доках как deprecated и в нашем тенанте возвращает 400 на новых моделях
+// (gpt-realtime-whisper). GA endpoint принимает session-конфиг как тело,
+// внутри session.type='transcription'.
+const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
+// Hard fallback на случай, если и template.model, и env пустые.
+// `gpt-realtime-whisper` — текущая GA realtime streaming transcription модель.
 const REALTIME_TRANSCRIBE_HARD_FALLBACK = 'gpt-realtime-whisper';
 
 function resolveTranscriptionModel(templateModel: string | null): string {
@@ -67,37 +71,66 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
     tpl.model?.trim() ? 'template' : (env.OPENAI_MODEL_REALTIME_TRANSCRIBE?.trim() ? 'env' : 'hard_fallback');
   const instructions = tpl.body.trim();
 
+  // Sprint 49 hotfix 2 — GA payload для /v1/realtime/client_secrets.
+  // Структура: session.type='transcription' с audio.input.{transcription,
+  // turn_detection}. prompt (словарь терминов) живёт внутри transcription,
+  // language='ru'. Никаких response.create / output audio — это
+  // transcription-only сессия.
+  const requestBody = {
+    session: {
+      type: 'transcription' as const,
+      audio: {
+        input: {
+          transcription: {
+            model,
+            language: 'ru',
+            prompt: instructions,
+          },
+          turn_detection: {
+            type: 'server_vad' as const,
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 700,
+          },
+        },
+      },
+    },
+  };
+
   try {
-    const upstream = await fetch(REALTIME_SESSIONS_ENDPOINT, {
+    const upstream = await fetch(REALTIME_CLIENT_SECRETS_ENDPOINT, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
-        'OpenAI-Beta': 'realtime=v1',
       },
-      body: JSON.stringify({
-        input_audio_format: 'pcm16',
-        input_audio_transcription: {
-          model,
-          prompt: instructions,
-          language: 'ru',
-        },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 600,
-        },
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!upstream.ok) {
       const errText = await safeText(upstream);
-      // Sprint 49 hotfix — структурно логируем upstream error чтобы можно
-      // было диагностировать. Клиенту отдаём только status + код, тело
-      // OpenAI (может содержать org_id / req_id) не пробрасываем.
-      console.warn(`[realtime] openai ${upstream.status} model=${model} modelSource=${modelSource} body="${errText.slice(0, 400)}"`);
-      return res.status(502).json({ error: 'openai_session_failed', status: upstream.status, model });
+      // Sprint 49 hotfix 2 — пробуем JSON-парсинг, чтобы вытащить
+      // error.type / error.message / error.param. Тело OpenAI ошибки
+      // не содержит API key, можно безопасно показать клиенту type+message
+      // (без org_id / req_id).
+      const parsed = safeJson(errText);
+      const upErr = parsed && typeof parsed === 'object' && 'error' in parsed
+        ? (parsed as { error?: { type?: string; message?: string; param?: string; code?: string } }).error
+        : null;
+      console.warn(
+        `[realtime] openai ${upstream.status} model=${model} modelSource=${modelSource} ` +
+        `errorType=${upErr?.type ?? 'unknown'} errorCode=${upErr?.code ?? 'none'} ` +
+        `param=${upErr?.param ?? 'none'} message="${(upErr?.message ?? errText).slice(0, 400)}"`,
+      );
+      return res.status(502).json({
+        error: 'openai_session_failed',
+        status: upstream.status,
+        model,
+        upstreamType: upErr?.type ?? null,
+        upstreamCode: upErr?.code ?? null,
+        upstreamParam: upErr?.param ?? null,
+        upstreamMessage: (upErr?.message ?? '').slice(0, 240) || null,
+      });
     }
 
     const data = (await upstream.json()) as RealtimeSessionResponse;
@@ -124,7 +157,7 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
     console.warn(`[realtime] session bootstrap failed model=${model} modelSource=${modelSource} err="${msg}"`);
-    res.status(502).json({ error: 'openai_session_failed', model });
+    res.status(502).json({ error: 'openai_session_failed', model, upstreamMessage: msg.slice(0, 240) });
   }
 });
 
@@ -134,4 +167,9 @@ interface RealtimeSessionResponse {
 
 async function safeText(r: Response): Promise<string> {
   try { return await r.text(); } catch { return ''; }
+}
+
+function safeJson(s: string): unknown {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
 }
