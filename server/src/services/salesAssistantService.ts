@@ -1333,3 +1333,287 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
     toneShiftGuidance: 'CLOSE короткими ходами: дата + критерий, и заверши встречу.',
   };
 }
+
+// ─── Sprint 50 hotfix — Meeting preparation mode ─────────────────────────
+//
+// Founders often paste a Zoom Notes / CRM profile / pre-call investor brief
+// into the "Live transcript" card BEFORE the meeting starts. The live-advice
+// pipeline (analyzeSalesTurn) treats it as if the conversation is already
+// running, which is wrong: the user wants a strategy plan, not a "what to
+// say next" reply. This service generates a structured MeetingPlan from
+// the prep context.
+
+export interface MeetingObjective {
+  understand: string;
+  sell: string;
+  outcome: string;
+}
+
+export interface ConversationStyle {
+  tone: 'aggressive' | 'soft' | 'consultative';
+  speakOrListen: 'listen_more' | 'lead_more' | 'balanced';
+  whenToPitch: string;
+}
+
+export interface MeetingStage {
+  name: string;
+  goal: string;
+}
+
+export interface MeetingPlan {
+  objective: MeetingObjective;
+  conversationStyle: ConversationStyle;
+  openingQuestions: string[];
+  pitchTiming: string;
+  pitchScript: string;
+  leveragePoints: string[];
+  dealbreakers: string[];
+  stages: MeetingStage[];
+  provider: 'openai' | 'anthropic' | 'mock';
+  model: string;
+  fellBackToMock: boolean;
+}
+
+export interface PrepareInput {
+  /** Free-form pre-call context: CRM notes, Zoom notes, investor profile,
+   * prior chat, anything the founder pasted before the live mic started. */
+  context: string;
+  projectId?: string | null;
+  actorRole?: string;
+  actorId?: string | null;
+}
+
+const MEETING_PLAN_SCHEMA = {
+  type: 'object',
+  required: [
+    'objective', 'conversationStyle', 'openingQuestions',
+    'pitchTiming', 'pitchScript', 'leveragePoints', 'dealbreakers', 'stages',
+  ],
+  additionalProperties: false,
+  properties: {
+    objective: {
+      type: 'object',
+      required: ['understand', 'sell', 'outcome'],
+      additionalProperties: false,
+      properties: {
+        understand: { type: 'string' },
+        sell: { type: 'string' },
+        outcome: { type: 'string' },
+      },
+    },
+    conversationStyle: {
+      type: 'object',
+      required: ['tone', 'speakOrListen', 'whenToPitch'],
+      additionalProperties: false,
+      properties: {
+        tone: { type: 'string', enum: ['aggressive', 'soft', 'consultative'] },
+        speakOrListen: { type: 'string', enum: ['listen_more', 'lead_more', 'balanced'] },
+        whenToPitch: { type: 'string' },
+      },
+    },
+    openingQuestions: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 6 },
+    pitchTiming: { type: 'string' },
+    pitchScript: { type: 'string' },
+    leveragePoints: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 },
+    dealbreakers: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 },
+    stages: {
+      type: 'array',
+      minItems: 4,
+      maxItems: 10,
+      items: {
+        type: 'object',
+        required: ['name', 'goal'],
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string' },
+          goal: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+const PREP_SYSTEM = `Ты — стратег инвестиционных переговоров платформы ZAPUSK AI.
+
+ЗАДАЧА
+Фаундер собирается на встречу с инвестором. Он передал тебе подготовительный
+контекст: заметки, CRM-карточку, профиль инвестора, прошлую переписку,
+описание проекта. Твоя задача — собрать ПЛАН ВСТРЕЧИ (pre-call plan), не
+готовые реплики для живого диалога. Это стратегия, а не live-копилот.
+
+ВЕРНИ СТРОГО JSON. Каждое поле — конкретное и применимое:
+• objective — что фаундер должен ПОНЯТЬ, что ПРОДАТЬ, какой OUTCOME нужен.
+• conversationStyle — tone (aggressive/soft/consultative), speakOrListen
+  (listen_more/lead_more/balanced), whenToPitch (короткое описание условия,
+  при котором фаундер переходит к pitch).
+• openingQuestions — 3-5 стартовых вопросов, под конкретного инвестора, не
+  generic «расскажите о себе».
+• pitchTiming — когда делать pitch (не сразу, после чего именно).
+• pitchScript — короткий вариант pitch (2-4 предложения), адаптированный
+  под profile из контекста.
+• leveragePoints — на что давить (массив; passive income / стабильность /
+  IT growth / без операционного участия / защита капитала и т.п.).
+• dealbreakers — что может сломать встречу (массив).
+• stages — этапы встречи в порядке (минимум 4): знакомство, выявление
+  целей, инвест-опыт, профиль рисков, pitch, объекции, CTA. Адаптируй под
+  контекст.
+
+ПРАВИЛА
+- НЕ выдумывай факты про инвестора, которых нет в контексте. Если данных
+  мало — openingQuestions выясняют недостающее.
+- Pitch script должен говорить про «сколько вложу — сколько заработаю —
+  когда получу», не про продукт.
+- Никаких generic фраз. Конкретика > общие места.
+- Все строки — на русском.`;
+
+export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPlan> {
+  const projectContext = await loadProjectContextForPrep(input.projectId);
+  const user = [
+    'ПОДГОТОВИТЕЛЬНЫЙ КОНТЕКСТ ОТ ФАУНДЕРА',
+    '---',
+    input.context.trim(),
+    '---',
+    '',
+    projectContext ? `КОНТЕКСТ ПРОЕКТА:\n${projectContext}\n` : '',
+    'Собери MeetingPlan строго по схеме.',
+  ].filter(Boolean).join('\n');
+
+  const ai = await aiClient.generateJson({
+    system: PREP_SYSTEM,
+    user,
+    feature: 'sales_assistant.prepare',
+    modelRoute: 'main',
+    maxTokens: 1_800,
+    temperature: 0.35,
+    jsonSchema: {
+      name: 'meeting_plan',
+      description: 'Pre-call strategy plan: objective, style, opening questions, pitch, stages.',
+      schema: MEETING_PLAN_SCHEMA,
+    },
+    projectId: input.projectId ?? null,
+    actorId: input.actorId ?? null,
+    requestType: 'sales_assistant_prepare_json',
+  });
+
+  let parsed: Partial<MeetingPlan> | null = null;
+  try {
+    parsed = JSON.parse(extractJsonPrep(ai.text)) as Partial<MeetingPlan>;
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed || !parsed.objective || !parsed.stages || !Array.isArray(parsed.stages)) {
+    const fallback = heuristicMeetingPlan();
+    return {
+      ...fallback,
+      provider: ai.provider,
+      model: ai.model,
+      fellBackToMock: true,
+    };
+  }
+
+  return {
+    objective: {
+      understand: String(parsed.objective?.understand ?? '').trim() || 'Выяснить мотив и цели инвестора',
+      sell: String(parsed.objective?.sell ?? '').trim() || 'Доходность и защита капитала',
+      outcome: String(parsed.objective?.outcome ?? '').trim() || 'Договориться о следующем шаге',
+    },
+    conversationStyle: {
+      tone: (['aggressive', 'soft', 'consultative'] as const).includes(parsed.conversationStyle?.tone as 'aggressive' | 'soft' | 'consultative')
+        ? (parsed.conversationStyle!.tone as 'aggressive' | 'soft' | 'consultative')
+        : 'consultative',
+      speakOrListen: (['listen_more', 'lead_more', 'balanced'] as const).includes(parsed.conversationStyle?.speakOrListen as 'listen_more' | 'lead_more' | 'balanced')
+        ? (parsed.conversationStyle!.speakOrListen as 'listen_more' | 'lead_more' | 'balanced')
+        : 'listen_more',
+      whenToPitch: String(parsed.conversationStyle?.whenToPitch ?? '').trim()
+        || 'После того как выяснил цели инвестора и его опыт',
+    },
+    openingQuestions: arrStr(parsed.openingQuestions, 6, [
+      'Что для вас сейчас главный фокус по портфелю?',
+      'Какие проекты вы рассматриваете на горизонте 6-12 месяцев?',
+      'Какую доходность считаете комфортной?',
+    ]),
+    pitchTiming: String(parsed.pitchTiming ?? '').trim()
+      || 'Не раньше чем выяснил цели, опыт и риск-аппетит инвестора',
+    pitchScript: String(parsed.pitchScript ?? '').trim()
+      || 'Короткое описание сделки: чек, срок, доходность, выход.',
+    leveragePoints: arrStr(parsed.leveragePoints, 8, ['доходность', 'защита капитала', 'предсказуемость денежного потока']),
+    dealbreakers: arrStr(parsed.dealbreakers, 8, ['ранний переход к pitch', 'перегруз цифрами', 'споры про гарантии']),
+    stages: (parsed.stages ?? [])
+      .filter((s): s is MeetingStage => Boolean(s && typeof (s as MeetingStage).name === 'string'))
+      .slice(0, 10)
+      .map((s) => ({ name: String(s.name).trim(), goal: String(s.goal ?? '').trim() })),
+    provider: ai.provider,
+    model: ai.model,
+    fellBackToMock: ai.fellBackToMock,
+  };
+}
+
+function arrStr(value: unknown, max: number, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const out = value
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim())
+    .slice(0, max);
+  return out.length > 0 ? out : fallback;
+}
+
+function extractJsonPrep(raw: string): string {
+  const t = raw.trim();
+  if (t.startsWith('{')) return t;
+  const m = t.match(/\{[\s\S]*\}/);
+  return m ? m[0] : t;
+}
+
+async function loadProjectContextForPrep(projectId: string | null | undefined): Promise<string> {
+  if (!projectId) return '';
+  const p = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { brief: true },
+  });
+  if (!p) return '';
+  return [
+    `Проект: ${p.name}`,
+    p.industry ? `Отрасль: ${p.industry}` : '',
+    p.stage ? `Стадия: ${p.stage}` : '',
+    p.raiseAmount ? `Раунд: ${p.raiseAmount} ${p.currency}` : '',
+    p.minCheck ? `Min чек: ${p.minCheck}` : '',
+    p.brief?.businessSummary ? `Бизнес: ${p.brief.businessSummary}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function heuristicMeetingPlan(): MeetingPlan {
+  return {
+    objective: {
+      understand: 'Цели инвестора, опыт, риск-аппетит, ожидания по доходности',
+      sell: 'Доходность сделки и защиту капитала, а не продукт',
+      outcome: 'Договорённость о следующем шаге (материалы → следующий звонок)',
+    },
+    conversationStyle: {
+      tone: 'consultative',
+      speakOrListen: 'listen_more',
+      whenToPitch: 'После выяснения целей и опыта инвестора',
+    },
+    openingQuestions: [
+      'Что для вас сейчас главный фокус по портфелю?',
+      'Какие проекты вы рассматривали за последние 12 месяцев?',
+      'Какая доходность для вас комфортная по этому классу актива?',
+      'Что обычно становится для вас стоп-фактором?',
+    ],
+    pitchTiming: 'Только после того, как услышал критерии решения инвестора',
+    pitchScript: 'Чек от X ₽, окупаемость Y лет, доходность Z%, выход через выкуп доли или вторичный рынок.',
+    leveragePoints: ['предсказуемость денежного потока', 'защита капитала', 'умеренный риск', 'понятный выход'],
+    dealbreakers: ['ранний pitch без выяснения целей', 'перегруз цифрами', 'спор про гарантии'],
+    stages: [
+      { name: 'Знакомство', goal: 'Установить контакт, представить себя коротко' },
+      { name: 'Выявление целей', goal: 'Понять, что инвестор хочет получить и в какие сроки' },
+      { name: 'Инвестиционный опыт', goal: 'Узнать, в чём раньше участвовал и что сработало/не сработало' },
+      { name: 'Pitch', goal: 'Коротко продать ДОХОД, не продукт' },
+      { name: 'Объекции', goal: 'Разобрать сомнения, не спорить про гарантии' },
+      { name: 'Следующий шаг', goal: 'Зафиксировать дату следующего контакта и какие материалы прислать' },
+    ],
+    provider: 'mock',
+    model: 'mock-v1',
+    fellBackToMock: true,
+  };
+}

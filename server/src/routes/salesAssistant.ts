@@ -8,6 +8,7 @@ import { recordAudit } from '../lib/audit.js';
 import {
   analyzeSalesTurn,
   analyzeSalesTurnFast,
+  prepareForMeeting,
   type KnowledgeRetrievalMeta,
 } from '../services/salesAssistantService.js';
 import { isAIGuardrailError } from '../ai/client.js';
@@ -285,3 +286,53 @@ function classifyServerAnalyzeError(msg: string): string {
   if (/model_not_found|invalid_request_error|404/i.test(msg)) return 'model_unavailable';
   return 'unknown';
 }
+
+// Sprint 50 hotfix — meeting prep mode.
+// POST /api/sales-assistant/prepare — takes prep context (CRM notes, Zoom
+// notes, investor profile, prior chat) and returns a structured MeetingPlan
+// (objective, conversation style, opening questions, pitch timing, pitch
+// script, leverage points, dealbreakers, stages). Distinct from
+// /analyze and /analyze-fast which assume the live conversation is already
+// running. UI uses this BEFORE the mic is on.
+const prepareSchema = z.object({
+  context: z.string().trim().min(20).max(32_000),
+  projectId: z.string().optional().nullable(),
+});
+
+salesAssistantRoutes.post('/prepare', withRateLimit('ai_inference'), async (req, res) => {
+  const parsed = prepareSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  if (parsed.data.projectId) {
+    const ownership = await assertProjectOwnership(req, parsed.data.projectId);
+    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  }
+
+  const tStart = Date.now();
+  try {
+    const plan = await prepareForMeeting({
+      context: parsed.data.context.trim(),
+      projectId: parsed.data.projectId ?? null,
+      actorRole: getActorRole(req),
+      actorId: getUser(req).id,
+    });
+    res.json({ plan });
+  } catch (err) {
+    const latencyMs = Date.now() - tStart;
+    if (isAIGuardrailError(err)) {
+      console.warn(
+        `[sales-assistant:prepare] feature=prepare FAIL reason=guardrail code=${err.code} ` +
+        `actorId=${getUser(req).id} projectId=${parsed.data.projectId ?? 'none'} latencyMs=${latencyMs}`,
+      );
+      return res.status(err.statusCode).json({ error: err.code, reason: 'guardrail', latencyMs });
+    }
+    const msg = err instanceof Error ? err.message : 'unknown';
+    const reason = classifyServerAnalyzeError(msg);
+    console.warn(
+      `[sales-assistant:prepare] feature=prepare FAIL reason=${reason} ` +
+      `actorId=${getUser(req).id} projectId=${parsed.data.projectId ?? 'none'} latencyMs=${latencyMs} ` +
+      `contextChars=${parsed.data.context.length} message="${msg.slice(0, 240)}"`,
+    );
+    res.status(500).json({ error: 'prepare_failed', reason, latencyMs, message: msg.slice(0, 240) });
+  }
+});

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import clsx from 'clsx';
 import {
   Mic, Square, Headphones, AlertTriangle, Sparkles, MessageSquare, Target,
   Activity, ChevronRight, RefreshCw, Save, CheckCircle2, Upload,
   Compass, ShieldAlert, HelpCircle, Megaphone, Ban, Gauge, Zap,
   HeartHandshake, Brain, Thermometer, TrendingUp, TrendingDown, Minus,
-  HeartCrack, Wand2, UserRound, BookOpen, BriefcaseBusiness,
+  HeartCrack, Wand2, UserRound, BookOpen, BriefcaseBusiness, KanbanSquare,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -128,6 +129,29 @@ interface FastCardShape {
 }
 
 type SpeechStatus = 'idle' | 'listening' | 'restarting' | 'stopped' | 'mic_error';
+
+// Sprint 50 hotfix — meeting prep mode response. Distinct from AssistantCard:
+// this is a PRE-call plan (objective, style, opening questions, pitch script,
+// stages), not a "what to say next" reply. Returned by /api/sales-assistant/prepare.
+interface MeetingPlan {
+  objective: { understand: string; sell: string; outcome: string };
+  conversationStyle: {
+    tone: 'aggressive' | 'soft' | 'consultative';
+    speakOrListen: 'listen_more' | 'lead_more' | 'balanced';
+    whenToPitch: string;
+  };
+  openingQuestions: string[];
+  pitchTiming: string;
+  pitchScript: string;
+  leveragePoints: string[];
+  dealbreakers: string[];
+  stages: { name: string; goal: string }[];
+  provider: string;
+  model: string;
+  fellBackToMock: boolean;
+}
+
+type MeetingMode = 'live' | 'plan';
 type AdviceHistoryItem = Pick<
   AssistantCard,
   | 'situation'
@@ -278,6 +302,16 @@ export default function SalesAssistant() {
   const [isFastLoading, setIsFastLoading] = useState(false);
   const [isFullLoading, setIsFullLoading] = useState(false);
   const [fastCard, setFastCard] = useState<FastCardShape | null>(null);
+  // Sprint 50 hotfix — meeting prep mode. When the founder has pasted
+  // prep context but the mic hasn't been started yet, the first CTA is
+  // "Подготовиться ко встрече" (not "Получить подсказку") and the
+  // response is a MeetingPlan, not an AssistantCard. After live transcript
+  // accumulates, the CTA flips to "Получить подсказку" and the regular
+  // live-advice pipeline runs. The plan persists across the transition;
+  // the user can switch between tabs (advice ⇄ plan) any time.
+  const [meetingPlan, setMeetingPlan] = useState<MeetingPlan | null>(null);
+  const [meetingMode, setMeetingMode] = useState<MeetingMode>('live');
+  const [isPreparing, setIsPreparing] = useState(false);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
   // Sprint 34A: lastAnalyzeAt / aiError для UX обратной связи.
@@ -671,6 +705,42 @@ export default function SalesAssistant() {
   // FULL is BACKGROUND enrichment: situation, risks, tone, SPIN stage,
   // emotional layer, dealNextStep, etc. It NEVER blocks fast. An old full
   // landing after a new click is silently discarded via fullRequestIdRef.
+  // Sprint 50 hotfix — meeting prep call. Uses the same manual+live transcript
+  // as the analyze pipeline so the user can paste context, prep, then start
+  // listening WITHOUT losing the prep context — both flow into the same
+  // analyze payload after the live stream starts.
+  async function runPrepare() {
+    const context = transcriptWithInterim().trim();
+    if (context.length < 20) {
+      setPermError('Вставьте контекст встречи перед подготовкой (минимум 20 символов).');
+      return;
+    }
+    setIsPreparing(true);
+    setAiError(null);
+    try {
+      const r = await api.post<{ plan: MeetingPlan }>('/api/sales-assistant/prepare', {
+        context: context.slice(-32_000),
+        projectId: projectId || null,
+      });
+      setMeetingPlan(r.plan);
+      setMeetingMode('plan'); // surface the plan immediately
+      setLastAnalyzeAt(Date.now());
+      setPermError(null);
+      console.debug(
+        `[sales-assistant/prepare] done ` +
+        `provider=${r.plan.provider} model=${r.plan.model} ` +
+        `fellBackToMock=${r.plan.fellBackToMock} ` +
+        `stages=${r.plan.stages.length} openingQs=${r.plan.openingQuestions.length}`,
+      );
+    } catch (err) {
+      const failure = classifyAnalyzeError(err, new AbortController());
+      console.warn(`[sales-assistant/prepare] FAIL reason=${failure.reason} status=${failure.status ?? '-'} message="${failure.body.slice(0, 200)}"`);
+      setAiError(failure.userMessage);
+    } finally {
+      setIsPreparing(false);
+    }
+  }
+
   async function runAnalyze() {
     // Sprint 49 hotfix 9 — analyze видит final + interim.
     const transcriptText = transcriptWithInterim();
@@ -1224,6 +1294,13 @@ export default function SalesAssistant() {
   // something to analyze" gate. Require ≥10 chars on manual to avoid
   // a trivially-pasted "test" enabling the button.
   const hasFinalTranscript = transcript.some((t) => t.final) || manualTranscript.trim().length >= 10;
+  // Sprint 50 hotfix — prep mode: manual context present but the live mic
+  // hasn't produced anything yet. Threshold: prep gates at 20 chars of any
+  // context (matches the backend prepare endpoint); live transcript "active"
+  // is ≥50 chars to allow brief warm-up phrases without flipping the CTA.
+  const liveCharCount = transcript.filter((t) => t.final).map((t) => t.text).join('\n').length;
+  const hasMeaningfulPrepContext = manualTranscript.trim().length >= 20;
+  const inPrepMode = hasMeaningfulPrepContext && liveCharCount < 50;
   const visibleProjects = useMemo(
     () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
     [role, projects],
@@ -1284,19 +1361,31 @@ export default function SalesAssistant() {
           {listening
             ? <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop}>Остановить</Button>
             : <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start}>Начать прослушивание</Button>}
-          {/* Hotfix 2026-05-15 — кнопка КЛИКАБЕЛЬНА всегда, даже во время
-              активного запроса. Новый клик abort'ит предыдущий и стартует
-              новый. Раньше loading=disabled + analyzingRef.current return
-              приводили к «зависанию», когда сеть/OpenAI отвечали медленно. */}
-          <Button
-            variant="ai"
-            iconLeft={<RefreshCw size={14} />}
-            onClick={() => runAnalyze()}
-            disabled={!hasFinalTranscript}
-            loading={isFastLoading}
-          >
-            {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
-          </Button>
+          {/* Sprint 50 hotfix — prep CTA when live transcript is empty but
+              prep context exists; otherwise the live-advice CTA. Both buttons
+              hold their loading state independently so the user can switch
+              between modes without losing track. */}
+          {inPrepMode ? (
+            <Button
+              variant="ai"
+              iconLeft={<Sparkles size={14} />}
+              onClick={() => runPrepare()}
+              disabled={!hasMeaningfulPrepContext}
+              loading={isPreparing}
+            >
+              Подготовиться ко встрече
+            </Button>
+          ) : (
+            <Button
+              variant="ai"
+              iconLeft={<RefreshCw size={14} />}
+              onClick={() => runAnalyze()}
+              disabled={!hasFinalTranscript}
+              loading={isFastLoading}
+            >
+              {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
+            </Button>
+          )}
           <Button
             variant="primary"
             iconLeft={<Save size={14} />}
@@ -1571,24 +1660,69 @@ export default function SalesAssistant() {
           )}
         </Card>
 
-        {/* AI ADVICE */}
+        {/* AI ADVICE / MEETING PLAN */}
         <div className="space-y-4">
-          {!card && !fastCard && (
+          {/* Sprint 50 hotfix — tab switch between Подсказки (live copilot) and
+              План встречи (prep plan). Both views can coexist: prep plan stays
+              available even after the mic starts; live advice shows up once
+              the user clicks «Получить подсказку». */}
+          {(card || fastCard || meetingPlan) && (
+            <div className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs">
+              <button
+                type="button"
+                className={clsx(
+                  'px-3 h-7 rounded font-semibold transition-colors',
+                  meetingMode === 'live'
+                    ? 'bg-ai/15 text-ai-glow'
+                    : 'text-secondary hover:text-primary',
+                )}
+                onClick={() => setMeetingMode('live')}
+              >
+                Подсказки
+              </button>
+              <button
+                type="button"
+                className={clsx(
+                  'px-3 h-7 rounded font-semibold transition-colors',
+                  meetingMode === 'plan'
+                    ? 'bg-ai/15 text-ai-glow'
+                    : 'text-secondary hover:text-primary',
+                  !meetingPlan && 'opacity-40 cursor-not-allowed',
+                )}
+                onClick={() => meetingPlan && setMeetingMode('plan')}
+                disabled={!meetingPlan}
+                title={!meetingPlan ? 'Сначала «Подготовиться ко встрече»' : 'Открыть план встречи'}
+              >
+                План встречи
+              </button>
+            </div>
+          )}
+
+          {!card && !fastCard && !meetingPlan && (
             <Card padded className="text-center py-12">
               <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-ai/15 border border-ai/30 flex items-center justify-center text-ai-glow">
                 <Sparkles size={18} />
               </div>
-              <h3 className="text-base font-semibold text-primary mb-1">Подсказки появятся здесь</h3>
+              <h3 className="text-base font-semibold text-primary mb-1">
+                {inPrepMode ? 'Готовы подготовиться к встрече?' : 'Подсказки появятся здесь'}
+              </h3>
               <p className="text-xs text-secondary max-w-sm mx-auto">
-                Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.
+                {inPrepMode
+                  ? 'Нажмите «Подготовиться ко встрече» — AI соберёт цели, стратегию, опорные вопросы и план разговора.'
+                  : 'Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.'}
               </p>
             </Card>
+          )}
+
+          {/* План встречи (prep mode result) */}
+          {meetingMode === 'plan' && meetingPlan && (
+            <MeetingPlanCard plan={meetingPlan} />
           )}
 
           {/* Sprint 34В — fast tactical reply показывается СРАЗУ; полная
               аналитика догоняет в фоне. Если есть только fastCard (этап 2
               ещё в работе) — рендерим compact-карточку без analytics. */}
-          {(card || fastCard) && (
+          {meetingMode === 'live' && (card || fastCard) && (
             <>
               <AdviceCard
                 card={card}
@@ -2160,5 +2294,132 @@ function OutcomePanel({
         сначала «Запросил документы», потом через неделю «Назначена встреча»).
       </p>
     </Card>
+  );
+}
+
+// Sprint 50 hotfix — meeting prep plan view. Renders the 8 sections of the
+// MeetingPlan returned by /api/sales-assistant/prepare. Distinct from
+// AdviceCard (live "what to say next") — this is the pre-call strategy.
+function MeetingPlanCard({ plan }: { plan: MeetingPlan }) {
+  const TONE_LABEL: Record<MeetingPlan['conversationStyle']['tone'], string> = {
+    aggressive: 'Активно вести разговор',
+    soft: 'Мягко, без давления',
+    consultative: 'Консультативно',
+  };
+  const SPEAK_LABEL: Record<MeetingPlan['conversationStyle']['speakOrListen'], string> = {
+    listen_more: 'Слушать больше, чем говорить',
+    lead_more: 'Вести разговор',
+    balanced: 'Сбалансированно',
+  };
+
+  return (
+    <Card padded accent="ai">
+      <div className="flex items-center gap-2 mb-4">
+        <Compass size={16} className="text-ai-glow" />
+        <h2 className="text-[13px] uppercase tracking-[0.16em] text-ai-glow font-bold">
+          План встречи
+        </h2>
+        {plan.fellBackToMock && <StatusBadge tone="warning" dot>резервная подготовка</StatusBadge>}
+      </div>
+
+      {/* 1. ЦЕЛЬ */}
+      <div className="rounded-lg border-2 border-ai/40 bg-canvas px-4 py-3 mb-4">
+        <SectionLabel icon={<Target size={14} className="text-zapusk-400" />}>Цель встречи</SectionLabel>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+          <PlanField label="Что понять" value={plan.objective.understand} />
+          <PlanField label="Что продать" value={plan.objective.sell} />
+          <PlanField label="Outcome" value={plan.objective.outcome} />
+        </div>
+      </div>
+
+      {/* 2. КАК ВЕСТИ */}
+      <div className="rounded-lg border border-ai/30 bg-canvas px-4 py-3 mb-4">
+        <SectionLabel icon={<Wand2 size={13} className="text-ai-glow" />}>Как вести разговор</SectionLabel>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+          <PlanField label="Тон" value={TONE_LABEL[plan.conversationStyle.tone]} />
+          <PlanField label="Темп" value={SPEAK_LABEL[plan.conversationStyle.speakOrListen]} />
+          <PlanField label="Когда переходить к pitch" value={plan.conversationStyle.whenToPitch} />
+        </div>
+      </div>
+
+      {/* 3. ПЕРВЫЕ ВОПРОСЫ */}
+      {plan.openingQuestions.length > 0 && (
+        <div className="rounded-lg border border-ai/30 bg-canvas px-4 py-3 mb-4">
+          <SectionLabel icon={<HelpCircle size={13} className="text-muted" />}>Первые вопросы</SectionLabel>
+          <ul className="space-y-2 mt-2">
+            {plan.openingQuestions.map((q, i) => (
+              <li key={i} className="text-[14px] text-primary leading-relaxed border-l-2 border-ai/30 pl-3">
+                {q}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 4-5. PITCH */}
+      <div className="rounded-lg border border-ai/30 bg-canvas px-4 py-3 mb-4">
+        <SectionLabel icon={<Megaphone size={13} className="text-zapusk-400" />}>Pitch</SectionLabel>
+        <div className="mt-2 space-y-2">
+          <PlanField label="Когда" value={plan.pitchTiming} />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">Как звучит</div>
+            <blockquote className="bg-ai/8 border border-ai/30 rounded-md px-3 py-2 text-[14px] text-primary leading-relaxed">
+              {plan.pitchScript}
+            </blockquote>
+          </div>
+        </div>
+      </div>
+
+      {/* 6. НА ЧТО ДАВИТЬ */}
+      {plan.leveragePoints.length > 0 && (
+        <div className="rounded-lg border border-ai/30 bg-canvas px-4 py-3 mb-4">
+          <SectionLabel icon={<Zap size={13} className="text-zapusk-400" />}>На что давить</SectionLabel>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {plan.leveragePoints.map((p, i) => (
+              <StatusBadge key={i} tone="zapusk">{p}</StatusBadge>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 7. DEALBREAKERS */}
+      {plan.dealbreakers.length > 0 && (
+        <div className="rounded-lg border-2 border-danger/40 bg-danger/8 px-4 py-3 mb-4">
+          <SectionLabel icon={<Ban size={13} className="text-danger" />}>Что может сломать встречу</SectionLabel>
+          <ul className="space-y-1.5 mt-2">
+            {plan.dealbreakers.map((d, i) => (
+              <li key={i} className="text-[14px] text-primary leading-relaxed">— {d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 8. STAGES */}
+      {plan.stages.length > 0 && (
+        <div className="rounded-lg border border-line bg-canvas px-4 py-3">
+          <SectionLabel icon={<KanbanSquare size={13} className="text-muted" />}>План разговора</SectionLabel>
+          <ol className="space-y-2 mt-2">
+            {plan.stages.map((s, i) => (
+              <li key={i} className="flex items-start gap-3">
+                <span className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-full bg-ai/15 text-ai-glow text-xs font-bold">{i + 1}</span>
+                <div className="flex-1">
+                  <div className="text-[14px] font-semibold text-primary leading-tight">{s.name}</div>
+                  {s.goal && <div className="text-[13px] text-secondary leading-relaxed">{s.goal}</div>}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function PlanField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">{label}</div>
+      <div className="text-[13.5px] text-primary leading-relaxed">{value}</div>
+    </div>
   );
 }

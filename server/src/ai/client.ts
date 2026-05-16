@@ -108,6 +108,16 @@ const FEATURE_GUARDS: Record<string, FeatureGuard> = {
     maxOutputTokens: 600,
     timeoutMs: 8_000,
   },
+  // Sprint 50 hotfix — meeting prep mode. Founder pastes pre-call context
+  // (CRM notes, Zoom notes, investor profile) and gets a structured
+  // MeetingPlan back. Bigger output budget than live advice — the plan
+  // includes 8 sections.
+  'sales_assistant.prepare': {
+    modelRoute: 'main',
+    maxInputChars: 32_000,
+    maxOutputTokens: 2_000,
+    timeoutMs: 30_000,
+  },
   classification: {
     modelRoute: 'fast',
     maxInputChars: 12_000,
@@ -670,6 +680,38 @@ function mockJsonForFeature(opts: AICallOptions): Record<string, unknown> {
       aiScoreBreakdown: {
         rapport: 50, spin: 40, nextStepFixation: 40, objectionHandling: 40, clarity: 50, confidence: 45,
       },
+    };
+  }
+  if (feature === 'sales_assistant.prepare') {
+    return {
+      objective: {
+        understand: 'Цели инвестора, риск-аппетит, опыт, ожидания по доходности',
+        sell: 'Доходность сделки и защиту капитала, а не продукт',
+        outcome: 'Договорённость о следующем шаге — материалы и дата звонка',
+      },
+      conversationStyle: {
+        tone: 'consultative',
+        speakOrListen: 'listen_more',
+        whenToPitch: 'После того как услышал цели инвестора и его опыт',
+      },
+      openingQuestions: [
+        'Что для вас сейчас главный фокус по портфелю?',
+        'Какие проекты вы рассматривали за последние 12 месяцев?',
+        'Какая доходность для вас комфортная по этому классу актива?',
+        'Что обычно становится для вас стоп-фактором?',
+      ],
+      pitchTiming: 'Не раньше, чем выяснил критерии решения инвестора',
+      pitchScript: 'Резервная подсказка: реальный AI временно недоступен. Расскажите коротко: чек, окупаемость, доходность, выход.',
+      leveragePoints: ['предсказуемость денежного потока', 'защита капитала', 'умеренный риск'],
+      dealbreakers: ['ранний pitch без выяснения целей', 'перегруз цифрами', 'спор про гарантии'],
+      stages: [
+        { name: 'Знакомство', goal: 'Установить контакт' },
+        { name: 'Выявление целей', goal: 'Понять, что инвестор хочет получить' },
+        { name: 'Инвестиционный опыт', goal: 'Узнать прошлые сделки' },
+        { name: 'Pitch', goal: 'Коротко продать доход' },
+        { name: 'Объекции', goal: 'Разобрать сомнения' },
+        { name: 'Следующий шаг', goal: 'Зафиксировать дату следующего контакта' },
+      ],
     };
   }
   if (feature === 'sales_session.complete') {
