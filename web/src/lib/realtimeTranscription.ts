@@ -6,7 +6,7 @@ import { api } from './api';
 //   1. Сервер /api/realtime/transcription-session выдаёт ephemeral client secret
 //      (короткоживущий, 60 секунд) — основной OPENAI_API_KEY никогда не уходит
 //      в браузер.
-//   2. Браузер открывает RTCPeerConnection к https://api.openai.com/v1/realtime
+//   2. Браузер открывает RTCPeerConnection к https://api.openai.com/v1/realtime/calls
 //      с этим секретом, шлёт SDP offer, получает answer.
 //   3. Один audio track (mic) + один data channel "oai-events".
 //   4. Из data channel приходят события transcription:
@@ -15,7 +15,7 @@ import { api } from './api';
 //   5. На любую ошибку — promise reject; вызывающий код переключается на
 //      Web Speech API fallback.
 
-const REALTIME_BASE_URL = 'https://api.openai.com/v1/realtime';
+const REALTIME_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
 const SESSION_ENDPOINT = '/api/realtime/transcription-session';
 
 export interface RealtimeSessionInfo {
@@ -23,6 +23,11 @@ export interface RealtimeSessionInfo {
   model: string;
   expiresAt: number | null;
   templateVersion: number;
+  traceId?: string;
+  promptSupported?: boolean;
+  promptLength?: number;
+  promptTrimmed?: boolean;
+  turnDetectionSupported?: boolean;
 }
 
 export interface RealtimeCallbacks {
@@ -33,7 +38,7 @@ export interface RealtimeCallbacks {
   /** Ошибка после успешного подключения — UI должен переключиться на fallback. */
   onError: (err: Error) => void;
   /** Закрытие соединения (по stop() или со стороны OpenAI). */
-  onClose?: () => void;
+  onClose?: (reason?: string) => void;
 }
 
 export interface RealtimeSession {
@@ -65,6 +70,17 @@ async function fetchSession(): Promise<RealtimeSessionInfo> {
   }
 }
 
+function realtimeLog(event: string, details: Record<string, unknown> = {}) {
+  // Temporary transport diagnostics. Never log clientSecret, SDP, prompt,
+  // transcript or audio. These logs exist so production can distinguish
+  // session bootstrap success from SDP/WebRTC failure.
+  try {
+    console.debug('[realtime-transcription]', event, details);
+  } catch {
+    // ignore console failures in unusual embedded browsers
+  }
+}
+
 export async function startRealtimeTranscription(
   callbacks: RealtimeCallbacks,
 ): Promise<RealtimeSession> {
@@ -76,6 +92,16 @@ export async function startRealtimeTranscription(
   }
 
   const session = await fetchSession();
+  realtimeLog('session-issued', {
+    traceId: session.traceId,
+    model: session.model,
+    expiresAt: session.expiresAt,
+    templateVersion: session.templateVersion,
+    promptSupported: session.promptSupported,
+    promptLength: session.promptLength,
+    promptTrimmed: session.promptTrimmed,
+    turnDetectionSupported: session.turnDetectionSupported,
+  });
 
   let mediaStream: MediaStream | null = null;
   let pc: RTCPeerConnection | null = null;
@@ -91,7 +117,7 @@ export async function startRealtimeTranscription(
         try { track.stop(); } catch { /* ignore */ }
       }
     }
-    callbacks.onClose?.();
+    callbacks.onClose?.('stopped');
   };
 
   try {
@@ -101,6 +127,10 @@ export async function startRealtimeTranscription(
         noiseSuppression: true,
         autoGainControl: true,
       },
+    });
+    realtimeLog('microphone-ready', {
+      traceId: session.traceId,
+      audioTracks: mediaStream.getAudioTracks().length,
     });
 
     pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
@@ -113,9 +143,21 @@ export async function startRealtimeTranscription(
     // interim, а не голые чанки. На .completed — сбрасываем буфер.
     let interimBuffer = '';
     dc = pc.createDataChannel('oai-events');
+    dc.onopen = () => realtimeLog('data-channel-open', { traceId: session.traceId });
+    dc.onclose = () => realtimeLog('data-channel-close', {
+      traceId: session.traceId,
+      readyState: dc?.readyState,
+    });
+    dc.onerror = () => realtimeLog('data-channel-error', {
+      traceId: session.traceId,
+      readyState: dc?.readyState,
+    });
     dc.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as RealtimeEvent;
+        if (msg.type && !TRANSCRIPT_EVENT_TYPES.has(msg.type)) {
+          realtimeLog('event', { traceId: session.traceId, type: msg.type });
+        }
         if (msg.type === 'conversation.item.input_audio_transcription.delta') {
           if (typeof msg.delta === 'string' && msg.delta.length) {
             interimBuffer += msg.delta;
@@ -133,6 +175,12 @@ export async function startRealtimeTranscription(
           return;
         }
         if (msg.type === 'error') {
+          realtimeLog('server-error-event', {
+            traceId: session.traceId,
+            code: msg.error?.code,
+            type: msg.error?.type,
+            message: msg.error?.message?.slice(0, 160),
+          });
           callbacks.onError(new Error(msg.error?.message ?? 'openai_realtime_error'));
         }
       } catch {
@@ -142,15 +190,38 @@ export async function startRealtimeTranscription(
 
     pc.onconnectionstatechange = () => {
       if (!pc) return;
+      realtimeLog('connection-state', {
+        traceId: session.traceId,
+        connectionState: pc.connectionState,
+      });
       if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
         if (!closed) callbacks.onError(new Error(`webrtc_${pc.connectionState}`));
       }
+    };
+    pc.oniceconnectionstatechange = () => {
+      if (!pc) return;
+      realtimeLog('ice-state', {
+        traceId: session.traceId,
+        iceConnectionState: pc.iceConnectionState,
+      });
+    };
+    pc.onsignalingstatechange = () => {
+      if (!pc) return;
+      realtimeLog('signaling-state', {
+        traceId: session.traceId,
+        signalingState: pc.signalingState,
+      });
     };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    const sdpResponse = await fetch(`${REALTIME_BASE_URL}?model=${encodeURIComponent(session.model)}`, {
+    realtimeLog('sdp-exchange-start', {
+      traceId: session.traceId,
+      endpoint: '/v1/realtime/calls',
+      model: session.model,
+    });
+    const sdpResponse = await fetch(REALTIME_CALLS_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${session.clientSecret}`,
@@ -160,10 +231,16 @@ export async function startRealtimeTranscription(
     });
     if (!sdpResponse.ok) {
       const text = await sdpResponse.text().catch(() => '');
+      realtimeLog('sdp-exchange-failed', {
+        traceId: session.traceId,
+        status: sdpResponse.status,
+        bodyPreview: text.slice(0, 180),
+      });
       throw new RealtimeUnavailableError('sdp_exchange_failed', sdpResponse.status, text.slice(0, 240));
     }
     const answer = { type: 'answer' as const, sdp: await sdpResponse.text() };
     await pc.setRemoteDescription(answer);
+    realtimeLog('sdp-exchange-complete', { traceId: session.traceId });
 
     return { stop, info: session };
   } catch (err) {
@@ -178,5 +255,10 @@ interface RealtimeEvent {
   type?: string;
   delta?: string;
   transcript?: string;
-  error?: { message?: string };
+  error?: { code?: string; message?: string; type?: string };
 }
+
+const TRANSCRIPT_EVENT_TYPES = new Set([
+  'conversation.item.input_audio_transcription.delta',
+  'conversation.item.input_audio_transcription.completed',
+]);

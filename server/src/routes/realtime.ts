@@ -82,6 +82,8 @@ realtimeRoutes.use(requireNotInvestor());
 // could refresh every few seconds and rack up bills inside the daily AI
 // guardrail. 10-token burst with ~12 req/min sustained.
 realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), async (req, res) => {
+  const traceId = `rt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+
   if (!env.OPENAI_API_KEY || env.OPENAI_API_KEY.length < 10) {
     return res.status(503).json({ error: 'openai_not_configured' });
   }
@@ -97,11 +99,11 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
-    console.warn(`[realtime] template lookup failed: ${msg}`);
+    console.warn(`[realtime] template lookup failed traceId=${traceId}: ${msg}`);
     return res.status(503).json({ error: 'transcription_template_missing' });
   }
   if (!tpl || !tpl.active || !tpl.body || tpl.body.trim().length < 50) {
-    console.warn(`[realtime] template "${REALTIME_TEMPLATE_KEY}" missing/inactive — returning 503`);
+    console.warn(`[realtime] template "${REALTIME_TEMPLATE_KEY}" missing/inactive traceId=${traceId} — returning 503`);
     return res.status(503).json({ error: 'transcription_template_missing' });
   }
 
@@ -188,7 +190,7 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
         ? (parsed as { error?: { type?: string; message?: string; param?: string; code?: string } }).error
         : null;
       console.warn(
-        `[realtime] openai ${upstream.status} model=${model} modelSource=${modelSource} ` +
+        `[realtime] openai ${upstream.status} traceId=${traceId} model=${model} modelSource=${modelSource} ` +
         `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
         `turnDetectionSupported=${turnDetectionSupported} ` +
         `errorType=${upErr?.type ?? 'unknown'} errorCode=${upErr?.code ?? 'none'} ` +
@@ -221,7 +223,7 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
       const cs = (data as { client_secret?: unknown }).client_secret;
       const csType = cs === null ? 'null' : Array.isArray(cs) ? 'array' : typeof cs;
       console.warn(
-        `[realtime] openai response missing client_secret model=${model} modelSource=${modelSource} ` +
+        `[realtime] openai response missing client_secret traceId=${traceId} model=${model} modelSource=${modelSource} ` +
         `responseKeys=[${keys.join(',')}] clientSecretType=${csType}`,
       );
       return res.status(502).json({
@@ -242,6 +244,7 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
       targetId: tpl.id,
       payload: {
         actorId: getUser(req).id,
+        traceId,
         model, modelSource,
         promptSupported,
         promptLength: built.length, promptTrimmed: built.trimmed,
@@ -250,9 +253,18 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
       },
     });
 
+    console.info(
+      `[realtime] session issued traceId=${traceId} actorId=${getUser(req).id} ` +
+      `model=${model} modelSource=${modelSource} templateVersion=${tpl.version} ` +
+      `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
+      `turnDetectionSupported=${turnDetectionSupported} expiresAt=${expiresAt ?? 'unknown'} ` +
+      `transport=webrtc endpoint=/v1/realtime/calls`,
+    );
+
     res.json({
       clientSecret,
       model,
+      traceId,
       expiresAt,
       templateVersion: tpl.version,
       promptSupported,
@@ -265,7 +277,7 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
     console.warn(
-      `[realtime] session bootstrap failed model=${model} modelSource=${modelSource} ` +
+      `[realtime] session bootstrap failed traceId=${traceId} model=${model} modelSource=${modelSource} ` +
       `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
       `turnDetectionSupported=${turnDetectionSupported} err="${msg}"`,
     );
