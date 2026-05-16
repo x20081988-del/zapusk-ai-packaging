@@ -158,15 +158,17 @@ assistantOutcomesRoutes.post('/', async (req, res) => {
     if (d.salesSessionId) {
       const s = await prisma.salesSession.findUnique({
         where: { id: d.salesSessionId },
-        select: { id: true, projectId: true },
+        select: { id: true, projectId: true, createdById: true },
       });
       if (!s) return res.status(404).json({ error: 'session_not_found' });
-      if (s.projectId) {
+      // Sprint 49 hotfix 11 — orphan session is allowed when the creator
+      // matches the actor (Sprint 49 hotfix 10 added createdById). Otherwise
+      // fall back to the old project-ownership check. Cross-tenant → 404
+      // to avoid leaking session existence.
+      if (s.createdById !== user.id) {
+        if (!s.projectId) return res.status(404).json({ error: 'session_not_found' });
         const p = await prisma.project.findUnique({ where: { id: s.projectId }, select: { userId: true } });
         if (p?.userId !== user.id) return res.status(404).json({ error: 'session_not_found' });
-      } else {
-        // Orphan session — только admin/manager (см. Sprint 35 P0.3 правила).
-        return res.status(404).json({ error: 'session_not_found' });
       }
     }
     if (d.conversationAnalysisId) {
@@ -247,17 +249,39 @@ assistantOutcomesRoutes.get('/', async (req, res) => {
       const ok = await assertProjectOwnership(req, projectId);
       if (!ok.ok) return res.status(ok.status).json({ error: ok.error });
     } else if (sessionId || sessionIds.length > 0) {
+      // Sprint 49 hotfix 11 — orphan sessions are now founder-visible via
+      // SalesSession.createdById (Sprint 49 hotfix 10 added that column).
+      // Old logic blanket-rejected any session without projectId; that fired
+      // 404 in the meetings list when a meeting was finalized without a
+      // project. New rule per session:
+      //   • projectId present + owned by user  → allow
+      //   • createdById === user.id            → allow
+      //   • everything else                    → drop silently (no leak).
+      // Sessions that simply don't exist in the DB are also dropped — we
+      // don't 404 the whole batch because one stale id lingered on the
+      // client. The outcome query naturally returns [] for unknown sessions.
       const ids = sessionIds.length > 0 ? sessionIds : [sessionId!];
       const sessions = await prisma.salesSession.findMany({
         where: { id: { in: ids } },
-        select: { id: true, projectId: true },
+        select: { id: true, projectId: true, createdById: true },
       });
-      if (sessions.length !== ids.length || sessions.some((s) => !s.projectId)) {
-        return res.status(404).json({ error: 'session_not_found' });
-      }
-      const projectIds = Array.from(new Set(sessions.map((s) => s.projectId).filter((x): x is string => Boolean(x))));
-      const count = await prisma.project.count({ where: { id: { in: projectIds }, userId: user.id } });
-      if (count !== projectIds.length) return res.status(404).json({ error: 'session_not_found' });
+      const ownedProjectIds = new Set(
+        (await prisma.project.findMany({
+          where: {
+            id: { in: sessions.map((s) => s.projectId).filter((x): x is string => Boolean(x)) },
+            userId: user.id,
+          },
+          select: { id: true },
+        })).map((p) => p.id),
+      );
+      const allowedSessionIds = sessions
+        .filter((s) => s.createdById === user.id || (s.projectId && ownedProjectIds.has(s.projectId)))
+        .map((s) => s.id);
+      // Tighten the WHERE to the subset the user is allowed to see; if none
+      // of the requested ids are accessible, return [] so the meetings page
+      // doesn't show a banner — the user simply has no outcomes for the
+      // sessions they're looking at. Older behaviour returned 404 here.
+      where.salesSessionId = { in: allowedSessionIds };
     } else {
       // founder без projectId — отдадим только outcomes им же созданные.
       // Это покрывает кейс «у меня есть проект, дай все мои outcomes» если фронт
