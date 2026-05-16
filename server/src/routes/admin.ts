@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { statSync, existsSync, createReadStream } from 'node:fs';
+import { statSync, statfsSync, existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
 import archiver from 'archiver';
 import { prisma } from '../db.js';
@@ -519,4 +519,51 @@ adminRoutes.post('/backup', requireRole(['SUPER_ADMIN']), async (req, res) => {
   if (snapshotsExists) archive.directory(snapshotsAbs, 'snapshots');
 
   await archive.finalize();
+});
+
+// Sprint 50 P1.1 — operational deep-dive that used to be at public /health.
+// Disk free, mount paths, model names, integration matrix don't help a
+// public caller and do help an attacker fingerprint the deploy. Gated
+// here on ADMIN / MANAGER / SUPER_ADMIN — ops needs visibility too.
+adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res) => {
+  const openaiConfigured = Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 10);
+  const anthropicConfigured = Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 10);
+  const deepgramConfigured = Boolean(env.DEEPGRAM_API_KEY && env.DEEPGRAM_API_KEY.length > 10);
+  const lovableConfigured = Boolean(env.LOVABLE_API_KEY && env.LOVABLE_API_KEY.length > 6 && env.LOVABLE_API_BASE_URL);
+  let disk: { mountPath: string; freeBytes: number; totalBytes: number; usedPercent: number } | null = null;
+  try {
+    const mountPath = path.dirname(path.resolve((process.env.DATABASE_URL ?? 'file:./prod.db').replace(/^file:/, '')));
+    const stats = statfsSync(mountPath);
+    const totalBytes = Number(stats.blocks) * Number(stats.bsize);
+    const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+    const usedPercent = totalBytes > 0 ? Math.round(((totalBytes - freeBytes) / totalBytes) * 100) : 0;
+    disk = { mountPath, freeBytes, totalBytes, usedPercent };
+  } catch {
+    disk = null;
+  }
+  const status = aiProviderStatus();
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    demo: env.DEMO_MODE,
+    env: env.NODE_ENV,
+    disk,
+    ai: {
+      provider: status.provider,
+      openaiKeyConfigured: openaiConfigured,
+      anthropicKeyConfigured: anthropicConfigured,
+      openaiModelMain: env.OPENAI_MODEL_MAIN,
+      realProviderEnabled: status.realProviderEnabled,
+      warning: status.warning,
+      warningSeverity: status.warningSeverity,
+      allowMockInProduction: status.allowMockInProduction,
+    },
+    integrations: {
+      openai: openaiConfigured,
+      anthropic: anthropicConfigured,
+      deepgram: deepgramConfigured,
+      lovable: lovableConfigured,
+    },
+    knowledgeFts: isFtsAvailable(),
+  });
 });

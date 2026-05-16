@@ -57,63 +57,36 @@ const candidates = [
 ];
 const webDistPath = candidates.find((p): p is string => Boolean(p) && fs.existsSync(path.join(p, 'index.html'))) ?? null;
 
+// Sprint 50 P1.1 — public /health surface is intentionally minimal.
+//
+// Render's healthcheck reads this and only needs HTTP 200. Public callers
+// (status pages, the prod-smoke script) still need to verify the AI
+// provider didn't drift to mock, so `ai.provider`, `ai.realProviderEnabled`
+// and `ai.warning` stay public. Everything else — disk usage, file paths,
+// model names, integration matrix — moves to /api/admin/health/details
+// behind SUPER_ADMIN / ADMIN / MANAGER (see routes/admin.ts).
+//
+// What we removed from the public surface:
+//   spaPath, disk.mountPath/sizes, openaiModelMain, integrations matrix.
+// These don't help any legitimate public caller and they do help an
+// attacker fingerprint the deploy.
 app.get('/health', (_req, res) => {
-  // Sprint 17: integrations booleans — `curl /health | jq '.integrations'`
-  // показывает ops какие реальные provider'ы сконфигурированы, без секретов.
-  const openaiConfigured = Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 10);
-  const anthropicConfigured = Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 10);
-  const deepgramConfigured = Boolean(env.DEEPGRAM_API_KEY && env.DEEPGRAM_API_KEY.length > 10);
-  const lovableConfigured = Boolean(env.LOVABLE_API_KEY && env.LOVABLE_API_KEY.length > 6 && env.LOVABLE_API_BASE_URL);
-
-  // Sprint 30 — disk usage статистика. fs.statfsSync доступен с Node 18.15+,
-  // на Render Node 22 — ок. Если path не существует (локальный dev без mount)
-  // — возвращаем null, не валим health.
-  let disk: { mountPath: string; freeBytes: number; totalBytes: number; usedPercent: number } | null = null;
-  try {
-    const mountPath = path.dirname(path.resolve((process.env.DATABASE_URL ?? 'file:./prod.db').replace(/^file:/, '')));
-    const stats = fs.statfsSync(mountPath);
-    const totalBytes = Number(stats.blocks) * Number(stats.bsize);
-    const freeBytes = Number(stats.bavail) * Number(stats.bsize);
-    const usedPercent = totalBytes > 0 ? Math.round(((totalBytes - freeBytes) / totalBytes) * 100) : 0;
-    disk = { mountPath, freeBytes, totalBytes, usedPercent };
-  } catch {
-    disk = null;
-  }
-
+  const status = aiProviderStatus();
   res.json({
     ok: true,
     ts: Date.now(),
-    demo: env.DEMO_MODE,
     env: env.NODE_ENV,
-    spaReady: Boolean(webDistPath),
-    spaPath: webDistPath,
-    disk,
-    // Legacy ai block — оставляем для обратной совместимости c существующими
-    // диагностическими скриптами (см. Sprint 11.1 hotfix). Sprint 49 hotfix 11
-    // расширили блок: realProviderEnabled + warning делают невидимый mock-fallback
-    // громким сигналом для prod-smoke и operator'ов.
-    ai: (() => {
-      const status = aiProviderStatus();
-      return {
-        provider: status.provider,
-        openaiKeyConfigured: openaiConfigured,
-        anthropicKeyConfigured: anthropicConfigured,
-        openaiModelMain: env.OPENAI_MODEL_MAIN,
-        realProviderEnabled: status.realProviderEnabled,
-        warning: status.warning,
-        warningSeverity: status.warningSeverity,
-        allowMockInProduction: status.allowMockInProduction,
-      };
-    })(),
-    // Sprint 17: новый блок — все 4 интеграции одним взглядом.
-    integrations: {
-      openai: openaiConfigured,
-      anthropic: anthropicConfigured,
-      deepgram: deepgramConfigured,
-      lovable: lovableConfigured,
+    ai: {
+      provider: status.provider,
+      realProviderEnabled: status.realProviderEnabled,
+      warning: status.warning,
+      warningSeverity: status.warningSeverity,
     },
   });
 });
+
+// Detailed health is mounted on adminRoutes (see routes/admin.ts) so it
+// inherits the auth + role gate.
 
 // Sprint 36 P0.1 — публичная раздача /uploads закрыта. Раньше любой человек с
 // URL мог скачать презентации, финмодели, записи разговоров и брифы клиентов.
