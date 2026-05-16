@@ -14,6 +14,7 @@ import {
 } from '../services/briefService.js';
 import { recordAudit } from '../lib/audit.js';
 import { requireNotInvestor } from '../lib/ownership.js';
+import { isAIGuardrailError } from '../ai/client.js';
 
 export const briefRoutes = Router();
 briefRoutes.use(authMiddleware);
@@ -44,6 +45,12 @@ briefRoutes.post('/:projectId/generate', async (req, res) => {
     const result = await generateBrief(req.params.projectId);
     res.json(result);
   } catch (err) {
+    // Sprint 49 hotfix 14 — AI guardrails leaked as 500. Now surface the
+    // guardrail code (429 / 402-ish) so the frontend can show "rate-limit"
+    // or "quota exhausted" instead of a generic failure.
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[brief]', err);
     res.status(500).json({ error: 'brief_generation_failed' });
   }
@@ -87,6 +94,9 @@ briefRoutes.post('/:projectId/regenerate-with-feedback', async (req, res) => {
   } catch (err) {
     if (err instanceof Error && err.name === 'BriefNotGenerated') {
       return res.status(409).json({ error: 'brief_not_generated', message: 'Сначала сгенерируйте бриф.' });
+    }
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
     }
     console.error('[brief-feedback]', err);
     res.status(500).json({ error: 'brief_feedback_regeneration_failed' });

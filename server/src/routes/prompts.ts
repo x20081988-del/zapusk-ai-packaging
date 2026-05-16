@@ -6,6 +6,7 @@ import { generateFullPackaging } from '../services/packageService.js';
 import { recordAudit } from '../lib/audit.js';
 import { requireNotInvestor } from '../lib/ownership.js';
 import { getPromptTemplateHistory } from '../services/promptTemplateVersioning.js';
+import { isAIGuardrailError } from '../ai/client.js';
 
 export const promptsRoutes = Router();
 promptsRoutes.use(authMiddleware);
@@ -29,6 +30,9 @@ promptsRoutes.post('/:projectId/generate-full-packaging', async (req, res) => {
     const result = await generateFullPackaging(req.params.projectId);
     res.status(201).json(result);
   } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[full-packaging]', err);
     res.status(500).json({ error: 'full_packaging_failed', message: err instanceof Error ? err.message : 'unknown' });
   }
@@ -64,6 +68,9 @@ promptsRoutes.post('/:projectId/generate/:kind', async (req, res) => {
     const prompt = await generatePrompt(req.params.projectId, kind, feedback);
     res.status(201).json({ prompt });
   } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
     console.error('[prompts]', err);
     res.status(500).json({ error: 'prompt_generation_failed' });
   }
@@ -74,8 +81,16 @@ promptsRoutes.post('/:projectId/generate-all', async (req, res) => {
   if (!(await assertOwnership(user.id, req.params.projectId))) {
     return res.status(404).json({ error: 'project_not_found' });
   }
-  const results = await generateAllPrompts(req.params.projectId);
-  res.status(201).json({ generated: results });
+  try {
+    const results = await generateAllPrompts(req.params.projectId);
+    res.status(201).json({ generated: results });
+  } catch (err) {
+    if (isAIGuardrailError(err)) {
+      return res.status(err.statusCode).json({ error: err.code });
+    }
+    console.error('[prompts/generate-all]', err);
+    res.status(500).json({ error: 'prompt_generation_failed' });
+  }
 });
 
 // ─── Sprint 32 — append-only versions per prompt kind ─────────────────────
