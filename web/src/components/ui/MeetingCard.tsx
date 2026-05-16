@@ -31,6 +31,13 @@ export function MeetingCard({ session, compact }: { session: SalesSession; compa
                 {INVESTOR_TYPE_LABEL[session.investorType]}
               </span>
             )}
+            {/* Sprint 50 P1.3 — surface fallback honestly. Pre-Sprint-50 the
+                badge was silently absent on meetings where AI fell through
+                to mock, so the founder couldn't tell a real AI-card from a
+                heuristic one. */}
+            {session.fellBackToMock && (
+              <StatusBadge tone="warning" dot>резервная карточка (AI недоступен)</StatusBadge>
+            )}
             <span className="text-[11px] text-muted">{formatDate(session.createdAt)}</span>
           </div>
           <h3 className="text-base font-semibold text-primary tracking-tight">
