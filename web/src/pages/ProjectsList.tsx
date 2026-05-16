@@ -90,24 +90,26 @@ export default function ProjectsList() {
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {visible.map((p) => (
-              <div key={p.id} className="relative">
+              <div key={p.id} className="space-y-2">
                 <ProjectCard project={p} percent={computeProgress(p).percent} />
                 {!isDemoMode && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="danger"
-                    iconLeft={<Trash2 size={12} />}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setProjectToArchive(p);
-                    }}
-                    className="absolute right-3 top-3 opacity-95 shadow-lifted"
-                    title="Удалить проект"
-                  >
-                    Удалить
-                  </Button>
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="danger"
+                      iconLeft={<Trash2 size={12} />}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setProjectToArchive(p);
+                      }}
+                      className="min-w-[108px] whitespace-nowrap"
+                      title="Удалить проект"
+                    >
+                      Удалить
+                    </Button>
+                  </div>
                 )}
               </div>
             ))}

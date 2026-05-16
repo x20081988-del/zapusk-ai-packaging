@@ -302,7 +302,7 @@ export default function ConversationAnalysis() {
               const card = parseAnalysisJSON(h.analysis);
               return (
                 <li key={h.id} className="rounded-md border border-hairline bg-canvas/40 px-3 py-3 hover:border-ai/35 transition-colors">
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         {h.sentiment && (
@@ -325,7 +325,7 @@ export default function ConversationAnalysis() {
                         <p className="text-xs text-secondary mt-1 line-clamp-2">{card.summary}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
                       {/* Sprint 42 P0.3 — admin/manager могут добавить разбор
                           как kandidat в KB. Footprint минимальный — кнопка
                           сама себя скрывает для FOUNDER (см. AddToKb...). */}
@@ -343,6 +343,7 @@ export default function ConversationAnalysis() {
                         variant="danger"
                         iconLeft={<Archive size={12} />}
                         onClick={() => setAnalysisToArchive(h)}
+                        className="min-w-[108px] whitespace-nowrap"
                         title="Удалить AI-разбор"
                       >
                         Удалить

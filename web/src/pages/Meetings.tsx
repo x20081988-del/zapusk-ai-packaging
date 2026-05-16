@@ -161,16 +161,11 @@ export default function Meetings() {
             </Card>
           )}
           {filtered.map((s) => (
-            <div key={s.id} className="relative">
+            <div key={s.id}>
               <MeetingCard session={s} />
-              <SessionOutcomes
-                outcomes={outcomesBySession[s.id] ?? []}
-                onUpdated={replaceOutcome}
-                onArchived={removeOutcome}
-              />
               {/* Sprint 42 P0.3 — admin/manager CTA «Добавить в KB» сверху-справа
                   карточки. Hidden для FOUNDER (компонент сам себя гасит). */}
-              <div className="absolute top-3 right-3 flex items-center gap-2">
+              <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                 <AddToKnowledgeBaseButton
                   salesSessionId={s.id}
                   defaultSourceType={s.tone === 'hot' ? 'successful_sale' : 'deal_case'}
@@ -181,11 +176,17 @@ export default function Meetings() {
                   variant="danger"
                   iconLeft={<Archive size={12} />}
                   onClick={() => setSessionToArchive(s)}
+                  className="min-w-[108px] whitespace-nowrap"
                   title="Удалить запись встречи"
                 >
                   Удалить
                 </Button>
               </div>
+              <SessionOutcomes
+                outcomes={outcomesBySession[s.id] ?? []}
+                onUpdated={replaceOutcome}
+                onArchived={removeOutcome}
+              />
             </div>
           ))}
         </div>
