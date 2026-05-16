@@ -79,6 +79,14 @@ async function assertOutcomeAccess(
   if (isAdminLike(role)) return { ok: true, outcome };
 
   const user = getUser(req);
+
+  // Sprint 49 hotfix 11 — fast-path: the user always owns the outcomes they
+  // recorded themselves, regardless of which FK they linked. Without this,
+  // a founder's own outcome tied to an orphan session/analysis was inaccessible
+  // (couldn't edit/archive). Order: most-specific authorship first, then
+  // FK-based ownership for the inherited project/session case.
+  if (outcome.createdById === user.id) return { ok: true, outcome };
+
   if (outcome.projectId) {
     const ok = await assertProjectOwnership(req, outcome.projectId);
     if (ok.ok) return { ok: true, outcome };
@@ -88,8 +96,9 @@ async function assertOutcomeAccess(
   if (outcome.salesSessionId) {
     const s = await prisma.salesSession.findUnique({
       where: { id: outcome.salesSessionId },
-      select: { projectId: true },
+      select: { projectId: true, createdById: true },
     });
+    if (s?.createdById === user.id) return { ok: true, outcome };
     if (s?.projectId) {
       const p = await prisma.project.findUnique({ where: { id: s.projectId }, select: { userId: true } });
       if (p?.userId === user.id) return { ok: true, outcome };
@@ -100,8 +109,9 @@ async function assertOutcomeAccess(
   if (outcome.conversationAnalysisId) {
     const c = await prisma.conversationAnalysis.findUnique({
       where: { id: outcome.conversationAnalysisId },
-      select: { projectId: true },
+      select: { projectId: true, createdById: true },
     });
+    if (c?.createdById === user.id) return { ok: true, outcome };
     if (c?.projectId) {
       const p = await prisma.project.findUnique({ where: { id: c.projectId }, select: { userId: true } });
       if (p?.userId === user.id) return { ok: true, outcome };
@@ -121,8 +131,6 @@ async function assertOutcomeAccess(
     }
     return { ok: false, status: 404, error: 'outcome_not_found' };
   }
-
-  if (outcome.createdById === user.id) return { ok: true, outcome };
   return { ok: false, status: 404, error: 'outcome_not_found' };
 }
 
@@ -174,14 +182,15 @@ assistantOutcomesRoutes.post('/', async (req, res) => {
     if (d.conversationAnalysisId) {
       const c = await prisma.conversationAnalysis.findUnique({
         where: { id: d.conversationAnalysisId },
-        select: { id: true, projectId: true },
+        select: { id: true, projectId: true, createdById: true },
       });
       if (!c) return res.status(404).json({ error: 'analysis_not_found' });
-      if (c.projectId) {
+      // Sprint 49 hotfix 11 — ConversationAnalysis has had createdById since
+      // Sprint 48A. Allow orphan-by-author the same way SalesSession does.
+      if (c.createdById !== user.id) {
+        if (!c.projectId) return res.status(404).json({ error: 'analysis_not_found' });
         const p = await prisma.project.findUnique({ where: { id: c.projectId }, select: { userId: true } });
         if (p?.userId !== user.id) return res.status(404).json({ error: 'analysis_not_found' });
-      } else {
-        return res.status(404).json({ error: 'analysis_not_found' });
       }
     }
   }
