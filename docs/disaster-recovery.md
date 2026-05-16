@@ -1,6 +1,8 @@
 # Disaster Recovery — Zapusk AI Packaging
 
 > Use this when prod is broken, data is at risk, or a deploy went sideways.
+>
+> Companion docs: [`security-model.md`](security-model.md), [`rbac-matrix.md`](rbac-matrix.md), [`ai-provider-policy.md`](ai-provider-policy.md), [`data-retention-policy.md`](data-retention-policy.md).
 
 The platform has three independent failure surfaces:
 
