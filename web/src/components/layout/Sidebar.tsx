@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
@@ -9,8 +9,32 @@ import {
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
 
-interface NavItem { to: string; icon: typeof LayoutDashboard; label: string }
+// Sprint 50 hotfix — sidebar active-state used to be `NavLink` with default
+// prefix-match. That meant `/projects` highlighted on `/projects/new`
+// (the bug the user filed) and the same pattern silently bit `/admin`,
+// `/manager`, `/demo`. Two opt-in knobs:
+//   - `end: true`      → exact-match only (parent dashboards that share
+//                        a prefix with their siblings).
+//   - `matchExclude`   → child paths that, when active, prevent the
+//                        parent from also lighting up. Lets `/projects`
+//                        keep matching `/projects/:id` (detail page) but
+//                        not `/projects/new` (sibling nav item).
+interface NavItem {
+  to: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  end?: boolean;
+  matchExclude?: string[];
+}
 interface NavSection { label?: string; items: NavItem[] }
+
+function isItemActive(pathname: string, item: NavItem): boolean {
+  if (item.matchExclude?.some((ex) => pathname === ex || pathname.startsWith(ex + '/'))) {
+    return false;
+  }
+  if (item.end) return pathname === item.to;
+  return pathname === item.to || pathname.startsWith(item.to + '/');
+}
 
 // Sprint 25 — нормальная RBAC. Каждая роль видит свой набор пунктов.
 // Sprint 26 — навигация FOUNDER разнесена на секции: «Рабочий кабинет»,
@@ -19,7 +43,7 @@ interface NavSection { label?: string; items: NavItem[] }
 const NAV: Partial<Record<UserRole, NavSection[]>> = {
   SUPER_ADMIN: [
     { items: [
-      { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
+      { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель', end: true },
       { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
       { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
       { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
@@ -39,7 +63,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
   ],
   ADMIN: [
     { items: [
-      { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель' },
+      { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель', end: true },
       { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
       { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
       { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
@@ -57,7 +81,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
   ],
   MANAGER: [
     { items: [
-      { to: '/manager',          icon: LayoutDashboard,   label: 'Рабочий стол менеджера' },
+      { to: '/manager',          icon: LayoutDashboard,   label: 'Рабочий стол менеджера', end: true },
       { to: '/manager/projects', icon: BriefcaseBusiness, label: 'Мои проекты' },
       { to: '/manager/leads',    icon: Radio,             label: 'Новые лиды' },
       { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
@@ -76,8 +100,12 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
   FOUNDER: [
     { label: 'Рабочий кабинет', items: [
       { to: '/dashboard',        icon: LayoutDashboard,   label: 'Рабочий стол' },
-      { to: '/projects/new',     icon: FolderPlus,        label: 'Новый проект' },
-      { to: '/projects',         icon: FolderOpen,        label: 'Мои проекты' },
+      // Sprint 50 hotfix — `/projects/new` is exact-only so it never bleeds
+      // into a (theoretical) `/projects/new/...` child. `/projects` keeps
+      // prefix-matching so it stays lit on `/projects/:id`, but the
+      // matchExclude prevents it from co-lighting with `/projects/new`.
+      { to: '/projects/new',     icon: FolderPlus,        label: 'Новый проект', end: true },
+      { to: '/projects',         icon: FolderOpen,        label: 'Мои проекты', matchExclude: ['/projects/new'] },
     ]},
     { label: 'Инструменты', items: [
       { to: '/ai-leads',         icon: Radio,             label: 'AI-лиды' },
@@ -87,7 +115,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/personal-manager', icon: MessageCircle,     label: 'Ваш менеджер' },
     ]},
     { label: 'Демо ZAPUSK AI', items: [
-      { to: '/demo',             icon: Presentation,      label: 'Демо-кабинет' },
+      // Sprint 50 hotfix — same parent/sibling collision pattern as /admin.
+      { to: '/demo',             icon: Presentation,      label: 'Демо-кабинет', end: true },
       { to: '/demo/ai-leads',    icon: Radio,             label: 'Демо AI-лиды' },
       { to: '/demo/conversations', icon: Brain,           label: 'Демо AI-переговоры' },
     ]},
@@ -112,6 +141,10 @@ interface SidebarProps {
 export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   const auth = getAuth();
   const role = auth?.role ?? 'FOUNDER';
+  // Sprint 50 hotfix — active state is computed manually instead of relying
+  // on NavLink's prefix-match default. See isItemActive() above for the rule
+  // (exact / prefix / with sibling exclusions).
+  const { pathname } = useLocation();
   const baseSections = NAV[role] ?? NAV.FOUNDER ?? [];
   // Sprint 24: в demo-режиме скрываем «Новый проект» — фаундер не создаёт
   // реальные проекты в показательной витрине.
@@ -146,24 +179,27 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
         {visibleSections.map((section, sectionIndex) => (
           <div key={section.label ?? `section-${sectionIndex}`} className={sectionIndex > 0 ? 'pt-5' : ''}>
             {section.label && <SectionLabel>{section.label}</SectionLabel>}
-            {section.items.map(({ to, icon: Icon, label }) => (
-              <NavLink
-                key={to}
-                to={to}
-                onClick={mobile ? onClose : undefined}
-                className={({ isActive }) =>
-                  clsx(
+            {section.items.map((item) => {
+              const { to, icon: Icon, label } = item;
+              const active = isItemActive(pathname, item);
+              return (
+                <Link
+                  key={to}
+                  to={to}
+                  onClick={mobile ? onClose : undefined}
+                  aria-current={active ? 'page' : undefined}
+                  className={clsx(
                     'flex items-center gap-3 px-3 h-10 rounded-md text-sm transition-all',
-                    isActive
+                    active
                       ? 'bg-zapusk/10 text-primary border border-zapusk/30 shadow-glow'
                       : 'text-secondary hover:text-primary hover:bg-surface',
-                  )
-                }
-              >
-                <Icon size={16} className="shrink-0" />
-                {label}
-              </NavLink>
-            ))}
+                  )}
+                >
+                  <Icon size={16} className="shrink-0" />
+                  {label}
+                </Link>
+              );
+            })}
           </div>
         ))}
 
