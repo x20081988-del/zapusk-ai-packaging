@@ -5,7 +5,7 @@ import {
   Activity, ChevronRight, RefreshCw, Save, CheckCircle2, Upload,
   Compass, ShieldAlert, HelpCircle, Megaphone, Ban, Gauge, Zap,
   HeartHandshake, Brain, Thermometer, TrendingUp, TrendingDown, Minus,
-  HeartCrack, Wand2, UserRound, BookOpen,
+  HeartCrack, Wand2, UserRound, BookOpen, BriefcaseBusiness,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -236,16 +236,16 @@ const MOMENTUM_TONE: Record<AssistantCard['momentum'], 'success' | 'neutral' | '
 // (новый клик abort'ит активный запрос), поэтому текст должен ясно показывать
 // текущее состояние, а не «спиннер навсегда».
 function analyzeButtonLabel(
-  phase: 'idle' | 'fast' | 'full' | 'error',
-  hasAnyCard: boolean,
+  _phase: 'idle' | 'fast' | 'full' | 'error',
+  _hasAnyCard: boolean,
 ): string {
-  // Sprint 49 hotfix 10 — явный «AI анализирует последние реплики…» во
-  // время full-фазы, чтобы пользователь видел, что кнопка сработала и
-  // карточка обновляется (раньше казалось, что клик потерялся).
-  if (phase === 'fast') return 'Готовлю главный вопрос…';
-  if (phase === 'full') return 'AI анализирует последние реплики…';
-  if (phase === 'error') return 'Повторить обновление';
-  return hasAnyCard ? 'Обновить ещё раз' : 'Получить подсказку';
+  // Sprint 50 hotfix — single canonical label. Users were thrown off by the
+  // dynamic "Обновить ещё раз" / "Готовлю главный вопрос…" / "AI анализирует…"
+  // copy: it suggested the AI was *doing* something even when the click hadn't
+  // landed, and "обновить" implied the displayed advice would change in place
+  // (it shouldn't, see fastLock below). The button always says "Получить
+  // подсказку"; loading is shown via the Button's spinner.
+  return 'Получить подсказку';
 }
 
 export default function SalesAssistant() {
@@ -337,11 +337,14 @@ export default function SalesAssistant() {
   const adviceHistoryRef = useRef<AdviceHistoryItem[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
-  // Initial project list — agent ties advice to the active project's context.
+  // Initial project list. Sprint 50 hotfix — default is now "Без проекта"
+  // (empty string) instead of auto-picking the first project. Auto-pick made
+  // the project selection invisible to users — every meeting silently linked
+  // to project[0]. Now the user makes an explicit choice; orphan-finalize
+  // (Sprint 49 hotfix 10) handles the no-project case.
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => {
       setProjects(r.projects);
-      if (r.projects[0]?.id) setProjectId(r.projects[0].id);
     });
   }, []);
 
@@ -436,15 +439,28 @@ export default function SalesAssistant() {
     return false;
   }
 
+  // Sprint 50 hotfix — fast-lock for the current advice request.
+  // When fast lands first, its mainQuestion + backupQuestions are the live
+  // advice the founder is already starting to read aloud. The subsequent
+  // full analyze MUST NOT swap that text mid-sentence. The lock is captured
+  // per request (analysisRequestIdRef) and consumed by applyCardSticky on
+  // the full-phase merge. Next click → new requestId → new lock window.
+  interface FastLock { requestId: number; mainQuestion: string; backupQuestions: string[]; }
+
   // Merge нынешний result с sticky-полями предыдущего. Никогда не
   // перетираем не-пустые KB sources пустыми; в случае «poorer» —
   // также сохраняем mainQuestion + situation от prev, чтобы UI не моргал
   // generic placeholder'ом.
-  function applyCardSticky(next: AssistantCard, myRequestId: number): void {
+  // Sprint 50 hotfix — additionally, if `fastLock` matches the current
+  // request, the merged card adopts the fast mainQuestion + backupQuestions
+  // verbatim. Full analyze still fills the remaining 20+ fields
+  // (situation, whatToDo, dealNextStep, emotionalRisks, tone, spinStage…).
+  function applyCardSticky(next: AssistantCard, myRequestId: number, fastLock: FastLock | null): void {
     const prev = cardRef.current;
     const poorer = isCardPoorer(prev, next);
+    let merged: AssistantCard;
     if (poorer && prev) {
-      const merged: AssistantCard = {
+      merged = {
         ...next,
         mainQuestion: prev.mainQuestion,
         situation: prev.situation,
@@ -459,17 +475,27 @@ export default function SalesAssistant() {
         `prevStage=${prev.spinStage} nextStage=${next.spinStage} ` +
         `genericQ=${GENERIC_QUESTION_RE.test(next.mainQuestion)}`,
       );
-      setCard(merged);
-      return;
+    } else {
+      merged = prev
+        ? {
+            ...next,
+            usedKnowledgeSources: (next.usedKnowledgeSources?.length ?? 0) > 0
+              ? next.usedKnowledgeSources
+              : prev.usedKnowledgeSources,
+          }
+        : next;
     }
-    const merged: AssistantCard = prev
-      ? {
-          ...next,
-          usedKnowledgeSources: (next.usedKnowledgeSources?.length ?? 0) > 0
-            ? next.usedKnowledgeSources
-            : prev.usedKnowledgeSources,
-        }
-      : next;
+    // Sprint 50 hotfix — fast-lock override happens AFTER the poorer-merge
+    // because the user-visible "current advice" was set by the fast response
+    // and must outlive any wobble in the full payload for THIS request.
+    if (fastLock && fastLock.requestId === myRequestId) {
+      merged = {
+        ...merged,
+        mainQuestion: fastLock.mainQuestion,
+        backupQuestions: fastLock.backupQuestions,
+      };
+      console.debug(`[sales-assistant/context] requestId=${myRequestId} fast-lock applied (mainQuestion + backupQuestions preserved)`);
+    }
     console.debug(
       `[sales-assistant/context] requestId=${myRequestId} commit ` +
       `mergedSources=${merged.usedKnowledgeSources?.length ?? 0} stage=${merged.spinStage}`,
@@ -641,6 +667,11 @@ export default function SalesAssistant() {
     }, FAST_TIMEOUT_MS);
 
     let fastOk = false;
+    // Sprint 50 hotfix — captured locally so the FAST mainQuestion +
+    // backupQuestions survive the FULL merge for THIS analyze request only.
+    // Next click bumps requestId; this closure goes out of scope; new
+    // closure has its own fastLock. See applyCardSticky() above.
+    let fastLockForThisRequest: { requestId: number; mainQuestion: string; backupQuestions: string[] } | null = null;
     try {
       const r = await api.post<{ fast: FastCardShape }>(
         '/api/sales-assistant/analyze-fast',
@@ -662,6 +693,18 @@ export default function SalesAssistant() {
       const latencyMs = Math.round(performance.now() - tFastStart);
       console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast done latencyMs=${latencyMs} spinStage=${r.fast.spinStage} source=${r.fast.source ?? 'ai'}`);
       setFastCard(r.fast);
+      // Sprint 50 hotfix — lock the actionable fast fields against full's
+      // upcoming write. Skip the lock if fast returned a mock/fallback —
+      // the user wouldn't have started reading that aloud anyway, and full
+      // (real AI) should be allowed to replace it.
+      const fastIsMock = r.fast.fellBackToMock || r.fast.source === 'mock';
+      if (!fastIsMock) {
+        fastLockForThisRequest = {
+          requestId: myRequestId,
+          mainQuestion: r.fast.mainQuestion,
+          backupQuestions: r.fast.backupQuestions,
+        };
+      }
       setLastAnalyzeAt(Date.now());
       setPermError(null);
       fastOk = true;
@@ -731,7 +774,11 @@ export default function SalesAssistant() {
       // regression-overwrite, см. helper выше. История adviceHistory копит
       // именно полученный r.card (не merged), чтобы AI на следующем шаге
       // видел реальный путь, а UI получает merged-стейт.
-      applyCardSticky(r.card, myRequestId);
+      // Sprint 50 hotfix — pass the fastLock so the live mainQuestion +
+      // backupQuestions the founder already started reading stay put. Full
+      // fills the remaining 20+ fields (situation, whatToDo, risks, tone,
+      // spinStage, …) — that's the additive surface, not the replace surface.
+      applyCardSticky(r.card, myRequestId, fastLockForThisRequest);
       // Полная аналитика свежее fast — снимаем fastCard, чтобы AdviceCard
       // взяла mainQuestion из card, а не из старого fallback'а.
       setFastCard(null);
@@ -1144,15 +1191,10 @@ export default function SalesAssistant() {
       title="AI-ассистент"
       action={
         <div className="flex items-center gap-2">
-          {visibleProjects.length > 0 && (
-            <div className="w-64">
-              <Select
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                options={[{ value: '', label: 'Без привязки к проекту' }, ...visibleProjects.map((p) => ({ value: p.id, label: p.name }))]}
-              />
-            </div>
-          )}
+          {/* Sprint 50 hotfix — project selector moved out of the action bar
+              into a labelled card on the page (see «Проект для этой встречи»
+              below the status row). Founders kept missing the silently-
+              auto-picked first-project selection in the corner. */}
           <Link to="/conversation-analysis">
             <Button variant="secondary" size="md" iconLeft={<Upload size={14} />} title="Загрузить запись разговора для AI-разбора">
               Загрузить запись
@@ -1290,6 +1332,38 @@ export default function SalesAssistant() {
               </button>
             </div>
           </div>
+        )}
+      </Card>
+
+      {/* Sprint 50 hotfix — explicit project picker. Pre-hotfix the project
+          selection was a small dropdown in the page header that defaulted
+          to the first project; founders kept clicking-through unaware that
+          a meeting got silently linked to project[0]. The picker is now a
+          labelled section on the page; default is "Без проекта" so the
+          user makes an explicit choice. Orphan-finalize (Sprint 49 hotfix 10)
+          handles the no-project case end-to-end. */}
+      <Card padded className="mb-6">
+        <div className="flex items-center gap-3 mb-3">
+          <BriefcaseBusiness size={16} className="text-zapusk-400" />
+          <div>
+            <div className="text-sm font-semibold text-primary">Проект для этой встречи</div>
+            <div className="text-[11px] text-muted">
+              AI использует контекст проекта в подсказках. Можно оставить «Без проекта» — встреча сохранится отдельно.
+            </div>
+          </div>
+        </div>
+        <Select
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          options={[
+            { value: '', label: 'Без проекта (отдельная встреча)' },
+            ...visibleProjects.map((p) => ({ value: p.id, label: p.name })),
+          ]}
+        />
+        {visibleProjects.length === 0 && (
+          <p className="text-[11px] text-muted mt-2">
+            У вас пока нет проектов. Встреча будет сохранена без привязки — можно завести проект позже.
+          </p>
         )}
       </Card>
 
