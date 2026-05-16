@@ -41,8 +41,11 @@ export interface CreateOutcomeInput {
   note?: string | null;
 }
 
-export function createOutcome(input: CreateOutcomeInput) {
-  return api.post<{ outcome: AssistantOutcome }>('/api/assistant-outcomes', input);
+// Sprint 50 P0.1 — каждый «Зафиксировать результат» получает свой
+// idempotency key, чтобы повторный клик / retry не создавал второй
+// outcome.
+export function createOutcome(input: CreateOutcomeInput, idempotencyKey?: string) {
+  return api.post<{ outcome: AssistantOutcome }>('/api/assistant-outcomes', input, { idempotencyKey });
 }
 
 export function listOutcomes(filters: { projectId?: string; salesSessionId?: string; salesSessionIds?: string[] } = {}) {

@@ -6,6 +6,7 @@ import { recordAudit } from '../lib/audit.js';
 import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 import { captureCandidateFromSalesSession } from '../services/knowledgeService.js';
 import { isAIGuardrailError } from '../ai/client.js';
+import { withIdempotency } from '../lib/idempotency.js';
 import {
   completeSession,
   persistSession,
@@ -37,7 +38,10 @@ const completeSchema = z.object({
 // POST /api/sales-sessions/complete — analyze + persist in one call.
 // The route returns both the structured summary and the persisted record so
 // the frontend can show the summary modal immediately and link to the meeting.
-salesSessionsRoutes.post('/complete', async (req, res) => {
+// Sprint 50 P0.1 — idempotency on meeting finalize. Double-click on
+// "Завершить встречу" or a retried fetch with the same X-Idempotency-Key
+// returns the cached response instead of creating a duplicate session.
+salesSessionsRoutes.post('/complete', withIdempotency(), async (req, res) => {
   const parsed = completeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   // Sprint 49 hotfix 10 — orphan-safe finalize. AI-assistant может завершить

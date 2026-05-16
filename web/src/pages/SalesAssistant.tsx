@@ -19,6 +19,7 @@ import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 import { completeMeeting, type CompleteResult } from '../lib/salesSessions';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
+import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
@@ -286,6 +287,10 @@ export default function SalesAssistant() {
   // Reentrancy guard: повторные клики «Завершить встречу» не запускают
   // второй запрос пока первый летит. Защита от race + от двойного клика.
   const finishingRef = useRef(false);
+  // Sprint 50 P0.1 — один idempotency-key на текущую попытку финализации.
+  // Первый клик минтит ключ, ретраи переиспользуют его → backend отдаёт
+  // тот же result, дубль не создаётся. Очищается на success / reset.
+  const finalizeIdempotencyKeyRef = useRef<string | null>(null);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
   // Sprint 34В legacy alias — оставляем для совместимости с UI кнопкой loading.
@@ -936,6 +941,11 @@ export default function SalesAssistant() {
     finishingRef.current = true;
     setFinalizeError(null);
     setMeetingState('finalizing');
+    // Sprint 50 P0.1 — переиспользуем ключ между ретраями той же встречи.
+    // Mintим на первый клик, не трогаем потом до закрытия модала / reset.
+    if (!finalizeIdempotencyKeyRef.current) {
+      finalizeIdempotencyKeyRef.current = newIdempotencyKey();
+    }
     try {
       const result = await completeMeeting({
         projectId: projectId || null,
@@ -949,7 +959,7 @@ export default function SalesAssistant() {
         // присвоит им salesSessionId, чтобы outcome'ы можно было аккуратно
         // атрибуцировать в дашбордах.
         adviceEventIds,
-      });
+      }, finalizeIdempotencyKeyRef.current);
       // Только после успеха останавливаем listening и переходим в finalized.
       setFinishResult(result);
       setMeetingState('finalized');
@@ -1017,6 +1027,8 @@ export default function SalesAssistant() {
     // следующая встреча стартовала с чистого state machine.
     setMeetingState('idle');
     setFinalizeError(null);
+    // Sprint 50 P0.1 — следующая встреча получит свежий idempotency-key.
+    finalizeIdempotencyKeyRef.current = null;
     // Sprint 43 — сброс advice tracking при новом meeting'е.
     setAdviceEventIds([]);
     setAdviceEventLast(null);
@@ -1060,6 +1072,8 @@ export default function SalesAssistant() {
     // решил начать с чистого листа.
     setMeetingState('idle');
     setFinalizeError(null);
+    // Sprint 50 P0.1 — сброс idempotency key (новая встреча → новый key).
+    finalizeIdempotencyKeyRef.current = null;
     // Sprint 49 — сброс provider state, чтобы следующий start() заново выбрал
     // realtime vs web-speech по текущей доступности backend.
     setTranscriptionProvider(null);
@@ -1845,12 +1859,15 @@ function OutcomePanel({
     setBusy(type);
     setError(null);
     try {
+      // Sprint 50 P0.1 — каждый клик «Зафиксировать результат» получает
+      // свой idempotency-key. Двойной клик / retry того же типа возвращает
+      // тот же outcome без второй записи.
       await createOutcome({
         adviceEventId,
         projectId,
         investorName,
         outcomeType: type,
-      });
+      }, newIdempotencyKey());
       setSaved({ type, ts: Date.now() });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'outcome_failed');

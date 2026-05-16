@@ -9,6 +9,7 @@ import {
   isAdminLike,
   requireNotInvestor,
 } from '../lib/ownership.js';
+import { withIdempotency } from '../lib/idempotency.js';
 
 // Sprint 43 P0.5 — AssistantOutcomeEvent CRUD.
 //
@@ -134,7 +135,10 @@ async function assertOutcomeAccess(
   return { ok: false, status: 404, error: 'outcome_not_found' };
 }
 
-assistantOutcomesRoutes.post('/', async (req, res) => {
+// Sprint 50 P0.1 — idempotency on outcome creation. A "Зафиксировать
+// результат" click that races itself (double-click, retried fetch) no
+// longer creates two outcome rows when the client sends X-Idempotency-Key.
+assistantOutcomesRoutes.post('/', withIdempotency(), async (req, res) => {
   const parsed = createOutcomeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const d = parsed.data;

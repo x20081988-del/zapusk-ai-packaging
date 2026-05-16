@@ -861,3 +861,29 @@ model AssistantOutcomeEvent {
   @@index([createdById, createdAt])
   @@index([archivedAt])
 }
+
+// Sprint 50 P0.1 — idempotency keys.
+//
+// Mutating endpoints accept an `X-Idempotency-Key` header. The middleware
+// stores the (key, actor, route, requestHash) tuple together with the
+// committed response, then replays it on retry. TTL of 24 hours keeps the
+// table small. The schema is intentionally additive: existing clients that
+// don't send the header keep their previous behaviour.
+//
+// Lookup index: (key + actorId + route) is the natural composite key
+// the middleware queries on every request. requestHash is checked in code
+// after fetch — if it differs from the stored hash we return 409.
+model IdempotencyKey {
+  id           String   @id @default(cuid())
+  key          String
+  actorId      String
+  route        String
+  requestHash  String
+  responseJson String
+  statusCode   Int
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@unique([key, actorId, route])
+  @@index([expiresAt])
+}

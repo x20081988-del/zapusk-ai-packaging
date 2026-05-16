@@ -70,8 +70,11 @@ export interface CompleteInput {
   adviceEventIds?: string[];
 }
 
-export function completeMeeting(input: CompleteInput) {
-  return api.post<CompleteResult>('/api/sales-sessions/complete', input);
+// Sprint 50 P0.1 — каждый «Завершить встречу» получает свой idempotency
+// key. Двойной клик / повторный ретрай делает один и тот же запрос с тем
+// же key → backend отдаёт сохранённый ответ, дубль не создаётся.
+export function completeMeeting(input: CompleteInput, idempotencyKey?: string) {
+  return api.post<CompleteResult>('/api/sales-sessions/complete', input, { idempotencyKey });
 }
 
 export function listMeetings(filters: { projectId?: string; leadId?: string } = {}) {

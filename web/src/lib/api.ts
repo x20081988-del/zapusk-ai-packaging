@@ -8,6 +8,13 @@ const BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 // заблокированным на старом fetch'е к OpenAI.
 export interface ApiRequestOptions {
   signal?: AbortSignal;
+  // Sprint 50 P0.1 — opt-in idempotency. UI passes a uuid here on the
+  // POSTs we want replay-safe (meeting finalize, outcome creation). api.ts
+  // adds the X-Idempotency-Key header and otherwise behaves the same.
+  idempotencyKey?: string;
+  // Sprint 50 — generic headers escape hatch. Not used yet; keeps the door
+  // open without each call-site touching `fetch` directly.
+  headers?: Record<string, string>;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -32,25 +39,46 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.text()) as unknown as T;
 }
 
+// Sprint 50 P0.1 — merge per-call headers (X-Idempotency-Key, custom)
+// into the standard auth headers in request().
+function buildHeaders(opts?: ApiRequestOptions): Record<string, string> | undefined {
+  const extra: Record<string, string> = {};
+  if (opts?.idempotencyKey) extra['X-Idempotency-Key'] = opts.idempotencyKey;
+  if (opts?.headers) Object.assign(extra, opts.headers);
+  return Object.keys(extra).length ? extra : undefined;
+}
+
 export const api = {
-  get: <T>(path: string, opts?: ApiRequestOptions) => request<T>(path, { signal: opts?.signal }),
+  get: <T>(path: string, opts?: ApiRequestOptions) => request<T>(path, { signal: opts?.signal, headers: buildHeaders(opts) }),
   post: <T>(path: string, body?: unknown, opts?: ApiRequestOptions) =>
     request<T>(path, {
       method: 'POST',
       body: body ? JSON.stringify(body) : undefined,
       signal: opts?.signal,
+      headers: buildHeaders(opts),
     }),
   patch: <T>(path: string, body?: unknown, opts?: ApiRequestOptions) =>
     request<T>(path, {
       method: 'PATCH',
       body: body ? JSON.stringify(body) : undefined,
       signal: opts?.signal,
+      headers: buildHeaders(opts),
     }),
   delete: <T>(path: string, opts?: ApiRequestOptions) =>
-    request<T>(path, { method: 'DELETE', signal: opts?.signal }),
+    request<T>(path, { method: 'DELETE', signal: opts?.signal, headers: buildHeaders(opts) }),
   upload: <T>(path: string, form: FormData, opts?: ApiRequestOptions) =>
-    request<T>(path, { method: 'POST', body: form, signal: opts?.signal }),
+    request<T>(path, { method: 'POST', body: form, signal: opts?.signal, headers: buildHeaders(opts) }),
 };
+
+// Sprint 50 P0.1 — uuid-shaped opaque key for idempotency. Uses
+// crypto.randomUUID when available (all evergreen browsers), with a
+// best-effort fallback that's still long enough to clear the server's
+// 16-char minimum.
+export function newIdempotencyKey(): string {
+  const g = globalThis as { crypto?: { randomUUID?: () => string } };
+  if (typeof g.crypto?.randomUUID === 'function') return g.crypto.randomUUID();
+  return `idem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // Sprint 37 P0.1 — защищённое скачивание файлов с Bearer-токеном.
 //
