@@ -86,6 +86,10 @@ export function listAnalyses(projectId?: string) {
   return api.get<{ analyses: ConversationAnalysisRow[] }>(`/api/conversation-analysis${q}`);
 }
 
+export function archiveAnalysis(id: string) {
+  return api.delete<{ ok: boolean; archivedAt: string }>(`/api/conversation-analysis/${id}`);
+}
+
 export const SENTIMENT_TONE: Record<Sentiment, 'success' | 'warning' | 'danger'> = {
   positive: 'success',
   neutral: 'warning',

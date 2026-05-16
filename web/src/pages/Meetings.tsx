@@ -8,9 +8,10 @@ import { Input, Select, Textarea } from '../components/ui/Input';
 import { EmptyState } from '../components/ui/EmptyState';
 import { MeetingCard } from '../components/ui/MeetingCard';
 import { Modal } from '../components/ui/Modal';
+import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { AddToKnowledgeBaseButton } from '../components/ui/AddToKnowledgeBaseButton';
-import { listMeetings, type SalesSession } from '../lib/salesSessions';
+import { archiveMeeting, listMeetings, type SalesSession } from '../lib/salesSessions';
 import { api, type Project } from '../lib/api';
 import {
   archiveOutcome,
@@ -29,6 +30,9 @@ export default function Meetings() {
   const [projectFilter, setProjectFilter] = useState('');
   const [outcomesBySession, setOutcomesBySession] = useState<Record<string, AssistantOutcome[]>>({});
   const [outcomesError, setOutcomesError] = useState<string | null>(null);
+  const [sessionToArchive, setSessionToArchive] = useState<SalesSession | null>(null);
+  const [archivingSession, setArchivingSession] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
@@ -84,6 +88,26 @@ export default function Meetings() {
 
   const filtered = useMemo(() => sessions ?? [], [sessions]);
 
+  async function confirmArchiveSession() {
+    if (!sessionToArchive) return;
+    setArchivingSession(true);
+    setArchiveError(null);
+    try {
+      await archiveMeeting(sessionToArchive.id);
+      setSessions((current) => current?.filter((s) => s.id !== sessionToArchive.id) ?? current);
+      setOutcomesBySession((current) => {
+        const next = { ...current };
+        delete next[sessionToArchive.id];
+        return next;
+      });
+      setSessionToArchive(null);
+    } catch (e) {
+      setArchiveError(e instanceof Error ? e.message : 'Не удалось удалить встречу');
+    } finally {
+      setArchivingSession(false);
+    }
+  }
+
   return (
     <AppLayout
       title="Встречи с инвесторами"
@@ -131,6 +155,11 @@ export default function Meetings() {
               <div className="text-xs text-warning">Не удалось загрузить результаты встреч: {outcomesError}</div>
             </Card>
           )}
+          {archiveError && (
+            <Card padded>
+              <div className="text-xs text-warning">{archiveError}</div>
+            </Card>
+          )}
           {filtered.map((s) => (
             <div key={s.id} className="relative">
               <MeetingCard session={s} />
@@ -141,16 +170,35 @@ export default function Meetings() {
               />
               {/* Sprint 42 P0.3 — admin/manager CTA «Добавить в KB» сверху-справа
                   карточки. Hidden для FOUNDER (компонент сам себя гасит). */}
-              <div className="absolute top-3 right-3">
+              <div className="absolute top-3 right-3 flex items-center gap-2">
                 <AddToKnowledgeBaseButton
                   salesSessionId={s.id}
                   defaultSourceType={s.tone === 'hot' ? 'successful_sale' : 'deal_case'}
                 />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="danger"
+                  iconLeft={<Archive size={12} />}
+                  onClick={() => setSessionToArchive(s)}
+                  title="Удалить запись встречи"
+                >
+                  Удалить
+                </Button>
               </div>
             </div>
           ))}
         </div>
       )}
+      <ConfirmModal
+        open={Boolean(sessionToArchive)}
+        title="Удалить запись встречи?"
+        description="Запись будет скрыта из списка встреч. Архивирование не удаляет данные физически и сохраняет audit trail."
+        confirmLabel="Удалить встречу"
+        loading={archivingSession}
+        onClose={() => setSessionToArchive(null)}
+        onConfirm={confirmArchiveSession}
+      />
     </AppLayout>
   );
 }

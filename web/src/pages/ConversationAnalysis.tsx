@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   UploadCloud, FileAudio, Link2, ClipboardPaste, Sparkles, AlertTriangle, CheckCircle2,
-  XCircle, MessageSquare, Wand2, Copy, Check, History, Headphones, FileText,
+  XCircle, MessageSquare, Wand2, Copy, Check, History, Headphones, FileText, Archive,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -12,8 +12,9 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { AddToKnowledgeBaseButton } from '../components/ui/AddToKnowledgeBaseButton';
 import { ConversationScoreCard } from '../components/ui/ConversationScoreCard';
+import { ConfirmModal } from '../components/ui/ConfirmModal';
 import {
-  analyzeConversationUpload, analyzeConversationText, listAnalyses,
+  analyzeConversationUpload, analyzeConversationText, archiveAnalysis, listAnalyses,
   parseAnalysisJSON,
   type ConversationAnalysisCard, type ConversationAnalysisRow,
 } from '../lib/conversationAnalysis';
@@ -36,6 +37,9 @@ export default function ConversationAnalysis() {
   const [result, setResult] = useState<ConversationAnalysisCard | null>(null);
   const [history, setHistory] = useState<ConversationAnalysisRow[]>([]);
   const [drag, setDrag] = useState(false);
+  const [analysisToArchive, setAnalysisToArchive] = useState<ConversationAnalysisRow | null>(null);
+  const [archivingAnalysis, setArchivingAnalysis] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const transcriptFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -111,6 +115,21 @@ export default function ConversationAnalysis() {
     setResult(null);
     setError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function confirmArchiveAnalysis() {
+    if (!analysisToArchive) return;
+    setArchivingAnalysis(true);
+    setArchiveError(null);
+    try {
+      await archiveAnalysis(analysisToArchive.id);
+      setHistory((current) => current.filter((h) => h.id !== analysisToArchive.id));
+      setAnalysisToArchive(null);
+    } catch (e) {
+      setArchiveError(e instanceof Error ? e.message : 'Не удалось удалить AI-разбор');
+    } finally {
+      setArchivingAnalysis(false);
+    }
   }
 
   return (
@@ -269,6 +288,12 @@ export default function ConversationAnalysis() {
           subtitle="Каждый разбор сохраняется для команды и будущего тренинга Zapusk AI"
           action={<StatusBadge tone="ai" dot>{history.length}</StatusBadge>}
         />
+        {archiveError && (
+          <div className="mb-3 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            {archiveError}
+          </div>
+        )}
         {history.length === 0 ? (
           <EmptyState title="Пока разборов нет" description="Загрузите первый разговор — он появится здесь, и команда сможет к нему вернуться." />
         ) : (
@@ -313,6 +338,15 @@ export default function ConversationAnalysis() {
                           Открыть
                         </Button>
                       )}
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        iconLeft={<Archive size={12} />}
+                        onClick={() => setAnalysisToArchive(h)}
+                        title="Удалить AI-разбор"
+                      >
+                        Удалить
+                      </Button>
                     </div>
                   </div>
                 </li>
@@ -321,6 +355,15 @@ export default function ConversationAnalysis() {
           </ul>
         )}
       </Card>
+      <ConfirmModal
+        open={Boolean(analysisToArchive)}
+        title="Удалить AI-разбор?"
+        description="Разбор будет скрыт из истории. Архивирование не удаляет данные физически и сохраняет audit trail."
+        confirmLabel="Удалить разбор"
+        loading={archivingAnalysis}
+        onClose={() => setAnalysisToArchive(null)}
+        onConfirm={confirmArchiveAnalysis}
+      />
     </AppLayout>
   );
 }

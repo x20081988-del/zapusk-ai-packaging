@@ -85,6 +85,10 @@ export function listMeetings(filters: { projectId?: string; leadId?: string } = 
   return api.get<{ sessions: SalesSession[] }>(`/api/sales-sessions${q ? `?${q}` : ''}`);
 }
 
+export function archiveMeeting(id: string) {
+  return api.delete<{ ok: boolean; archivedAt: string }>(`/api/sales-sessions/${id}`);
+}
+
 export function parseJsonArray(raw: string | null | undefined): string[] {
   if (!raw) return [];
   try {

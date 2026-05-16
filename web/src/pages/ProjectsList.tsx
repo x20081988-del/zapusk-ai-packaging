@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Sparkles } from 'lucide-react';
+import { Plus, Sparkles, Trash2 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { ProjectCard } from '../components/ui/ProjectCard';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
+import { ConfirmModal } from '../components/ui/ConfirmModal';
 import { api, type Project } from '../lib/api';
 import { computeProgress } from '../lib/progress';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
@@ -19,12 +20,30 @@ export default function ProjectsList() {
   const role = auth?.role ?? 'FOUNDER';
   const isDemoMode = auth?.workspaceStatus === 'demo';
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [projectToArchive, setProjectToArchive] = useState<Project | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => setProjects(r.projects));
   }, []);
 
   const visible = projects?.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)) ?? null;
+
+  async function archiveProject() {
+    if (!projectToArchive) return;
+    setArchiving(true);
+    setError(null);
+    try {
+      await api.delete(`/api/projects/${projectToArchive.id}`);
+      setProjects((current) => current?.filter((p) => p.id !== projectToArchive.id) ?? current);
+      setProjectToArchive(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось удалить проект');
+    } finally {
+      setArchiving(false);
+    }
+  }
 
   return (
     <AppLayout
@@ -63,12 +82,51 @@ export default function ProjectsList() {
           />
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {visible.map((p) => (
-            <ProjectCard key={p.id} project={p} percent={computeProgress(p).percent} />
-          ))}
-        </div>
+        <>
+          {error && (
+            <Card padded className="mb-4">
+              <div className="text-xs text-warning">{error}</div>
+            </Card>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {visible.map((p) => (
+              <div key={p.id} className="relative">
+                <ProjectCard project={p} percent={computeProgress(p).percent} />
+                {!isDemoMode && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="danger"
+                    iconLeft={<Trash2 size={12} />}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setProjectToArchive(p);
+                    }}
+                    className="absolute right-3 top-3 opacity-95 shadow-lifted"
+                    title="Удалить проект"
+                  >
+                    Удалить
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
+      <ConfirmModal
+        open={Boolean(projectToArchive)}
+        title="Удалить проект?"
+        description={
+          <>
+            Данные проекта «{projectToArchive?.name}» будут скрыты из списка проектов. Это архивирование, а не физическое удаление.
+          </>
+        }
+        confirmLabel="Удалить проект"
+        loading={archiving}
+        onClose={() => setProjectToArchive(null)}
+        onConfirm={archiveProject}
+      />
     </AppLayout>
   );
 }
