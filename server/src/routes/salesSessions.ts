@@ -39,12 +39,15 @@ const completeSchema = z.object({
 salesSessionsRoutes.post('/complete', async (req, res) => {
   const parsed = completeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const input: CompleteSessionInput = parsed.data;
-
-  // Sprint 35 P0.3 — founder может создать сессию только если projectId — его
-  // проект. Admin/manager — допускаются без проверки, в т.ч. orphan'ы.
-  const ownership = await assertProjectOwnership(req, input.projectId ?? null);
-  if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  // Sprint 49 hotfix 10 — orphan-safe finalize. AI-assistant может завершить
+  // встречу без projectId; createdById становится владельцем. Если projectId
+  // ЕСТЬ — продолжаем проверять ownership (нельзя приписать встречу к чужому
+  // проекту). Если projectId нет — пропускаем gate, ничего leak'нуть нельзя.
+  const input: CompleteSessionInput = { ...parsed.data, createdById: getUser(req).id };
+  if (input.projectId) {
+    const ownership = await assertProjectOwnership(req, input.projectId);
+    if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
+  }
 
   try {
     const summary = await completeSession(input);
@@ -124,12 +127,17 @@ salesSessionsRoutes.get('/:id', async (req, res) => {
   if (!session) return res.status(404).json({ error: 'not_found' });
 
   // Sprint 35 P0.3 — founder может открыть запись только если она привязана к
-  // его проекту. Orphan'ы (projectId=null) — admin-only. Возвращаем 404 чтобы
-  // не палить факт существования чужой записи.
+  // его проекту. Orphan'ы (projectId=null) — admin-only ИЛИ автор (Sprint 49
+  // hotfix 10). 404 чтобы не палить факт существования чужой записи.
   const role = getActorRole(req);
   if (!isAdminLike(role)) {
-    const ownership = await assertProjectOwnership(req, session.projectId ?? null);
-    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    const userId = getUser(req).id;
+    const sessionRow = session as { projectId: string | null; createdById?: string | null };
+    if (sessionRow.createdById !== userId) {
+      if (!sessionRow.projectId) return res.status(404).json({ error: 'not_found' });
+      const ownership = await assertProjectOwnership(req, sessionRow.projectId);
+      if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    }
   }
 
   // Sprint 37 P0.3 — audit на чтение карточки встречи. Содержит transcript,
@@ -155,11 +163,17 @@ salesSessionsRoutes.delete('/:id', async (req, res) => {
   const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
   if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
 
-  // Sprint 35 P0.3 — founder может архивировать только свою запись.
+  // Sprint 35 P0.3 + Sprint 49 hotfix 10 — founder может архивировать свою
+  // встречу: либо принадлежащую его проекту, либо собственную orphan-встречу
+  // (createdById === me).
   const role = getActorRole(req);
   if (!isAdminLike(role)) {
-    const ownership = await assertProjectOwnership(req, existing.projectId ?? null);
-    if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    const userId = getUser(req).id;
+    if (existing.createdById !== userId) {
+      if (!existing.projectId) return res.status(404).json({ error: 'not_found' });
+      const ownership = await assertProjectOwnership(req, existing.projectId);
+      if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
+    }
   }
 
   await prisma.salesSession.update({ where: { id: req.params.id }, data: { archivedAt: new Date() } });

@@ -14,6 +14,10 @@ export interface CompleteSessionInput {
   adviceHistory?: unknown[];
   startedAt?: string | null;
   endedAt?: string | null;
+  // Sprint 49 hotfix 10 — авторство встречи. Передаётся route'ом из getUser(req).id
+  // и используется и для persistSession (атрибуция), и для listSessions
+  // (founder видит свои orphan-встречи).
+  createdById?: string | null;
 }
 
 export type InvestorType = 'dividend' | 'growth' | 'preipo' | 'strategic' | 'unknown';
@@ -227,6 +231,7 @@ export async function persistSession(
   return prisma.salesSession.create({
     data: {
       projectId: input.projectId ?? null,
+      createdById: input.createdById ?? null,
       leadId: input.leadId ?? null,
       investorName: input.investorName ?? null,
       investorPhone: input.investorPhone ?? null,
@@ -259,6 +264,9 @@ export async function listSessions(filters: {
   // Sprint 35 P0.3 — для founder фильтр по project.userId. Передаётся route'ом
   // только если actor — НЕ admin-like. Для admin/manager оставляется undefined
   // → видны все записи, включая orphan'ы без projectId.
+  // Sprint 49 hotfix 10 — founder также видит свои orphan-встречи через
+  // createdById. Поэтому ownerUserId фильтрует: (project.userId == me) OR
+  // (createdById == me).
   ownerUserId?: string;
 } = {}) {
   return prisma.salesSession.findMany({
@@ -267,7 +275,12 @@ export async function listSessions(filters: {
       ...(filters.projectId ? { projectId: filters.projectId } : {}),
       ...(filters.leadId ? { leadId: filters.leadId } : {}),
       ...(filters.ownerUserId
-        ? { project: { is: { userId: filters.ownerUserId } } }
+        ? {
+            OR: [
+              { project: { is: { userId: filters.ownerUserId } } },
+              { createdById: filters.ownerUserId },
+            ],
+          }
         : {}),
     },
     orderBy: { createdAt: 'desc' },

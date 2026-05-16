@@ -238,8 +238,11 @@ function analyzeButtonLabel(
   phase: 'idle' | 'fast' | 'full' | 'error',
   hasAnyCard: boolean,
 ): string {
+  // Sprint 49 hotfix 10 — явный «AI анализирует последние реплики…» во
+  // время full-фазы, чтобы пользователь видел, что кнопка сработала и
+  // карточка обновляется (раньше казалось, что клик потерялся).
   if (phase === 'fast') return 'Готовлю главный вопрос…';
-  if (phase === 'full') return 'Обновить ещё раз';
+  if (phase === 'full') return 'AI анализирует последние реплики…';
   if (phase === 'error') return 'Повторить обновление';
   return hasAnyCard ? 'Обновить ещё раз' : 'Получить подсказку';
 }
@@ -271,9 +274,22 @@ export default function SalesAssistant() {
   // Sprint 34В: auto-refresh interval УБРАН — обновление только вручную.
   const [lastAnalyzeAt, setLastAnalyzeAt] = useState<number | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
-  // Investor Meeting Memory: «Завершить встречу» → AI summary → сохраняем как SalesSession.
-  const [finishing, setFinishing] = useState(false);
+  // Sprint 49 hotfix 10 — явный meeting state machine. Раньше состояние
+  // распределялось между listening / speechStatus / finishing / finishResult,
+  // что приводило к рассогласованию: UI оптимистично сбрасывал «Остановить»
+  // до того, как backend подтвердит финализацию. Теперь lifecycle:
+  //   idle → listening → stopped → finalizing → finalized
+  //                                  ↓ on fail
+  //                                  finalize_failed (retry possible)
+  type MeetingState = 'idle' | 'listening' | 'stopped' | 'finalizing' | 'finalized' | 'finalize_failed';
+  const [meetingState, setMeetingState] = useState<MeetingState>('idle');
+  // Reentrancy guard: повторные клики «Завершить встречу» не запускают
+  // второй запрос пока первый летит. Защита от race + от двойного клика.
+  const finishingRef = useRef(false);
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
+  // Sprint 34В legacy alias — оставляем для совместимости с UI кнопкой loading.
+  const finishing = meetingState === 'finalizing';
   const [investorName, setInvestorName] = useState('');
   const [investorPhone, setInvestorPhone] = useState('');
   // Sprint 43 P0.6 — список adviceEventId'ов всех full analyze этой встречи.
@@ -848,6 +864,8 @@ export default function SalesAssistant() {
   async function start() {
     shouldListenRef.current = true;
     setPermError(null);
+    setMeetingState('listening');
+    setFinalizeError(null);
     if (!startedAtRef.current) startedAtRef.current = new Date().toISOString();
     // Sprint 49 — primary path: OpenAI Realtime через WebRTC. Если бэкенд
     // не выдаёт ephemeral token (нет API key / нет шаблона) или WebRTC
@@ -899,14 +917,25 @@ export default function SalesAssistant() {
     // Пользователь сам управляет моментом анализа.
   }
 
+  // Sprint 49 hotfix 10 — финализация встречи с idempotency, state machine
+  // и понятной ошибкой. Ключевые изменения:
+  //   • finishingRef защищает от повторного клика во время запроса;
+  //   • если встреча уже finalized — повторный клик не отправляет ничего;
+  //   • НЕ останавливаем listening / не сбрасываем UI до успеха backend;
+  //   • при ошибке state переходит в finalize_failed, transcript и card
+  //     сохраняются, пользователь может ретраить;
+  //   • backend больше не требует projectId → orphan-finalize работает.
   async function finishMeeting() {
+    if (finishingRef.current) return; // уже летит запрос
+    if (meetingState === 'finalized') return; // уже сохранили
     const transcriptText = fullTranscript();
     if (transcriptText.trim().length < 10) {
       setPermError('Слишком короткая встреча. Дайте AI хотя бы пару фраз для анализа.');
       return;
     }
-    stop();
-    setFinishing(true);
+    finishingRef.current = true;
+    setFinalizeError(null);
+    setMeetingState('finalizing');
     try {
       const result = await completeMeeting({
         projectId: projectId || null,
@@ -921,12 +950,48 @@ export default function SalesAssistant() {
         // атрибуцировать в дашбордах.
         adviceEventIds,
       });
+      // Только после успеха останавливаем listening и переходим в finalized.
       setFinishResult(result);
+      setMeetingState('finalized');
+      stop();
     } catch (err) {
-      setPermError(err instanceof Error ? err.message : 'Не удалось завершить встречу');
+      // Не делаем optimistic reset: listening остаётся active (если был),
+      // transcript и card на экране. Пользователь либо ретраит, либо
+      // продолжает встречу.
+      const msg = err instanceof Error ? err.message : 'unknown';
+      const friendly = friendlyFinalizeError(msg);
+      console.warn(`[sales-assistant] finalize FAIL message="${msg.slice(0, 200)}"`);
+      setFinalizeError(friendly);
+      setMeetingState('finalize_failed');
     } finally {
-      setFinishing(false);
+      finishingRef.current = false;
     }
+  }
+
+  // Sprint 49 hotfix 10 — UX-копия под конкретные ошибки финализации.
+  // Никогда не показываем raw 403/500.
+  function friendlyFinalizeError(rawMessage: string): string {
+    if (/project_required/i.test(rawMessage)) {
+      // После hotfix 10 backend больше так не отвечает, но защита остаётся
+      // на случай старого сервера.
+      return 'Встреча сохранена без привязки к проекту. Попробуйте ещё раз.';
+    }
+    if (/transcript_too_short/i.test(rawMessage)) {
+      return 'Транскрипция слишком короткая. Поговорите ещё минуту и нажмите ещё раз.';
+    }
+    if (/^401\s|unauthenticated/i.test(rawMessage)) {
+      return 'Сессия истекла. Обновите страницу и войдите заново.';
+    }
+    if (/^403\s/.test(rawMessage)) {
+      return 'Нет доступа к этому проекту. Снимите выбор проекта или выберите свой.';
+    }
+    if (/^429\s|rate.?limit/i.test(rawMessage)) {
+      return 'AI ограничил частоту запросов. Подождите минуту и попробуйте ещё раз.';
+    }
+    if (/^5\d{2}\s|complete_session_failed/i.test(rawMessage)) {
+      return 'Не удалось сохранить встречу. Транскрипция и подсказки сохранены на экране, попробуйте ещё раз.';
+    }
+    return 'Не удалось завершить встречу. Транскрипция и подсказки сохранены, попробуйте ещё раз.';
   }
 
   function closeFinishModal() {
@@ -948,6 +1013,10 @@ export default function SalesAssistant() {
     // Sprint 49 — следующая встреча заново выбирает provider.
     setTranscriptionProvider(null);
     setRealtimeModel(null);
+    // Sprint 49 hotfix 10 — после закрытия модала возвращаемся в idle, чтобы
+    // следующая встреча стартовала с чистого state machine.
+    setMeetingState('idle');
+    setFinalizeError(null);
     // Sprint 43 — сброс advice tracking при новом meeting'е.
     setAdviceEventIds([]);
     setAdviceEventLast(null);
@@ -958,6 +1027,12 @@ export default function SalesAssistant() {
     setListening(false);
     speechStatusRef.current = 'stopped';
     setSpeechStatus('stopped');
+    // Sprint 49 hotfix 10 — обновляем meeting state только если мы НЕ в
+    // активном finalize / finalized. finishMeeting() сам вызывает stop()
+    // после успеха и до этого момента уже выставил 'finalized'.
+    setMeetingState((prev) =>
+      prev === 'finalizing' || prev === 'finalized' || prev === 'finalize_failed' ? prev : 'stopped',
+    );
     if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
     try { srRef.current?.stop(); } catch { /* ignore */ }
     srRef.current = null;
@@ -980,6 +1055,11 @@ export default function SalesAssistant() {
     speechStatusRef.current = 'idle';
     setSpeechStatus('idle');
     setPermError(null);
+    // Sprint 49 hotfix 10 — после ручного reset возвращаемся в idle. Если
+    // финализация была finalize_failed, тоже сбрасываем — пользователь
+    // решил начать с чистого листа.
+    setMeetingState('idle');
+    setFinalizeError(null);
     // Sprint 49 — сброс provider state, чтобы следующий start() заново выбрал
     // realtime vs web-speech по текущей доступности backend.
     setTranscriptionProvider(null);
@@ -1076,6 +1156,7 @@ export default function SalesAssistant() {
             iconLeft={<RefreshCw size={14} />}
             onClick={() => runAnalyze()}
             disabled={!hasFinalTranscript}
+            loading={analyzePhase === 'fast' || analyzePhase === 'full'}
           >
             {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
           </Button>
@@ -1084,10 +1165,10 @@ export default function SalesAssistant() {
             iconLeft={<Save size={14} />}
             onClick={finishMeeting}
             loading={finishing}
-            disabled={!hasFinalTranscript}
-            title="Превратить разговор в карточку сделки"
+            disabled={!hasFinalTranscript || meetingState === 'finalized' || meetingState === 'finalizing'}
+            title={meetingState === 'finalized' ? 'Встреча уже сохранена' : 'Превратить разговор в карточку сделки'}
           >
-            Завершить встречу
+            {meetingState === 'finalized' ? 'Встреча сохранена' : 'Завершить встречу'}
           </Button>
           {transcript.length > 0 && !listening && (
             <Button variant="ghost" onClick={reset}>Сбросить</Button>
@@ -1176,6 +1257,24 @@ export default function SalesAssistant() {
           <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
             <AlertTriangle size={13} className="mt-0.5 shrink-0" />
             {permError}
+          </div>
+        )}
+        {/* Sprint 49 hotfix 10 — отдельный finalize-error баннер. Не путаем
+            с permError (микрофон/проект). Подсветка warning + retry-кнопка. */}
+        {finalizeError && meetingState === 'finalize_failed' && (
+          <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
+            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <div>{finalizeError}</div>
+              <button
+                type="button"
+                className="mt-1 underline text-warning hover:text-primary"
+                onClick={finishMeeting}
+                disabled={finishingRef.current}
+              >
+                Попробовать ещё раз
+              </button>
+            </div>
           </div>
         )}
       </Card>

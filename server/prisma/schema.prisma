@@ -370,6 +370,12 @@ model SalesSession {
   projectId       String?
   project         Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
+  // Sprint 49 hotfix 10 — orphan-safe finalize. AI-assistant может завершить
+  // встречу без projectId; в этом случае запись принадлежит создателю и
+  // фаундер видит её в своём списке через createdById, а не через ownership
+  // проекта. Existing rows остаются NULL и видны только admin.
+  createdById     String?
+
   leadId          String?   // necklink to AI Leads when meeting came from a qualified lead
   investorName    String?
   investorPhone   String?
@@ -405,6 +411,7 @@ model SalesSession {
 
   @@index([projectId])
   @@index([leadId])
+  @@index([createdById])
 }
 
 // AI Conversation Intelligence — внешние записи разговоров (Zoom / Telegram /
