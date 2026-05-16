@@ -12,6 +12,7 @@ import {
   getAnalysis,
 } from '../services/conversationAnalysisService.js';
 import { isAIGuardrailError } from '../ai/client.js';
+import { withRateLimit } from '../lib/rateLimit.js';
 
 export const conversationAnalysisRoutes = Router();
 conversationAnalysisRoutes.use(authMiddleware);
@@ -26,7 +27,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 
 //   • body.transcript               (paste text)
 //   • body.audioUrl                 (recording URL)
 // All optional fields: projectId, investorName.
-conversationAnalysisRoutes.post('/', upload.single('file'), async (req, res) => {
+// Sprint 50 P0.2 — file_upload bucket on the multipart route (limits the
+// concurrent file-upload abuse vector; the inner ai_inference work is also
+// bounded by the AI cost guardrails). Order matters: rate-limit BEFORE the
+// multer parse so we drop too-many-requests before paying the bandwidth.
+conversationAnalysisRoutes.post('/', withRateLimit('file_upload'), upload.single('file'), async (req, res) => {
   try {
     const file = (req as { file?: Express.Multer.File }).file;
     const transcript = typeof req.body.transcript === 'string' ? req.body.transcript : null;
@@ -86,7 +91,7 @@ const analyzeOnlySchema = z.object({
 });
 
 // Convenience endpoint for pure text analysis without multipart parsing.
-conversationAnalysisRoutes.post('/text', async (req, res) => {
+conversationAnalysisRoutes.post('/text', withRateLimit('ai_inference'), async (req, res) => {
   const parsed = analyzeOnlySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

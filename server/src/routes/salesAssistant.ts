@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { assertProjectOwnership, getActorRole, requireNotInvestor } from '../lib/ownership.js';
+import { withRateLimit } from '../lib/rateLimit.js';
 import { recordAudit } from '../lib/audit.js';
 import {
   analyzeSalesTurn,
@@ -140,7 +141,10 @@ const analyzeSchema = z.object({
   projectId: z.string().optional().nullable(),
 });
 
-salesAssistantRoutes.post('/analyze', async (req, res) => {
+// Sprint 50 P0.2 — analyze rate-limit. AI cost guardrails already cap the
+// daily spend (env.AI_MAX_*); per-actor rate-limit prevents one user from
+// flooding the queue inside that budget.
+salesAssistantRoutes.post('/analyze', withRateLimit('ai_inference'), async (req, res) => {
   const parsed = analyzeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -219,7 +223,7 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
 // для живой встречи (1-3 секунды). UI должен звать сначала /analyze-fast,
 // рендерить главный вопрос/backup/self-sale, потом догнать через /analyze
 // для полной аналитики.
-salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
+salesAssistantRoutes.post('/analyze-fast', withRateLimit('ai_inference'), async (req, res) => {
   const parsed = analyzeSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

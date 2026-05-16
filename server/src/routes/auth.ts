@@ -4,6 +4,7 @@ import { prisma } from '../db.js';
 import { authMiddleware, normalizeRole } from '../auth.js';
 import { env } from '../env.js';
 import { hashPassword, signToken, verifyPassword } from '../authCrypto.js';
+import { withRateLimit } from '../lib/rateLimit.js';
 
 export const authRoutes = Router();
 
@@ -25,7 +26,10 @@ const signupSchema = z.object({
   inviteToken: z.string().trim().min(16, 'Нужен код приглашения'),
 });
 
-authRoutes.post('/signup', async (req, res) => {
+// Sprint 50 P0.2 — auth endpoints are tight burst, slow refill. A brute-force
+// attempt against /login or /signup gets 429'd long before it can spray
+// passwords. Demo-login lives behind the same gate.
+authRoutes.post('/signup', withRateLimit('auth'), async (req, res) => {
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'validation_failed', issues: parsed.error.flatten().fieldErrors });
@@ -111,7 +115,7 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-authRoutes.post('/login', async (req, res) => {
+authRoutes.post('/login', withRateLimit('auth'), async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'validation_failed' });
@@ -157,7 +161,7 @@ const demoSchema = z.object({
   name: z.string().min(1).optional(),
 });
 
-authRoutes.post('/demo', async (req, res) => {
+authRoutes.post('/demo', withRateLimit('auth'), async (req, res) => {
   // Sprint 35 P0.4 — в production /api/auth/demo выключен по умолчанию.
   // Включить можно явным ENABLE_DEMO_LOGIN=true для demo-инстанса. Не
   // зависим больше от обратного DISABLE_*=true: дефолт в проде = safe.

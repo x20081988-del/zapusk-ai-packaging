@@ -5,6 +5,7 @@ import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
 import { requireNotInvestor } from '../lib/ownership.js';
 import { buildRealtimePrompt } from '../services/realtimePrompt.js';
+import { withRateLimit } from '../lib/rateLimit.js';
 
 // Sprint 49 — OpenAI Realtime live transcription session bootstrap.
 //
@@ -70,7 +71,12 @@ realtimeRoutes.use(requireNotInvestor());
 
 // POST /api/realtime/transcription-session
 // Returns { clientSecret, model, expiresAt, dictionaryVersion } для браузера.
-realtimeRoutes.post('/transcription-session', async (req, res) => {
+// Sprint 50 P0.2 — realtime_token bucket. Each call mints an ephemeral
+// OpenAI client_secret with real cost ($0.017/min during the realtime
+// session OpenAI bills against). Without this guard a misbehaving page
+// could refresh every few seconds and rack up bills inside the daily AI
+// guardrail. 10-token burst with ~12 req/min sustained.
+realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), async (req, res) => {
   if (!env.OPENAI_API_KEY || env.OPENAI_API_KEY.length < 10) {
     return res.status(503).json({ error: 'openai_not_configured' });
   }
