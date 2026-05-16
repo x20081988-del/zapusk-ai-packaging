@@ -289,17 +289,16 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
     model: null,
     outputType: 'ai_visibility_report',
   },
-  // Sprint 49 — Realtime transcription. Sprint 49 hotfix: model явно задан
-  // `gpt-realtime-whisper`, чтобы fresh seed создавал шаблон с валидной
-  // моделью для /v1/realtime/transcription_sessions. Route оставляет
-  // приоритет за template.model; если он null/empty — берёт env
-  // OPENAI_MODEL_REALTIME_TRANSCRIBE; если и тот пуст — hard-fallback
-  // на `gpt-realtime-whisper` в env.ts. tool здесь — UI-метка из
-  // оркестрации, не модельный id, не путать.
+  // Sprint 50 hotfix — model: 'gpt-4o-transcribe'. gpt-realtime-whisper
+  // (Sprint 49 hotfix 1) silenced the Russian dictionary and segmented at
+  // every short pause because it doesn't accept prompt / turn_detection.
+  // gpt-4o-transcribe accepts both → terminology dictionary reaches the
+  // model and server_vad's silence_duration_ms is tunable. Route falls
+  // back to env OPENAI_MODEL_REALTIME_TRANSCRIBE if template.model is null.
   realtime_transcription: {
     provider: 'openai',
     tool: 'gpt-realtime-transcribe',
-    model: 'gpt-realtime-whisper',
+    model: 'gpt-4o-transcribe',
     outputType: 'transcription',
   },
 };

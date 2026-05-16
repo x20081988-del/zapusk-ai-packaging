@@ -113,12 +113,17 @@ export const env = {
   // живые intermediate deltas в браузер, transcribe-модель используется для
   // request-based транскрипции файлов и не требует WebRTC канала.
   //
-  // Sprint 49 hotfix — Realtime transcription_sessions endpoint принимает
-  // конкретный список моделей; `gpt-realtime-whisper` — GA streaming
-  // speech-to-text. Старое значение `gpt-4o-mini-transcribe` валидно для
-  // request-based транскрипции, но Realtime сессия не открывалась с ним
-  // в нашем тенанте → openai_session_failed. Дефолт переключён.
-  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-realtime-whisper',
+  // Sprint 50 hotfix — back to `gpt-4o-transcribe` for live transcription.
+  // `gpt-realtime-whisper` (Sprint 49 hotfix 1) chopped Russian aggressively
+  // and DIDN'T support `prompt` or `turn_detection`, so:
+  //   • the Russian terminology dictionary couldn't reach the model;
+  //   • the model used its internal VAD that segments at every short pause;
+  //   • "platform Запуск" → "платформа, запуска" because no prompt context.
+  // gpt-4o-transcribe supports both prompt and server_vad with tunable
+  // silence_duration_ms (we keep 700ms — natural pause length). Same model
+  // is used for upload transcription via /v1/audio/transcriptions, so the
+  // two surfaces stay consistent.
+  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-4o-transcribe',
   OPENAI_MODEL_TRANSCRIBE: process.env.OPENAI_MODEL_TRANSCRIBE ?? 'gpt-4o-transcribe',
 
   // Deepgram pre-recorded transcription. nova-2 supports Russian + diarization.

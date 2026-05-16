@@ -27,8 +27,12 @@ const REALTIME_TEMPLATE_KEY = 'realtime_transcription';
 // внутри session.type='transcription'.
 const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
 // Hard fallback на случай, если и template.model, и env пустые.
-// `gpt-realtime-whisper` — текущая GA realtime streaming transcription модель.
-const REALTIME_TRANSCRIBE_HARD_FALLBACK = 'gpt-realtime-whisper';
+// Sprint 50 hotfix — back to gpt-4o-transcribe for live transcription.
+// It accepts `prompt` (terminology dictionary lands) and `turn_detection`
+// (server VAD with tunable silence_duration_ms — natural pauses don't
+// chop the transcript). gpt-realtime-whisper rejected both, producing
+// short fragmented segments and losing Russian business names.
+const REALTIME_TRANSCRIBE_HARD_FALLBACK = 'gpt-4o-transcribe';
 
 function resolveTranscriptionModel(templateModel: string | null): string {
   const fromTemplate = templateModel?.trim();
@@ -38,12 +42,13 @@ function resolveTranscriptionModel(templateModel: string | null): string {
   return REALTIME_TRANSCRIBE_HARD_FALLBACK;
 }
 
-// Sprint 49 hotfix 4 — `gpt-realtime-whisper` GA модель в transcription
-// session не принимает `prompt` (OpenAI: invalid_value `prompt` parameter
-// is not supported for this model). gpt-4o-transcribe / gpt-4o-mini-transcribe
-// и whisper-1 — принимают. Шаблон realtime_transcription сохраняем как
-// управляемый словарь (используется в file transcription и UI), но для
-// realtime session подмешиваем prompt только если модель его поддерживает.
+// Sprint 49 hotfix 4 (still relevant) — `gpt-realtime-whisper` doesn't
+// accept `prompt` or `turn_detection` in the realtime API. Sprint 50
+// hotfix switches the default model to gpt-4o-transcribe (which DOES
+// accept both) so the dictionary + server VAD work out of the box.
+// The exclusion sets below stay in case an operator overrides the env
+// back to whisper for a specific workspace — the route then gracefully
+// drops the unsupported fields instead of failing the session.
 const REALTIME_PROMPT_UNSUPPORTED_MODELS = new Set<string>([
   'gpt-realtime-whisper',
 ]);
@@ -146,7 +151,12 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
       type: 'server_vad',
       threshold: 0.5,
       prefix_padding_ms: 300,
-      silence_duration_ms: 700,
+      // Sprint 50 hotfix — bumped 700→1200ms. Natural between-sentence
+      // pauses in Russian dictation often hit 800-1200ms; 700 was too
+      // aggressive and chopped utterances mid-thought ("то чтобы." as
+      // its own segment). Interim deltas stream continuously regardless;
+      // only the final-segment boundary moves.
+      silence_duration_ms: 1200,
     };
   }
 
