@@ -1,33 +1,12 @@
-import { useRef, useState } from 'react';
 import { Mic, Square } from 'lucide-react';
 import { Button } from './Button';
-
-// Sprint 14 UX-polish: голосовая кнопка раньше выглядела ghost-button с
-// микрофоном — пользователи путали её с подсказкой, а не действием. Делаем
-// явный ai-стилизованный button с тремя состояниями: idle / listening / disabled.
-
-type SpeechRecognitionInstance = {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-};
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
-
-interface SpeechRecognitionEventLike {
-  results: ArrayLike<ArrayLike<{ transcript: string }>>;
-}
+import { useVoiceDictation } from '../../lib/useVoiceDictation';
 
 interface Props {
   onTranscript: (text: string) => void;
   /** Idle label, shown until user clicks the button. */
   label?: string;
-  /** Label shown while actively listening. */
+  /** Label shown in status text while actively listening. */
   listeningLabel?: string;
   /** "Stop dictation" label shown in the listening state next to the square icon. */
   stopLabel?: string;
@@ -35,14 +14,6 @@ interface Props {
   /** Tighter button for inline-with-textarea placement. Default = md. */
   size?: 'sm' | 'md';
   disabled?: boolean;
-}
-
-function getSpeechRecognition(): SpeechRecognitionConstructor | null {
-  const speechWindow = window as typeof window & {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  };
-  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
 }
 
 export function VoiceInputButton({
@@ -54,76 +25,56 @@ export function VoiceInputButton({
   size = 'md',
   disabled,
 }: Props) {
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const [listening, setListening] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  function start() {
-    if (disabled) return;
-
-    const SpeechRecognition = getSpeechRecognition();
-    if (!SpeechRecognition) {
-      setMessage('Голосовой ввод не поддерживается в этом браузере. Введите текст вручную.');
-      return;
-    }
-
-    if (listening) {
-      recognitionRef.current?.stop();
-      setListening(false);
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'ru-RU';
-    recognition.interimResults = false;
-    recognition.continuous = false;
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .flatMap((result) => Array.from(result))
-        .map((result) => result.transcript)
-        .join(' ')
-        .trim();
-      if (transcript) onTranscript(transcript);
-      setMessage(null);
-    };
-    recognition.onerror = () => {
-      setMessage('Не удалось распознать речь. Введите текст вручную.');
-    };
-    recognition.onend = () => setListening(false);
-    recognitionRef.current = recognition;
-    setMessage(null);
-    setListening(true);
-    recognition.start();
-  }
-
-  // While listening — secondary danger-ish look (square stop), with a soft
-  // pulsing dot on the left so it visually reads as «recording».
-  // Idle — ai variant so the button feels distinct from regular form controls.
-  const icon = listening ? <Square size={14} /> : <Mic size={14} />;
-  const text = listening ? stopLabel : label;
+  const dictation = useVoiceDictation(onTranscript);
+  const active = dictation.active;
+  const icon = active ? <Square size={14} /> : <Mic size={14} />;
+  const text = active ? stopLabel : label;
+  const statusText = buildStatusText(dictation.status, dictation.provider, listeningLabel, dictation.message);
 
   return (
     <div className={className}>
       <Button
         type="button"
         size={size}
-        variant={listening ? 'danger' : 'ai'}
+        variant={active ? 'danger' : 'ai'}
         iconLeft={icon}
-        onClick={start}
+        onClick={dictation.start}
         disabled={disabled}
-        aria-pressed={listening}
+        aria-pressed={active}
         aria-label={text}
         className="relative"
       >
-        {listening && (
+        {active && (
           <span
             aria-hidden
             className="absolute -left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-canvas animate-pulse"
           />
         )}
-        {listening ? listeningLabel : text}
+        {text}
       </Button>
-      {message && <p className="mt-1.5 text-[11px] text-warning">{message}</p>}
+      {(statusText || dictation.interim) && (
+        <p className="mt-1.5 max-w-xs text-[11px] leading-snug text-muted">
+          {statusText}
+          {dictation.interim && (
+            <span className="block truncate text-secondary">«{dictation.interim}»</span>
+          )}
+        </p>
+      )}
     </div>
   );
+}
+
+function buildStatusText(
+  status: ReturnType<typeof useVoiceDictation>['status'],
+  provider: ReturnType<typeof useVoiceDictation>['provider'],
+  listeningLabel: string,
+  message: string | null,
+): string | null {
+  if (status === 'idle') return null;
+  if (status === 'connecting') return message ?? 'Подключаю распознавание речи…';
+  if (status === 'recognizing') return 'Распознаю речь…';
+  if (status === 'fallback') return message ?? 'Слушаю через браузерное распознавание.';
+  if (status === 'error') return message ?? 'Не удалось включить голосовой ввод.';
+  if (provider === 'openai') return `${listeningLabel} OpenAI Realtime.`;
+  return listeningLabel;
 }
