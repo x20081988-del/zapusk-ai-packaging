@@ -153,6 +153,8 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
     if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
   }
 
+  // Sprint 49 hotfix 8 — латентность + structured warn при ошибках.
+  const tStart = Date.now();
   try {
     const card = await analyzeSalesTurn({
       transcript: parsed.data.transcript.trim(),
@@ -194,11 +196,22 @@ salesAssistantRoutes.post('/analyze', async (req, res) => {
     });
     res.json({ card, adviceEventId });
   } catch (err) {
+    const latencyMs = Date.now() - tStart;
     if (isAIGuardrailError(err)) {
-      return res.status(err.statusCode).json({ error: err.code });
+      console.warn(
+        `[sales-assistant] feature=analyze FAIL reason=guardrail code=${err.code} ` +
+        `actorId=${getUser(req).id} projectId=${parsed.data.projectId ?? 'none'} latencyMs=${latencyMs}`,
+      );
+      return res.status(err.statusCode).json({ error: err.code, reason: 'guardrail', latencyMs });
     }
-    console.error('[sales-assistant]', err);
-    res.status(500).json({ error: 'analyze_failed' });
+    const msg = err instanceof Error ? err.message : 'unknown';
+    const reason = classifyServerAnalyzeError(msg);
+    console.warn(
+      `[sales-assistant] feature=analyze FAIL reason=${reason} ` +
+      `actorId=${getUser(req).id} projectId=${parsed.data.projectId ?? 'none'} latencyMs=${latencyMs} ` +
+      `transcriptChars=${parsed.data.transcript.length} message="${msg.slice(0, 240)}"`,
+    );
+    res.status(500).json({ error: 'analyze_failed', reason, latencyMs, message: msg.slice(0, 240) });
   }
 });
 
@@ -216,6 +229,8 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
     if (!ownership.ok) return res.status(ownership.status).json({ error: ownership.error });
   }
 
+  // Sprint 49 hotfix 8 — латентность + structured warn при ошибках fast-фазы.
+  const tStart = Date.now();
   try {
     const fast = await analyzeSalesTurnFast({
       transcript: parsed.data.transcript.trim(),
@@ -234,10 +249,35 @@ salesAssistantRoutes.post('/analyze-fast', async (req, res) => {
     await recordRetrievalObservability(req, parsed.data.projectId ?? null, fast.knowledgeRetrievalMeta);
     res.json({ fast });
   } catch (err) {
+    const latencyMs = Date.now() - tStart;
     if (isAIGuardrailError(err)) {
-      return res.status(err.statusCode).json({ error: err.code });
+      console.warn(
+        `[sales-assistant:fast] feature=analyze_fast FAIL reason=guardrail code=${err.code} ` +
+        `actorId=${getUser(req).id} projectId=${parsed.data.projectId ?? 'none'} latencyMs=${latencyMs}`,
+      );
+      return res.status(err.statusCode).json({ error: err.code, reason: 'guardrail', latencyMs });
     }
-    console.error('[sales-assistant:fast]', err);
-    res.status(500).json({ error: 'analyze_fast_failed' });
+    const msg = err instanceof Error ? err.message : 'unknown';
+    const reason = classifyServerAnalyzeError(msg);
+    console.warn(
+      `[sales-assistant:fast] feature=analyze_fast FAIL reason=${reason} ` +
+      `actorId=${getUser(req).id} projectId=${parsed.data.projectId ?? 'none'} latencyMs=${latencyMs} ` +
+      `transcriptChars=${parsed.data.transcript.length} message="${msg.slice(0, 240)}"`,
+    );
+    res.status(500).json({ error: 'analyze_fast_failed', reason, latencyMs, message: msg.slice(0, 240) });
   }
 });
+
+// Sprint 49 hotfix 8 — классификация серверных ошибок analyze-pipeline.
+// Frontend получает `reason` и может показать ту же гранулярность, что и
+// при сетевых сбоях. Сам error.message обрезается до 240 чарактеров и не
+// содержит секретов/токенов — это сообщения провайдеров / network-уровня.
+function classifyServerAnalyzeError(msg: string): string {
+  if (/rate.?limit|429|too_many_requests/i.test(msg)) return 'rate_limit';
+  if (/timeout|timed.?out|ETIMEDOUT|deadline/i.test(msg)) return 'timeout';
+  if (/abort/i.test(msg)) return 'aborted';
+  if (/json|parse|unexpected token|malformed/i.test(msg)) return 'parse';
+  if (/network|ECONNREFUSED|ENOTFOUND|fetch failed/i.test(msg)) return 'network';
+  if (/model_not_found|invalid_request_error|404/i.test(msg)) return 'model_unavailable';
+  return 'unknown';
+}

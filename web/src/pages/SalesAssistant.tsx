@@ -471,6 +471,83 @@ export default function SalesAssistant() {
     return false;
   }
 
+  // Sprint 49 hotfix 8 — гранулярная классификация analyze-ошибок.
+  // Раньше любой fail показывал «Не удалось быстро получить подсказку», и
+  // в консоли был один абстрактный warn. Теперь сначала распознаём конкретную
+  // причину (timeout / abort / 401 / 403 / 429 / 5xx / network / parse),
+  // выбираем UX-сообщение под неё и логируем структурированно. Карточку
+  // НЕ сбрасываем — это уже было так, оставляем как явный комментарий.
+  type AnalyzeFailureReason =
+    | 'timeout'
+    | 'aborted'
+    | 'unauthenticated'
+    | 'workspace_readonly'
+    | 'rate_limit'
+    | 'guardrail_cost'
+    | 'guardrail_quota'
+    | 'server_error'
+    | 'network'
+    | 'parse'
+    | 'unknown';
+
+  interface AnalyzeFailure {
+    reason: AnalyzeFailureReason;
+    status: number | null;
+    body: string;
+    userMessage: string;
+  }
+
+  // Базовая UX-копия. Стараемся не пугать фаундера во время живой встречи —
+  // подсказываем, что делать.
+  const FAILURE_UX: Record<AnalyzeFailureReason, string> = {
+    timeout: 'AI отвечает дольше обычного. Подождите 10 секунд и нажмите «Получить подсказку» ещё раз.',
+    aborted: 'Запрос отменён. Нажмите «Получить подсказку» ещё раз.',
+    unauthenticated: 'Сессия истекла. Обновите страницу и войдите заново.',
+    workspace_readonly: 'Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.',
+    rate_limit: 'OpenAI ограничил частоту запросов. Подождите минуту и попробуйте снова.',
+    guardrail_cost: 'Дневной лимит AI-затрат исчерпан. Свяжитесь с администратором.',
+    guardrail_quota: 'Дневной лимит AI-запросов исчерпан. Свяжитесь с администратором.',
+    server_error: 'AI временно недоступен. Транскрипция продолжается. Попробуйте обновить подсказку через минуту.',
+    network: 'Нет связи с сервером. Подсказку нельзя обновить, пока подключение не вернётся.',
+    parse: 'AI вернул нечитаемый ответ. Попробуйте ещё раз.',
+    unknown: 'Не удалось обновить подсказку. Транскрипция продолжается. Попробуйте ещё раз.',
+  };
+
+  function classifyAnalyzeError(err: unknown, controller: AbortController): AnalyzeFailure {
+    const wasAbort = isAbortError(err) || controller.signal.aborted;
+    const raw = err instanceof Error ? err.message : String(err ?? 'unknown');
+    // api.ts кладёт `${status} ${statusText}: ${body}` в Error.message.
+    const statusMatch = /^(\d{3})\s/.exec(raw);
+    const status = statusMatch ? Number(statusMatch[1]) : null;
+
+    if (wasAbort) {
+      // Внешний таймер abort'ит при timeout; пользовательский abort выставляет
+      // analysisRequestIdRef и до сюда уже не доходит.
+      return { reason: 'timeout', status, body: raw, userMessage: FAILURE_UX.timeout };
+    }
+    if (status === 401) return { reason: 'unauthenticated', status, body: raw, userMessage: FAILURE_UX.unauthenticated };
+    if (status === 403 || /workspace_readonly/i.test(raw)) {
+      return { reason: 'workspace_readonly', status, body: raw, userMessage: FAILURE_UX.workspace_readonly };
+    }
+    if (status === 429 || /rate.?limit|too_many_requests/i.test(raw)) {
+      return { reason: 'rate_limit', status, body: raw, userMessage: FAILURE_UX.rate_limit };
+    }
+    if (/cost_limit_exceeded|ai_cost_limit/i.test(raw)) {
+      return { reason: 'guardrail_cost', status, body: raw, userMessage: FAILURE_UX.guardrail_cost };
+    }
+    if (/quota_exceeded|requests_limit/i.test(raw)) {
+      return { reason: 'guardrail_quota', status, body: raw, userMessage: FAILURE_UX.guardrail_quota };
+    }
+    if (status && status >= 500) return { reason: 'server_error', status, body: raw, userMessage: FAILURE_UX.server_error };
+    if (/failed to fetch|network|networkerror/i.test(raw)) {
+      return { reason: 'network', status, body: raw, userMessage: FAILURE_UX.network };
+    }
+    if (/unexpected token|json|parse/i.test(raw)) {
+      return { reason: 'parse', status, body: raw, userMessage: FAILURE_UX.parse };
+    }
+    return { reason: 'unknown', status, body: raw, userMessage: FAILURE_UX.unknown };
+  }
+
   async function runAnalyze() {
     const transcriptText = fullTranscript();
     if (transcriptText.trim().length < 10) {
@@ -542,19 +619,17 @@ export default function SalesAssistant() {
     } catch (err) {
       window.clearTimeout(fastTimer);
       if (isStale()) return;
-      const message = err instanceof Error ? err.message : 'unknown';
-      const wasAbort = isAbortError(err) || controller.signal.aborted;
-      console.warn(`[sales-assistant] requestId=${myRequestId} phase=fast error message="${message}" abort=${wasAbort}`);
-      if (wasAbort) {
-        // Если abort — значит timeout сработал или пользователь нажал ещё раз.
-        // В первом случае показываем понятную ошибку; во втором новый клик уже
-        // увеличил requestId и эта ветка не выполнится (стreаgs выше).
-        setAiError('Не удалось быстро получить подсказку, попробуйте ещё раз.');
-      } else if (message.includes('workspace_readonly') || message.includes('403')) {
-        setAiError('Демо-режим: AI-подсказки доступны после активации рабочего кабинета. Свяжитесь с менеджером.');
-      } else {
-        setAiError('Не удалось обновить подсказку. Транскрипция продолжается. Попробуйте ещё раз.');
-      }
+      // Sprint 49 hotfix 8 — структурный лог + гранулярная UX-копия.
+      // Карточку (card) не трогаем — предыдущая успешная подсказка остаётся.
+      // Чистим только fastCard, если он сейчас отображается как «резервный».
+      const failure = classifyAnalyzeError(err, controller);
+      const durationMs = Math.round(performance.now() - tFastStart);
+      console.warn(
+        `[sales-assistant] requestId=${myRequestId} phase=fast FAIL ` +
+        `reason=${failure.reason} status=${failure.status ?? '-'} durationMs=${durationMs} ` +
+        `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}"`,
+      );
+      setAiError(failure.userMessage);
       setAnalyzePhase('error');
       if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
       return;
@@ -615,15 +690,23 @@ export default function SalesAssistant() {
     } catch (err) {
       window.clearTimeout(fullTimer);
       if (isStale()) return;
-      const message = err instanceof Error ? err.message : 'unknown';
-      const wasAbort = isAbortError(err) || controller.signal.aborted;
-      console.warn(`[sales-assistant] requestId=${myRequestId} phase=full error message="${message}" abort=${wasAbort}`);
-      // Fast уже на экране — мягкая ошибка про аналитику, без сброса fastCard.
-      if (wasAbort) {
-        setAiError('Полный разбор не обновился, можно повторить.');
-      } else {
-        setAiError('Аналитика временно недоступна. Главный вопрос и запасные показаны. Попробуйте обновить подсказку.');
-      }
+      // Sprint 49 hotfix 8 — структурный лог + гранулярная UX-копия. На этой
+      // фазе fastCard уже на экране, card (если был) сохраняется sticky-логикой
+      // в applyCardSticky. Здесь ничего НЕ сбрасываем.
+      const failure = classifyAnalyzeError(err, controller);
+      const durationMs = Math.round(performance.now() - tFullStart);
+      console.warn(
+        `[sales-assistant] requestId=${myRequestId} phase=full FAIL ` +
+        `reason=${failure.reason} status=${failure.status ?? '-'} durationMs=${durationMs} ` +
+        `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}"`,
+      );
+      // Fast уже на экране — мягкая формулировка про аналитику.
+      const fullMsg = failure.reason === 'timeout'
+        ? 'Полный разбор не успел обновиться, можно повторить.'
+        : failure.reason === 'unknown' || failure.reason === 'server_error'
+          ? 'Аналитика временно недоступна. Главный вопрос и запасные показаны. Попробуйте обновить подсказку.'
+          : failure.userMessage;
+      setAiError(fullMsg);
       setAnalyzePhase('error');
     } finally {
       if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
