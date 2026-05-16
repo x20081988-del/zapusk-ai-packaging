@@ -142,6 +142,7 @@ export const isProd = env.NODE_ENV === 'production';
 export type AiProviderStatusWarning =
   | 'production_ai_provider_is_mock'
   | 'production_ai_provider_is_mock_explicit_override'
+  | 'production_ai_provider_key_missing'
   | null;
 
 export interface AiProviderStatus {
@@ -155,7 +156,17 @@ export interface AiProviderStatus {
 
 export function aiProviderStatus(): AiProviderStatus {
   const provider = env.AI_PROVIDER;
-  const realProviderEnabled = provider !== 'mock';
+  // Sprint 49 hotfix 16 — provider=openai with empty OPENAI_API_KEY (or
+  // provider=anthropic with empty ANTHROPIC_API_KEY) is the SAME functional
+  // failure as provider=mock: the AI client silently returns mock output
+  // every call. Treat both as "no real provider" for the realProviderEnabled
+  // flag and surface a distinct warning so an operator can tell which one
+  // is wrong without digging into env.
+  const keyConfigured =
+    (provider === 'openai' && Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 10))
+    || (provider === 'anthropic' && Boolean(env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 10));
+  const realProviderEnabled = provider !== 'mock' && keyConfigured;
+
   if (!isProd || realProviderEnabled) {
     return {
       provider,
@@ -166,7 +177,23 @@ export function aiProviderStatus(): AiProviderStatus {
       enforceRealProvider: env.ENFORCE_REAL_AI_PROVIDER,
     };
   }
-  // Production + mock. Severity depends on the explicit override.
+
+  // Production + (mock OR provider-without-key). Severity depends on which.
+  if (provider !== 'mock' && !keyConfigured) {
+    // Provider set to real but key empty — most likely a Render env mistake.
+    // Critical regardless of ALLOW_MOCK_AI_IN_PRODUCTION since the operator
+    // clearly intended real AI.
+    return {
+      provider,
+      realProviderEnabled: false,
+      warning: 'production_ai_provider_key_missing',
+      warningSeverity: 'critical',
+      allowMockInProduction: env.ALLOW_MOCK_AI_IN_PRODUCTION,
+      enforceRealProvider: env.ENFORCE_REAL_AI_PROVIDER,
+    };
+  }
+
+  // Provider explicitly mock — same logic as before.
   if (env.ALLOW_MOCK_AI_IN_PRODUCTION) {
     return {
       provider,
@@ -193,11 +220,21 @@ export function aiProviderStatus(): AiProviderStatus {
 // flag is flipped during an unrelated incident.
 export function assertAiProviderOnStartup(): void {
   const status = aiProviderStatus();
-  if (status.warning === 'production_ai_provider_is_mock' && env.ENFORCE_REAL_AI_PROVIDER) {
+  // Sprint 49 hotfix 16 — enforce covers both critical cases now: explicit
+  // mock without override, OR provider set but key missing. Both leave prod
+  // serving silent mock responses; both deserve a hard stop under enforce.
+  if (
+    env.ENFORCE_REAL_AI_PROVIDER
+    && (status.warning === 'production_ai_provider_is_mock'
+        || status.warning === 'production_ai_provider_key_missing')
+  ) {
+    const reason = status.warning === 'production_ai_provider_key_missing'
+      ? `AI_PROVIDER=${status.provider} but the corresponding API key is empty in env`
+      : 'AI_PROVIDER=mock in production without ALLOW_MOCK_AI_IN_PRODUCTION';
     const msg =
-      '[startup] CRITICAL: AI_PROVIDER=mock in production without ALLOW_MOCK_AI_IN_PRODUCTION. ' +
+      `[startup] CRITICAL: ${reason}. ` +
       'ENFORCE_REAL_AI_PROVIDER=true is set — refusing to start. ' +
-      'Set AI_PROVIDER=openai (or =anthropic) in Render env, OR unset ENFORCE_REAL_AI_PROVIDER to start anyway.';
+      'Fix env and redeploy, OR unset ENFORCE_REAL_AI_PROVIDER to start anyway.';
     console.error(msg);
     process.exit(1);
   }

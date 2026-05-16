@@ -231,9 +231,11 @@ adminRoutes.get('/security-scan', async (req, res) => {
       aiStatus.warningSeverity !== 'critical',
       aiStatus.warning === 'production_ai_provider_is_mock'
         ? 'AI_PROVIDER=mock in production without ALLOW_MOCK_AI_IN_PRODUCTION — real AI is disabled, requests silently return mock output'
-        : aiStatus.warning === 'production_ai_provider_is_mock_explicit_override'
-          ? 'AI_PROVIDER=mock in production with ALLOW_MOCK_AI_IN_PRODUCTION=true — confirm this is intended for a demo URL'
-          : 'production AI provider is a real model',
+        : aiStatus.warning === 'production_ai_provider_key_missing'
+          ? `AI_PROVIDER=${aiStatus.provider} but the API key is empty — requests will silently fall through to mock output`
+          : aiStatus.warning === 'production_ai_provider_is_mock_explicit_override'
+            ? 'AI_PROVIDER=mock in production with ALLOW_MOCK_AI_IN_PRODUCTION=true — confirm this is intended for a demo URL'
+            : 'production AI provider is a real model',
       aiStatus.warningSeverity === 'critical' ? 'critical' : aiStatus.warningSeverity === 'warning' ? 'warning' : undefined,
     ),
     check(
