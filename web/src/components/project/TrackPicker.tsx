@@ -72,18 +72,19 @@ export function TrackPicker({ open, current, saving, onSave, onClose }: Props) {
           })}
         </ul>
 
-        <div className="flex items-center justify-between pt-2 border-t border-hairline">
-          <p className="text-[11px] text-muted">
+        <div className="flex flex-col gap-3 pt-2 border-t border-hairline sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-[11px] text-muted sm:max-w-[55%]">
             Если ещё не определились — выберите «Только упаковка проекта», и мы соберём материалы без этапа размещения.
           </p>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose}>Отмена</Button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button variant="ghost" onClick={onClose} className="w-full sm:w-auto">Отмена</Button>
             <Button
               variant="primary"
               iconRight={<ChevronRight size={13} />}
               disabled={!picked}
               loading={saving}
               onClick={submit}
+              className="w-full whitespace-normal text-center leading-snug sm:w-auto"
             >
               {current ? 'Сохранить формат' : 'Запустить путь привлечения'}
             </Button>
