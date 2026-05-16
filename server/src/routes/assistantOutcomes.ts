@@ -10,6 +10,7 @@ import {
   requireNotInvestor,
 } from '../lib/ownership.js';
 import { withIdempotency } from '../lib/idempotency.js';
+import { actorCanReadAssistantOutcome } from '../lib/accessPolicy.js';
 
 // Sprint 43 P0.5 — AssistantOutcomeEvent CRUD.
 //
@@ -69,6 +70,10 @@ const updateOutcomeSchema = z.object({
 
 type OutcomeRecord = Awaited<ReturnType<typeof prisma.assistantOutcomeEvent.findUnique>>;
 
+// Sprint 50 P0.3 — delegates to lib/accessPolicy.actorCanReadAssistantOutcome
+// which encapsulates the orphan-by-author + FK fallbacks (introduced as
+// inline logic in Sprint 49 hotfixes 11–12). Behaviour is identical; the
+// inline branches now live in one named predicate.
 async function assertOutcomeAccess(
   req: Parameters<typeof getUser>[0],
   outcomeId: string,
@@ -76,63 +81,16 @@ async function assertOutcomeAccess(
   const outcome = await prisma.assistantOutcomeEvent.findUnique({ where: { id: outcomeId } });
   if (!outcome || outcome.archivedAt) return { ok: false, status: 404, error: 'outcome_not_found' };
 
-  const role = getActorRole(req);
-  if (isAdminLike(role)) return { ok: true, outcome };
-
-  const user = getUser(req);
-
-  // Sprint 49 hotfix 11 — fast-path: the user always owns the outcomes they
-  // recorded themselves, regardless of which FK they linked. Without this,
-  // a founder's own outcome tied to an orphan session/analysis was inaccessible
-  // (couldn't edit/archive). Order: most-specific authorship first, then
-  // FK-based ownership for the inherited project/session case.
-  if (outcome.createdById === user.id) return { ok: true, outcome };
-
-  if (outcome.projectId) {
-    const ok = await assertProjectOwnership(req, outcome.projectId);
-    if (ok.ok) return { ok: true, outcome };
-    return { ok: false, status: 404, error: 'outcome_not_found' };
-  }
-
-  if (outcome.salesSessionId) {
-    const s = await prisma.salesSession.findUnique({
-      where: { id: outcome.salesSessionId },
-      select: { projectId: true, createdById: true },
-    });
-    if (s?.createdById === user.id) return { ok: true, outcome };
-    if (s?.projectId) {
-      const p = await prisma.project.findUnique({ where: { id: s.projectId }, select: { userId: true } });
-      if (p?.userId === user.id) return { ok: true, outcome };
-    }
-    return { ok: false, status: 404, error: 'outcome_not_found' };
-  }
-
-  if (outcome.conversationAnalysisId) {
-    const c = await prisma.conversationAnalysis.findUnique({
-      where: { id: outcome.conversationAnalysisId },
-      select: { projectId: true, createdById: true },
-    });
-    if (c?.createdById === user.id) return { ok: true, outcome };
-    if (c?.projectId) {
-      const p = await prisma.project.findUnique({ where: { id: c.projectId }, select: { userId: true } });
-      if (p?.userId === user.id) return { ok: true, outcome };
-    }
-    return { ok: false, status: 404, error: 'outcome_not_found' };
-  }
-
-  if (outcome.adviceEventId) {
-    const ev = await prisma.assistantAdviceEvent.findUnique({
-      where: { id: outcome.adviceEventId },
-      select: { actorId: true, projectId: true },
-    });
-    if (ev?.actorId === user.id) return { ok: true, outcome };
-    if (ev?.projectId) {
-      const ok = await assertProjectOwnership(req, ev.projectId);
-      if (ok.ok) return { ok: true, outcome };
-    }
-    return { ok: false, status: 404, error: 'outcome_not_found' };
-  }
-  return { ok: false, status: 404, error: 'outcome_not_found' };
+  const allowed = await actorCanReadAssistantOutcome(req, {
+    id: outcome.id,
+    projectId: outcome.projectId,
+    salesSessionId: outcome.salesSessionId,
+    conversationAnalysisId: outcome.conversationAnalysisId,
+    adviceEventId: outcome.adviceEventId,
+    createdById: outcome.createdById,
+  });
+  if (!allowed) return { ok: false, status: 404, error: 'outcome_not_found' };
+  return { ok: true, outcome };
 }
 
 // Sprint 50 P0.1 — idempotency on outcome creation. A "Зафиксировать

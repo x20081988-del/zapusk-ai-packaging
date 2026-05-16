@@ -7,6 +7,7 @@ import { assertProjectOwnership, getActorRole, isAdminLike, requireNotInvestor }
 import { captureCandidateFromSalesSession } from '../services/knowledgeService.js';
 import { isAIGuardrailError } from '../ai/client.js';
 import { withIdempotency } from '../lib/idempotency.js';
+import { actorCanReadSalesSession } from '../lib/accessPolicy.js';
 import {
   completeSession,
   persistSession,
@@ -138,19 +139,14 @@ salesSessionsRoutes.get('/:id', async (req, res) => {
   const session = await getSession(req.params.id);
   if (!session) return res.status(404).json({ error: 'not_found' });
 
-  // Sprint 35 P0.3 — founder может открыть запись только если она привязана к
-  // его проекту. Orphan'ы (projectId=null) — admin-only ИЛИ автор (Sprint 49
-  // hotfix 10). 404 чтобы не палить факт существования чужой записи.
-  const role = getActorRole(req);
-  if (!isAdminLike(role)) {
-    const userId = getUser(req).id;
-    const sessionRow = session as { projectId: string | null; createdById?: string | null };
-    if (sessionRow.createdById !== userId) {
-      if (!sessionRow.projectId) return res.status(404).json({ error: 'not_found' });
-      const ownership = await assertProjectOwnership(req, sessionRow.projectId);
-      if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
-    }
-  }
+  // Sprint 50 P0.3 — single ownership predicate. Combines orphan-by-author
+  // (Sprint 49 hotfix 10) + project ownership + admin-like role.
+  const sessionRow = session as { projectId: string | null; createdById?: string | null };
+  const allowed = await actorCanReadSalesSession(req, {
+    projectId: sessionRow.projectId,
+    createdById: sessionRow.createdById ?? null,
+  });
+  if (!allowed) return res.status(404).json({ error: 'not_found' });
 
   // Sprint 37 P0.3 — audit на чтение карточки встречи. Содержит transcript,
   // оценку вероятности, инфу об инвесторе. Metadata-only — не пишем transcript.
@@ -175,18 +171,14 @@ salesSessionsRoutes.delete('/:id', async (req, res) => {
   const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
   if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
 
-  // Sprint 35 P0.3 + Sprint 49 hotfix 10 — founder может архивировать свою
-  // встречу: либо принадлежащую его проекту, либо собственную orphan-встречу
-  // (createdById === me).
-  const role = getActorRole(req);
-  if (!isAdminLike(role)) {
-    const userId = getUser(req).id;
-    if (existing.createdById !== userId) {
-      if (!existing.projectId) return res.status(404).json({ error: 'not_found' });
-      const ownership = await assertProjectOwnership(req, existing.projectId);
-      if (!ownership.ok) return res.status(404).json({ error: 'not_found' });
-    }
-  }
+  // Sprint 50 P0.3 — same single predicate as GET /:id. For archive we
+  // currently use the read predicate (same rule); a write-specific
+  // predicate can split out later when manager assignment lands.
+  const allowed = await actorCanReadSalesSession(req, {
+    projectId: existing.projectId,
+    createdById: existing.createdById,
+  });
+  if (!allowed) return res.status(404).json({ error: 'not_found' });
 
   await prisma.salesSession.update({ where: { id: req.params.id }, data: { archivedAt: new Date() } });
   await recordAudit(req, {
