@@ -19,6 +19,18 @@ import { requireNotInvestor } from '../lib/ownership.js';
 
 const REALTIME_TEMPLATE_KEY = 'realtime_transcription';
 const REALTIME_SESSIONS_ENDPOINT = 'https://api.openai.com/v1/realtime/transcription_sessions';
+// Sprint 49 hotfix — hard fallback на случай, если и template.model, и
+// env.OPENAI_MODEL_REALTIME_TRANSCRIBE пустые. `gpt-realtime-whisper` —
+// текущая GA realtime streaming transcription модель OpenAI.
+const REALTIME_TRANSCRIBE_HARD_FALLBACK = 'gpt-realtime-whisper';
+
+function resolveTranscriptionModel(templateModel: string | null): string {
+  const fromTemplate = templateModel?.trim();
+  if (fromTemplate) return fromTemplate;
+  const fromEnv = env.OPENAI_MODEL_REALTIME_TRANSCRIBE?.trim();
+  if (fromEnv) return fromEnv;
+  return REALTIME_TRANSCRIBE_HARD_FALLBACK;
+}
 
 export const realtimeRoutes = Router();
 realtimeRoutes.use(authMiddleware);
@@ -50,7 +62,9 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
     return res.status(503).json({ error: 'transcription_template_missing' });
   }
 
-  const model = (tpl.model && tpl.model.trim()) || env.OPENAI_MODEL_REALTIME_TRANSCRIBE;
+  const model = resolveTranscriptionModel(tpl.model);
+  const modelSource: 'template' | 'env' | 'hard_fallback' =
+    tpl.model?.trim() ? 'template' : (env.OPENAI_MODEL_REALTIME_TRANSCRIBE?.trim() ? 'env' : 'hard_fallback');
   const instructions = tpl.body.trim();
 
   try {
@@ -79,15 +93,18 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
 
     if (!upstream.ok) {
       const errText = await safeText(upstream);
-      console.warn(`[realtime] openai ${upstream.status}: ${errText.slice(0, 240)}`);
-      return res.status(502).json({ error: 'openai_session_failed', status: upstream.status });
+      // Sprint 49 hotfix — структурно логируем upstream error чтобы можно
+      // было диагностировать. Клиенту отдаём только status + код, тело
+      // OpenAI (может содержать org_id / req_id) не пробрасываем.
+      console.warn(`[realtime] openai ${upstream.status} model=${model} modelSource=${modelSource} body="${errText.slice(0, 400)}"`);
+      return res.status(502).json({ error: 'openai_session_failed', status: upstream.status, model });
     }
 
     const data = (await upstream.json()) as RealtimeSessionResponse;
     const clientSecret = data.client_secret?.value;
     const expiresAt = data.client_secret?.expires_at ?? null;
     if (!clientSecret) {
-      console.warn('[realtime] openai response missing client_secret');
+      console.warn(`[realtime] openai response missing client_secret model=${model} modelSource=${modelSource}`);
       return res.status(502).json({ error: 'openai_session_invalid' });
     }
 
@@ -95,7 +112,7 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       action: 'realtime.transcription_session.issued',
       targetType: 'PromptTemplate',
       targetId: tpl.id,
-      payload: { actorId: getUser(req).id, model, templateVersion: tpl.version },
+      payload: { actorId: getUser(req).id, model, modelSource, templateVersion: tpl.version },
     });
 
     res.json({
@@ -106,8 +123,8 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
-    console.warn(`[realtime] session bootstrap failed: ${msg}`);
-    res.status(502).json({ error: 'openai_session_failed' });
+    console.warn(`[realtime] session bootstrap failed model=${model} modelSource=${modelSource} err="${msg}"`);
+    res.status(502).json({ error: 'openai_session_failed', model });
   }
 });
 

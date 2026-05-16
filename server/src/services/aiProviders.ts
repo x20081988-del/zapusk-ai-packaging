@@ -289,13 +289,17 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
     model: null,
     outputType: 'ai_visibility_report',
   },
-  // Sprint 49 — Realtime transcription. model=null → env.OPENAI_MODEL_REALTIME_TRANSCRIBE
-  // для live WebRTC канала / env.OPENAI_MODEL_TRANSCRIBE для request-based
-  // транскрипции файлов. Конкретный pick зависит от route, шаблон один.
+  // Sprint 49 — Realtime transcription. Sprint 49 hotfix: model явно задан
+  // `gpt-realtime-whisper`, чтобы fresh seed создавал шаблон с валидной
+  // моделью для /v1/realtime/transcription_sessions. Route оставляет
+  // приоритет за template.model; если он null/empty — берёт env
+  // OPENAI_MODEL_REALTIME_TRANSCRIBE; если и тот пуст — hard-fallback
+  // на `gpt-realtime-whisper` в env.ts. tool здесь — UI-метка из
+  // оркестрации, не модельный id, не путать.
   realtime_transcription: {
     provider: 'openai',
     tool: 'gpt-realtime-transcribe',
-    model: null,
+    model: 'gpt-realtime-whisper',
     outputType: 'transcription',
   },
 };

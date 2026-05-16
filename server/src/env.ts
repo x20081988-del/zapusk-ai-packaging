@@ -93,7 +93,13 @@ export const env = {
   // pre-recorded transcription для загруженных аудиофайлов. Realtime даёт
   // живые intermediate deltas в браузер, transcribe-модель используется для
   // request-based транскрипции файлов и не требует WebRTC канала.
-  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-4o-mini-transcribe',
+  //
+  // Sprint 49 hotfix — Realtime transcription_sessions endpoint принимает
+  // конкретный список моделей; `gpt-realtime-whisper` — GA streaming
+  // speech-to-text. Старое значение `gpt-4o-mini-transcribe` валидно для
+  // request-based транскрипции, но Realtime сессия не открывалась с ним
+  // в нашем тенанте → openai_session_failed. Дефолт переключён.
+  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-realtime-whisper',
   OPENAI_MODEL_TRANSCRIBE: process.env.OPENAI_MODEL_TRANSCRIBE ?? 'gpt-4o-transcribe',
 
   // Deepgram pre-recorded transcription. nova-2 supports Russian + diarization.
