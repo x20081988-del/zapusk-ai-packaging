@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { aiClient } from '../ai/client.js';
 import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js';
+import { MEETING_PREP_SYSTEM_FALLBACK } from '../ai/meetingPrepPrompt.js';
 import {
   retrieveKnowledgeForTranscript,
   formatKnowledgeForPrompt,
@@ -13,6 +14,7 @@ import {
 // пустой — громко в лог + AuditEvent + fallback на hardcoded SALES_ASSISTANT_SYSTEM.
 // Это превращает prompt из «часть кода» в «настройку суперадмина без redeploy».
 const SALES_PROMPT_TEMPLATE_KEY = 'sales_gpt';
+const MEETING_PREP_TEMPLATE_KEY = 'sales_assistant.prepare_meeting';
 
 export type SalesPromptSource = 'db' | 'fallback';
 
@@ -55,6 +57,51 @@ async function resolveSalesPrompt(): Promise<{ system: string; source: SalesProm
   } catch (err) {
     console.warn(`[sales-assistant] template fetch failed, using hardcoded fallback:`, err);
     return { system: SALES_ASSISTANT_SYSTEM, source: 'fallback', templateId: null };
+  }
+}
+
+async function resolveMeetingPrepPrompt(): Promise<{
+  system: string;
+  source: SalesPromptSource;
+  templateId: string | null;
+  version: number | null;
+}> {
+  try {
+    const tpl = await prisma.promptTemplate.findFirst({
+      where: { key: MEETING_PREP_TEMPLATE_KEY },
+    });
+    if (tpl && tpl.active && tpl.body && tpl.body.trim().length > 200) {
+      return { system: tpl.body, source: 'db', templateId: tpl.id, version: tpl.version ?? null };
+    }
+    const reason = !tpl
+      ? 'not_found'
+      : !tpl.active
+        ? 'inactive'
+        : (tpl.body?.trim().length ?? 0) <= 200
+          ? 'body_too_short'
+          : 'unknown';
+    console.warn(
+      `[sales-assistant:prepare] template "${MEETING_PREP_TEMPLATE_KEY}" not usable (reason=${reason}) — ` +
+      'falling back to hardcoded meeting prep prompt.',
+    );
+    await prisma.auditEvent.create({
+      data: {
+        action: 'sales_prep_prompt.fallback',
+        targetType: 'PromptTemplate',
+        targetId: tpl?.id ?? null,
+        payload: JSON.stringify({
+          key: MEETING_PREP_TEMPLATE_KEY,
+          reason,
+          active: tpl?.active ?? null,
+          bodyLen: tpl?.body?.length ?? 0,
+          version: tpl?.version ?? null,
+        }),
+      },
+    }).catch((err) => console.warn('[sales-assistant:prepare] audit write failed:', err));
+    return { system: MEETING_PREP_SYSTEM_FALLBACK, source: 'fallback', templateId: null, version: null };
+  } catch (err) {
+    console.warn(`[sales-assistant:prepare] template fetch failed, using hardcoded fallback:`, err);
+    return { system: MEETING_PREP_SYSTEM_FALLBACK, source: 'fallback', templateId: null, version: null };
   }
 }
 
@@ -1372,6 +1419,9 @@ export interface MeetingPlan {
   provider: 'openai' | 'anthropic' | 'mock';
   model: string;
   fellBackToMock: boolean;
+  promptSource: SalesPromptSource;
+  promptTemplateId: string | null;
+  promptVersion: number | null;
 }
 
 export interface PrepareInput {
@@ -1433,40 +1483,8 @@ const MEETING_PLAN_SCHEMA = {
   },
 };
 
-const PREP_SYSTEM = `Ты — стратег инвестиционных переговоров платформы ZAPUSK AI.
-
-ЗАДАЧА
-Фаундер собирается на встречу с инвестором. Он передал тебе подготовительный
-контекст: заметки, CRM-карточку, профиль инвестора, прошлую переписку,
-описание проекта. Твоя задача — собрать ПЛАН ВСТРЕЧИ (pre-call plan), не
-готовые реплики для живого диалога. Это стратегия, а не live-копилот.
-
-ВЕРНИ СТРОГО JSON. Каждое поле — конкретное и применимое:
-• objective — что фаундер должен ПОНЯТЬ, что ПРОДАТЬ, какой OUTCOME нужен.
-• conversationStyle — tone (aggressive/soft/consultative), speakOrListen
-  (listen_more/lead_more/balanced), whenToPitch (короткое описание условия,
-  при котором фаундер переходит к pitch).
-• openingQuestions — 3-5 стартовых вопросов, под конкретного инвестора, не
-  generic «расскажите о себе».
-• pitchTiming — когда делать pitch (не сразу, после чего именно).
-• pitchScript — короткий вариант pitch (2-4 предложения), адаптированный
-  под profile из контекста.
-• leveragePoints — на что давить (массив; passive income / стабильность /
-  IT growth / без операционного участия / защита капитала и т.п.).
-• dealbreakers — что может сломать встречу (массив).
-• stages — этапы встречи в порядке (минимум 4): знакомство, выявление
-  целей, инвест-опыт, профиль рисков, pitch, объекции, CTA. Адаптируй под
-  контекст.
-
-ПРАВИЛА
-- НЕ выдумывай факты про инвестора, которых нет в контексте. Если данных
-  мало — openingQuestions выясняют недостающее.
-- Pitch script должен говорить про «сколько вложу — сколько заработаю —
-  когда получу», не про продукт.
-- Никаких generic фраз. Конкретика > общие места.
-- Все строки — на русском.`;
-
 export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPlan> {
+  const promptDecision = await resolveMeetingPrepPrompt();
   const projectContext = await loadProjectContextForPrep(input.projectId);
   const user = [
     'ПОДГОТОВИТЕЛЬНЫЙ КОНТЕКСТ ОТ ФАУНДЕРА',
@@ -1479,7 +1497,7 @@ export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPla
   ].filter(Boolean).join('\n');
 
   const ai = await aiClient.generateJson({
-    system: PREP_SYSTEM,
+    system: promptDecision.system,
     user,
     feature: 'sales_assistant.prepare',
     modelRoute: 'main',
@@ -1509,6 +1527,9 @@ export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPla
       provider: ai.provider,
       model: ai.model,
       fellBackToMock: true,
+      promptSource: promptDecision.source,
+      promptTemplateId: promptDecision.templateId,
+      promptVersion: promptDecision.version,
     };
   }
 
@@ -1546,6 +1567,9 @@ export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPla
     provider: ai.provider,
     model: ai.model,
     fellBackToMock: ai.fellBackToMock,
+    promptSource: promptDecision.source,
+    promptTemplateId: promptDecision.templateId,
+    promptVersion: promptDecision.version,
   };
 }
 
@@ -1615,5 +1639,8 @@ function heuristicMeetingPlan(): MeetingPlan {
     provider: 'mock',
     model: 'mock-v1',
     fellBackToMock: true,
+    promptSource: 'fallback',
+    promptTemplateId: null,
+    promptVersion: null,
   };
 }

@@ -281,6 +281,12 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
     model: null,
     outputType: 'sales_assistant',
   },
+  'sales_assistant.prepare_meeting': {
+    provider: 'openai',
+    tool: 'gpt-4.1',
+    model: null,
+    outputType: 'sales_assistant',
+  },
   ai_visibility_report: {
     // Sprint 20: GPT-4.1 как reasoning-модель для аудита (длинный context,
     // structured Markdown output). model=null → env.OPENAI_MODEL_MAIN.

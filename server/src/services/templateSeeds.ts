@@ -28,6 +28,7 @@ export interface SeedTemplate {
 // source-of-truth для AI Brief prompt. seed.ts upsert'ит его как
 // PromptTemplate с key='brief_extractor', briefService читает динамически.
 import { SYSTEM_BRIEF_EXTRACTOR } from '../ai/prompts.js';
+import { MEETING_PREP_SYSTEM_FALLBACK } from '../ai/meetingPrepPrompt.js';
 
 // Sprint 20 — AI Search Visibility & AEO layer.
 // Все landing-style материалы (landing, one_pager, lovable_pitch, pitch_structure)
@@ -1108,6 +1109,19 @@ interface InvestorCalculatorProps {
 - Recommendations — конкретные, action-able. Не «улучшите тексты», а «добавьте summary-paragraph в Hero перед СTA».
 - Никаких упоминаний brand names (Lovable / Claude / GPT / Semrush) в тексте отчёта — это ВНУТРЕННЯЯ оценка от Zapusk AI.
 - Если данных недостаточно — пиши явно «нужна более полная упаковка» с указанием, что именно собрать.`,
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // J2. Meeting Prep Prompt (editable pre-call strategy)
+  // ─────────────────────────────────────────────────────────────
+  // Prompt для кнопки «Подготовиться ко встрече». Раньше жил в backend как
+  // PREP_SYSTEM, теперь суперадмин может менять структуру prep-flow без deploy.
+  {
+    key: 'sales_assistant.prepare_meeting',
+    name: 'Sales Assistant · Meeting Prep Prompt',
+    category: 'sales',
+    description: 'Prompt для подготовки структуры встречи: цели, стиль разговора, первые вопросы, pitch timing и CTA. Управляется суперадмином без redeploy.',
+    body: MEETING_PREP_SYSTEM_FALLBACK,
   },
 
   // ─────────────────────────────────────────────────────────────

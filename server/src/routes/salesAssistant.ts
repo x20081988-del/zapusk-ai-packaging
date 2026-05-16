@@ -316,6 +316,12 @@ salesAssistantRoutes.post('/prepare', withRateLimit('ai_inference'), async (req,
       actorRole: getActorRole(req),
       actorId: getUser(req).id,
     });
+    console.info(
+      `[sales-assistant:prepare] feature=prepare OK actorId=${getUser(req).id} ` +
+      `projectId=${parsed.data.projectId ?? 'none'} latencyMs=${Date.now() - tStart} ` +
+      `contextChars=${parsed.data.context.length} promptSource=${plan.promptSource} ` +
+      `promptVersion=${plan.promptVersion ?? 'none'} templateId=${plan.promptTemplateId ?? 'none'}`,
+    );
     res.json({ plan });
   } catch (err) {
     const latencyMs = Date.now() - tStart;

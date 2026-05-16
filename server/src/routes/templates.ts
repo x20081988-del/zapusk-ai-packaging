@@ -40,7 +40,7 @@ templatesRoutes.get('/financial-models/list', async (_req, res) => {
 });
 
 const templateSchema = z.object({
-  key: z.string().trim().min(1).regex(/^[a-z0-9_-]+$/, 'Use lowercase letters, digits, _ or -'),
+  key: z.string().trim().min(1).regex(/^[a-z0-9_.-]+$/, 'Use lowercase letters, digits, ., _ or -'),
   name: z.string().trim().min(1),
   category: z.string().trim().min(1),
   description: z.string().optional(),
