@@ -155,7 +155,6 @@ export async function startRealtimeTranscription(
       headers: {
         Authorization: `Bearer ${session.clientSecret}`,
         'Content-Type': 'application/sdp',
-        'OpenAI-Beta': 'realtime=v1',
       },
       body: offer.sdp,
     });

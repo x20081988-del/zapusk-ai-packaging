@@ -34,6 +34,17 @@ function getSpeechRecognition(): SpeechRecognitionConstructor | null {
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
 }
 
+function realtimeFallbackMessage(codeOrMessage?: string): string {
+  const raw = String(codeOrMessage ?? '').toLowerCase();
+  if (raw.includes('webrtc') || raw.includes('getusermedia') || raw.includes('media')) {
+    return 'Не удалось подключить OpenAI Realtime, включено браузерное распознавание.';
+  }
+  if (raw.includes('not_configured') || raw.includes('session_unavailable') || raw.includes('503')) {
+    return 'OpenAI Realtime временно недоступен, включено браузерное распознавание.';
+  }
+  return 'Не удалось подключить OpenAI Realtime, включено браузерное распознавание.';
+}
+
 export function useVoiceDictation(onTranscript: (text: string) => void) {
   const onTranscriptRef = useRef(onTranscript);
   const realtimeRef = useRef<RealtimeSession | null>(null);
@@ -191,7 +202,7 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
           setProviderState('browser');
           try { realtimeRef.current?.stop(); } catch { /* ignore */ }
           realtimeRef.current = null;
-          startBrowserFallback(`OpenAI Realtime недоступен (${err.message}). Включено браузерное распознавание.`);
+          startBrowserFallback(realtimeFallbackMessage(err.message));
         },
         onClose: () => {
           if (!activeRef.current || providerRef.current !== 'openai') return;
@@ -209,7 +220,7 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
     } catch (err) {
       if (!activeRef.current) return;
       const reason = err instanceof Error ? err.message : 'realtime_unavailable';
-      startBrowserFallback(`OpenAI Realtime недоступен (${reason}). Включено браузерное распознавание.`);
+      startBrowserFallback(realtimeFallbackMessage(reason));
     }
   }
 
