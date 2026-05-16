@@ -37,6 +37,20 @@ function resolveTranscriptionModel(templateModel: string | null): string {
   return REALTIME_TRANSCRIBE_HARD_FALLBACK;
 }
 
+// Sprint 49 hotfix 4 — `gpt-realtime-whisper` GA модель в transcription
+// session не принимает `prompt` (OpenAI: invalid_value `prompt` parameter
+// is not supported for this model). gpt-4o-transcribe / gpt-4o-mini-transcribe
+// и whisper-1 — принимают. Шаблон realtime_transcription сохраняем как
+// управляемый словарь (используется в file transcription и UI), но для
+// realtime session подмешиваем prompt только если модель его поддерживает.
+const REALTIME_PROMPT_UNSUPPORTED_MODELS = new Set<string>([
+  'gpt-realtime-whisper',
+]);
+
+function supportsRealtimeTranscriptionPrompt(model: string): boolean {
+  return !REALTIME_PROMPT_UNSUPPORTED_MODELS.has(model);
+}
+
 export const realtimeRoutes = Router();
 realtimeRoutes.use(authMiddleware);
 realtimeRoutes.use(requireNotInvestor());
@@ -71,27 +85,33 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
   const modelSource: 'template' | 'env' | 'hard_fallback' =
     tpl.model?.trim() ? 'template' : (env.OPENAI_MODEL_REALTIME_TRANSCRIBE?.trim() ? 'env' : 'hard_fallback');
 
-  // Sprint 49 hotfix 3 — OpenAI Realtime принимает prompt ≤ 1024 чарактеров.
-  // Шаблон может вырасти, поэтому проходим через buildRealtimePrompt(),
-  // который выбрасывает пустые строки и section headers и режет по
-  // word-boundary до 1000 чарактеров.
-  const built = buildRealtimePrompt(tpl.body);
+  // Sprint 49 hotfix 4 — gpt-realtime-whisper не поддерживает transcription.prompt.
+  // Решение про prompt принимаем здесь: если модель в whitelist'е — компактим
+  // body шаблона до ≤1024 (hotfix 3) и кладём в transcription.prompt. Если
+  // нет — отправляем только model+language, шаблон остаётся как управляемая
+  // документация и используется для file transcription.
+  const promptSupported = supportsRealtimeTranscriptionPrompt(model);
+  const built = promptSupported
+    ? buildRealtimePrompt(tpl.body)
+    : { prompt: '', length: 0, trimmed: false };
+  const promptSkippedReason = promptSupported ? null : 'model_does_not_support_prompt';
 
   // Sprint 49 hotfix 2 — GA payload для /v1/realtime/client_secrets.
   // Структура: session.type='transcription' с audio.input.{transcription,
-  // turn_detection}. prompt (словарь терминов) живёт внутри transcription,
-  // language='ru'. Никаких response.create / output audio — это
-  // transcription-only сессия.
+  // turn_detection}. language='ru' всегда. prompt — только когда модель его
+  // поддерживает. Никаких response.create / output audio — transcription-only.
+  const transcriptionConfig: { model: string; language: string; prompt?: string } = {
+    model,
+    language: 'ru',
+  };
+  if (promptSupported && built.prompt) transcriptionConfig.prompt = built.prompt;
+
   const requestBody = {
     session: {
       type: 'transcription' as const,
       audio: {
         input: {
-          transcription: {
-            model,
-            language: 'ru',
-            prompt: built.prompt,
-          },
+          transcription: transcriptionConfig,
           turn_detection: {
             type: 'server_vad' as const,
             threshold: 0.5,
@@ -125,7 +145,7 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
         : null;
       console.warn(
         `[realtime] openai ${upstream.status} model=${model} modelSource=${modelSource} ` +
-        `promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
+        `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
         `errorType=${upErr?.type ?? 'unknown'} errorCode=${upErr?.code ?? 'none'} ` +
         `param=${upErr?.param ?? 'none'} message="${(upErr?.message ?? errText).slice(0, 400)}"`,
       );
@@ -133,8 +153,10 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
         error: 'openai_session_failed',
         status: upstream.status,
         model,
+        promptSupported,
         promptLength: built.length,
         promptTrimmed: built.trimmed,
+        promptSkippedReason,
         upstreamType: upErr?.type ?? null,
         upstreamCode: upErr?.code ?? null,
         upstreamParam: upErr?.param ?? null,
@@ -157,6 +179,7 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       payload: {
         actorId: getUser(req).id,
         model, modelSource,
+        promptSupported,
         promptLength: built.length, promptTrimmed: built.trimmed,
         templateVersion: tpl.version,
       },
@@ -167,20 +190,24 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       model,
       expiresAt,
       templateVersion: tpl.version,
+      promptSupported,
       promptLength: built.length,
       promptTrimmed: built.trimmed,
+      promptSkippedReason,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
     console.warn(
       `[realtime] session bootstrap failed model=${model} modelSource=${modelSource} ` +
-      `promptLength=${built.length} promptTrimmed=${built.trimmed} err="${msg}"`,
+      `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} err="${msg}"`,
     );
     res.status(502).json({
       error: 'openai_session_failed',
       model,
+      promptSupported,
       promptLength: built.length,
       promptTrimmed: built.trimmed,
+      promptSkippedReason,
       upstreamMessage: msg.slice(0, 240),
     });
   }
