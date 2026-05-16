@@ -257,17 +257,18 @@ export default function SalesAssistant() {
   const [transcript, setTranscript] = useState<Array<{ ts: number; final: boolean; text: string }>>([]);
   const [interim, setInterim] = useState('');
   const [card, setCard] = useState<AssistantCard | null>(null);
-  // Hotfix 2026-05-15 — единый явный конечный автомат вместо двух пересекающихся
-  // флагов (analyzing + analyzePhase). Сейчас:
-  //   • idle  — нет активного запроса; кнопка «Получить подсказку» / «Обновить ещё раз»
-  //   • fast  — ждём ultra-fast tactical (~1-3 сек); кнопка «Готовлю главный вопрос…», но НЕ disabled
-  //   • full  — fast пришёл, тянем полную аналитику (~5-15 сек); кнопка «Обновить ещё раз»
-  //   • error — последний запуск упал; кнопка «Повторить обновление»
-  // Кнопка во всех состояниях кликабельна — новый клик abort'ит текущий запрос
-  // и стартует новый. Раньше `if (analyzingRef.current) return;` + loading=disabled
-  // приводили к «вечному» залипанию UI, если сеть/OpenAI отвечали медленно.
+  // Sprint 50 hotfix — fast and full are now independent pipelines.
+  //   • Each click bumps separate request ids (fastRequestIdRef, fullRequestIdRef)
+  //     and gets separate AbortControllers (fastAbortRef, fullAbortRef).
+  //   • Each pipeline owns its own loading flag (isFastLoading, isFullLoading).
+  //   • The button's `loading` prop reads ONLY isFastLoading — once fast lands,
+  //     the user can click again to refresh while full is still enriching.
+  //   • Old full responses self-discard via fullRequestIdRef stale-check, so a
+  //     slow previous full can never overwrite a fresh fast.
+  // analyzePhase is derived for legacy read sites — see below.
   type AnalyzePhase = 'idle' | 'fast' | 'full' | 'error';
-  const [analyzePhase, setAnalyzePhase] = useState<AnalyzePhase>('idle');
+  const [isFastLoading, setIsFastLoading] = useState(false);
+  const [isFullLoading, setIsFullLoading] = useState(false);
   const [fastCard, setFastCard] = useState<FastCardShape | null>(null);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
@@ -275,6 +276,16 @@ export default function SalesAssistant() {
   // Sprint 34В: auto-refresh interval УБРАН — обновление только вручную.
   const [lastAnalyzeAt, setLastAnalyzeAt] = useState<number | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  // Sprint 50 hotfix — analyzePhase is now DERIVED. The pipelines write to
+  // isFastLoading / isFullLoading / aiError; this single line reflects the
+  // legacy phase enum so existing badges / spinners keep working.
+  const analyzePhase: AnalyzePhase = isFastLoading
+    ? 'fast'
+    : isFullLoading
+      ? 'full'
+      : aiError
+        ? 'error'
+        : 'idle';
   // Sprint 49 hotfix 10 — явный meeting state machine. Раньше состояние
   // распределялось между listening / speechStatus / finishing / finishResult,
   // что приводило к рассогласованию: UI оптимистично сбрасывал «Остановить»
@@ -319,14 +330,16 @@ export default function SalesAssistant() {
   type TranscriptionProvider = 'realtime' | 'web-speech';
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider | null>(null);
   const [realtimeModel, setRealtimeModel] = useState<string | null>(null);
-  // Hotfix 2026-05-15 — sequence-id + AbortController:
-  //   • analysisRequestIdRef растёт на каждый клик. Ответы старых запросов
-  //     игнорируются (stale-guard) — даже если abort не сработал.
-  //   • analysisAbortRef хранит текущий controller. На новом клике —
-  //     отменяем предыдущий и создаём новый. Это убирает «зависание» UI,
-  //     когда OpenAI отвечает долго и пользователь хочет нажать ещё раз.
-  const analysisRequestIdRef = useRef(0);
-  const analysisAbortRef = useRef<AbortController | null>(null);
+  // Sprint 50 hotfix — fast and full are independent pipelines.
+  //   • Each ref is bumped on every click of its own pipeline.
+  //   • Each AbortController is kept so we can cancel that pipeline only.
+  //   • Stale-check is per-pipeline: an old full lands → it sees its
+  //     fullRequestIdRef has been bumped → it self-discards. New fast is
+  //     untouched.
+  const fastRequestIdRef = useRef(0);
+  const fastAbortRef = useRef<AbortController | null>(null);
+  const fullRequestIdRef = useRef(0);
+  const fullAbortRef = useRef<AbortController | null>(null);
   const transcriptLinesRef = useRef<Array<{ ts: number; final: boolean; text: string }>>([]);
   // Sprint 49 hotfix 9 — interim в ref'е, чтобы recentContext/fullTranscript
   // могли подмешивать самую свежую (ещё не финализированную) фразу без
@@ -334,6 +347,10 @@ export default function SalesAssistant() {
   const interimRef = useRef<string>('');
   const speechStatusRef = useRef<SpeechStatus>('idle');
   const cardRef = useRef<AssistantCard | null>(null);
+  // Sprint 50 hotfix — keep a fastCard ref so the full-pipeline error path
+  // can decide whether to surface aiError (no fast on screen) or stay silent
+  // (fast already gave the founder something to read aloud).
+  const fastCardRef = useRef<FastCardShape | null>(null);
   const adviceHistoryRef = useRef<AdviceHistoryItem[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
@@ -351,6 +368,11 @@ export default function SalesAssistant() {
   useEffect(() => {
     transcriptLinesRef.current = transcript;
   }, [transcript]);
+
+  // Mirror fastCard state into ref for cross-pipeline introspection.
+  useEffect(() => {
+    fastCardRef.current = fastCard;
+  }, [fastCard]);
 
   useEffect(() => {
     speechStatusRef.current = speechStatus;
@@ -381,11 +403,9 @@ export default function SalesAssistant() {
       try { realtimeRef.current.stop(); } catch { /* ignore */ }
       realtimeRef.current = null;
     }
-    // Hotfix 2026-05-15 — отменяем висящий AI-запрос при размонтировании.
-    if (analysisAbortRef.current) {
-      try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
-      analysisAbortRef.current = null;
-    }
+    // Sprint 50 hotfix — abort both pipelines on unmount.
+    if (fastAbortRef.current) { try { fastAbortRef.current.abort(); } catch { /* ignore */ } fastAbortRef.current = null; }
+    if (fullAbortRef.current) { try { fullAbortRef.current.abort(); } catch { /* ignore */ } fullAbortRef.current = null; }
   }, []);
 
   // Auto-scroll transcript to bottom on new lines
@@ -621,203 +641,194 @@ export default function SalesAssistant() {
     return { reason: 'unknown', status, body: raw, userMessage: FAILURE_UX.unknown };
   }
 
+  // Sprint 50 hotfix — runAnalyze fires FAST and FULL in PARALLEL.
+  //
+  // FAST is the product: mainQuestion + backupQuestions + selfSaleQuestions.
+  // Once it lands the founder can already start speaking; the button becomes
+  // clickable again immediately.
+  //
+  // FULL is BACKGROUND enrichment: situation, risks, tone, SPIN stage,
+  // emotional layer, dealNextStep, etc. It NEVER blocks fast. An old full
+  // landing after a new click is silently discarded via fullRequestIdRef.
   async function runAnalyze() {
-    // Sprint 49 hotfix 9 — analyze видит final + interim (дедуплицируется
-    // против хвоста final), чтобы AI не отставал на одну реплику.
+    // Sprint 49 hotfix 9 — analyze видит final + interim.
     const transcriptText = transcriptWithInterim();
     if (transcriptText.trim().length < 10) {
       setPermError('Сначала начните прослушивание и скажите несколько фраз.');
       return;
     }
 
-    // Отменяем предыдущий запрос (если был). Stale-guard ниже отбросит его
-    // результаты на случай, если abort не сработает мгновенно.
-    if (analysisAbortRef.current) {
-      console.debug('[sales-assistant] aborting previous request');
-      try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
-    }
-    const controller = new AbortController();
-    analysisAbortRef.current = controller;
-    const myRequestId = ++analysisRequestIdRef.current;
-    const isStale = () => myRequestId !== analysisRequestIdRef.current;
+    // Cancel any in-flight prior pipelines (both fast and full are
+    // independent now). New click → both pipelines reset.
+    if (fastAbortRef.current) { try { fastAbortRef.current.abort(); } catch { /* ignore */ } }
+    if (fullAbortRef.current) { try { fullAbortRef.current.abort(); } catch { /* ignore */ } }
+    const fastCtrl = new AbortController();
+    const fullCtrl = new AbortController();
+    fastAbortRef.current = fastCtrl;
+    fullAbortRef.current = fullCtrl;
+    const myFastId = ++fastRequestIdRef.current;
+    const myFullId = ++fullRequestIdRef.current;
 
-    setAnalyzePhase('fast');
+    setIsFastLoading(true);
+    setIsFullLoading(true);
     setAiError(null);
-    // Старый fastCard оставляем на экране до прихода нового результата —
-    // меньше визуального «прыжка». Очистится либо новым fast, либо setCard.
-    // Sprint 48A — главный bugfix: раньше в поле `transcript` уходило только
-    // последние 8k символов. Из-за этого AI мог не видеть, что инвестор уже
-    // несколько раз просил конкретику по проекту. Теперь `transcript` = полный
-    // актуальный снимок в пределах backend-лимита, а recentContext остаётся
-    // коротким окном для быстрого фокуса.
+
+    // Capture inputs once at click time so neither pipeline reads stale state.
     const transcriptForApi = transcriptText.slice(-32_000);
-    const windowed = transcriptText.slice(-8_000);
     const previousAdvice = cardRef.current;
     const previousSpinStage = cardRef.current?.spinStage ?? null;
     const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
-    const tFastStart = performance.now();
-    console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast start recentChars=${windowed.length} transcriptChars=${transcriptForApi.length} total=${transcriptText.length}`);
+    const startedAt = performance.now();
+    console.debug(
+      `[sales-assistant] click fastReq=${myFastId} fullReq=${myFullId} ` +
+      `transcriptChars=${transcriptForApi.length} total=${transcriptText.length}`,
+    );
 
-    // ── ЭТАП 1: ultra-fast tactical reply ───────────────────────────────
+    let fastLockForFullMerge: { requestId: number; mainQuestion: string; backupQuestions: string[] } | null = null;
+    let fastHardStopped = false; // set by fast pipeline if it hit a hard-stop reason
+
+    // ── FAST pipeline (priority — never blocked by full) ────────────────
     const fastTimer = window.setTimeout(() => {
-      if (!isStale()) {
-        console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast timeout ${FAST_TIMEOUT_MS}ms`);
-        controller.abort();
+      if (myFastId === fastRequestIdRef.current) {
+        console.debug(`[sales-assistant] fastReq=${myFastId} timeout ${FAST_TIMEOUT_MS}ms`);
+        try { fastCtrl.abort(); } catch { /* ignore */ }
       }
     }, FAST_TIMEOUT_MS);
-
-    let fastOk = false;
-    // Sprint 50 hotfix — captured locally so the FAST mainQuestion +
-    // backupQuestions survive the FULL merge for THIS analyze request only.
-    // Next click bumps requestId; this closure goes out of scope; new
-    // closure has its own fastLock. See applyCardSticky() above.
-    let fastLockForThisRequest: { requestId: number; mainQuestion: string; backupQuestions: string[] } | null = null;
-    try {
-      const r = await api.post<{ fast: FastCardShape }>(
-        '/api/sales-assistant/analyze-fast',
-        {
-          transcript: transcriptForApi,
-          recentContext: recentContext(),
-          previousAdvice,
-          previousSpinStage,
-          adviceHistory: adviceHistorySnapshot,
-          projectId: projectId || null,
-        },
-        { signal: controller.signal },
-      );
-      window.clearTimeout(fastTimer);
-      if (isStale()) {
-        console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast stale, ignoring`);
-        return;
+    const fastPromise = (async () => {
+      try {
+        const r = await api.post<{ fast: FastCardShape }>(
+          '/api/sales-assistant/analyze-fast',
+          {
+            transcript: transcriptForApi,
+            recentContext: recentContext(),
+            previousAdvice,
+            previousSpinStage,
+            adviceHistory: adviceHistorySnapshot,
+            projectId: projectId || null,
+          },
+          { signal: fastCtrl.signal },
+        );
+        window.clearTimeout(fastTimer);
+        if (myFastId !== fastRequestIdRef.current) {
+          console.debug(`[sales-assistant] fastReq=${myFastId} stale, ignoring`);
+          return;
+        }
+        const latencyMs = Math.round(performance.now() - startedAt);
+        console.debug(`[sales-assistant] fastReq=${myFastId} done latencyMs=${latencyMs} spinStage=${r.fast.spinStage} source=${r.fast.source ?? 'ai'}`);
+        setFastCard(r.fast);
+        setLastAnalyzeAt(Date.now());
+        setPermError(null);
+        // Real AI responses lock the actionable fields; mock/fallback fast
+        // doesn't — full (real AI) should be allowed to replace it.
+        const fastIsMock = r.fast.fellBackToMock || r.fast.source === 'mock';
+        if (!fastIsMock) {
+          fastLockForFullMerge = {
+            requestId: myFastId,
+            mainQuestion: r.fast.mainQuestion,
+            backupQuestions: r.fast.backupQuestions,
+          };
+        }
+      } catch (err) {
+        window.clearTimeout(fastTimer);
+        if (myFastId !== fastRequestIdRef.current) return;
+        const failure = classifyAnalyzeError(err, fastCtrl);
+        const durationMs = Math.round(performance.now() - startedAt);
+        console.warn(
+          `[sales-assistant] fastReq=${myFastId} FAIL reason=${failure.reason} ` +
+          `status=${failure.status ?? '-'} durationMs=${durationMs} ` +
+          `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}"`,
+        );
+        // Hard-stop reasons (auth / guardrails) — surface error and stop
+        // full too. The user can't get past these by waiting.
+        const HARD_STOP: AnalyzeFailureReason[] = ['unauthenticated', 'workspace_readonly', 'guardrail_cost', 'guardrail_quota'];
+        if (HARD_STOP.includes(failure.reason)) {
+          setAiError(failure.userMessage);
+          fastHardStopped = true;
+          try { fullCtrl.abort(); } catch { /* ignore */ }
+        } else {
+          // Soft fast failure — full may still rescue. Show a soft message;
+          // full pipeline will overwrite if it succeeds.
+          setAiError(failure.userMessage);
+        }
+      } finally {
+        if (myFastId === fastRequestIdRef.current) setIsFastLoading(false);
+        if (fastAbortRef.current === fastCtrl) fastAbortRef.current = null;
       }
-      const latencyMs = Math.round(performance.now() - tFastStart);
-      console.debug(`[sales-assistant] requestId=${myRequestId} phase=fast done latencyMs=${latencyMs} spinStage=${r.fast.spinStage} source=${r.fast.source ?? 'ai'}`);
-      setFastCard(r.fast);
-      // Sprint 50 hotfix — lock the actionable fast fields against full's
-      // upcoming write. Skip the lock if fast returned a mock/fallback —
-      // the user wouldn't have started reading that aloud anyway, and full
-      // (real AI) should be allowed to replace it.
-      const fastIsMock = r.fast.fellBackToMock || r.fast.source === 'mock';
-      if (!fastIsMock) {
-        fastLockForThisRequest = {
-          requestId: myRequestId,
-          mainQuestion: r.fast.mainQuestion,
-          backupQuestions: r.fast.backupQuestions,
-        };
-      }
-      setLastAnalyzeAt(Date.now());
-      setPermError(null);
-      fastOk = true;
-    } catch (err) {
-      window.clearTimeout(fastTimer);
-      if (isStale()) return;
-      // Sprint 49 hotfix 9 — fast fail БОЛЬШЕ НЕ блокирует full. Раньше при
-      // fast timeout мы возвращали `return` и UI зависал на error до второго
-      // клика. Теперь: показываем мягкую ошибку, но идём в full (25-сек guard)
-      // — он чаще успевает. Card в это время остаётся прежней (sticky guard
-      // hotfix 7), не «пустеет».
-      const failure = classifyAnalyzeError(err, controller);
-      const durationMs = Math.round(performance.now() - tFastStart);
-      console.warn(
-        `[sales-assistant] requestId=${myRequestId} phase=fast FAIL ` +
-        `reason=${failure.reason} status=${failure.status ?? '-'} durationMs=${durationMs} ` +
-        `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}" — continuing to full`,
-      );
-      // Для guardrail/auth-ошибок full тоже упадёт — там не имеет смысла
-      // продолжать, фронт прерывается.
-      const HARD_STOP: AnalyzeFailureReason[] = ['unauthenticated', 'workspace_readonly', 'guardrail_cost', 'guardrail_quota'];
-      if (HARD_STOP.includes(failure.reason)) {
-        setAiError(failure.userMessage);
-        setAnalyzePhase('error');
-        if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
-        return;
-      }
-      // Мягкая ошибка — full может ещё успеть. Информируем пользователя,
-      // но не останавливаем pipeline.
-      setAiError(failure.userMessage);
-      // fastOk остаётся false; код ниже больше не блокирует full на !fastOk.
-    }
+    })();
 
-    if (isStale()) return;
-
-    // ── ЭТАП 2: полная аналитика (догоняет в фоне) ──────────────────────
-    setAnalyzePhase('full');
-    const tFullStart = performance.now();
+    // ── FULL pipeline (background enrichment) ───────────────────────────
     const fullTimer = window.setTimeout(() => {
-      if (!isStale()) {
-        console.debug(`[sales-assistant] requestId=${myRequestId} phase=full timeout ${FULL_TIMEOUT_MS}ms`);
-        controller.abort();
+      if (myFullId === fullRequestIdRef.current) {
+        console.debug(`[sales-assistant] fullReq=${myFullId} timeout ${FULL_TIMEOUT_MS}ms`);
+        try { fullCtrl.abort(); } catch { /* ignore */ }
       }
     }, FULL_TIMEOUT_MS);
-
-    try {
-      const r = await api.post<{ card: AssistantCard; adviceEventId?: string | null }>(
-        '/api/sales-assistant/analyze',
-        {
-          transcript: transcriptForApi,
-          recentContext: recentContext(),
-          previousAdvice,
-          previousSpinStage,
-          adviceHistory: adviceHistorySnapshot,
-          projectId: projectId || null,
-        },
-        { signal: controller.signal },
-      );
-      window.clearTimeout(fullTimer);
-      if (isStale()) {
-        console.debug(`[sales-assistant] requestId=${myRequestId} phase=full stale, ignoring`);
-        return;
+    void (async () => {
+      try {
+        const r = await api.post<{ card: AssistantCard; adviceEventId?: string | null }>(
+          '/api/sales-assistant/analyze',
+          {
+            transcript: transcriptForApi,
+            recentContext: recentContext(),
+            previousAdvice,
+            previousSpinStage,
+            adviceHistory: adviceHistorySnapshot,
+            projectId: projectId || null,
+          },
+          { signal: fullCtrl.signal },
+        );
+        window.clearTimeout(fullTimer);
+        if (myFullId !== fullRequestIdRef.current) {
+          console.debug(`[sales-assistant] fullReq=${myFullId} stale, ignoring`);
+          return;
+        }
+        // Wait for fast to settle so the lock is set (or known to be null).
+        // Fast almost always finishes well before full, so this rarely waits.
+        await fastPromise.catch(() => { /* fast error handled in its catch */ });
+        if (myFullId !== fullRequestIdRef.current) return;
+        if (fastHardStopped) return; // user already sees an error; don't write a card under it
+        const latencyMs = Math.round(performance.now() - startedAt);
+        console.debug(`[sales-assistant] fullReq=${myFullId} done latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
+        // Full = enrichment. fastLock pins mainQuestion + backupQuestions;
+        // applyCardSticky preserves KB sources / non-generic main question.
+        applyCardSticky(r.card, myFullId, fastLockForFullMerge);
+        // Drop the now-redundant fast view; card carries the locked fields.
+        setFastCard(null);
+        setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
+        setLastAnalyzeAt(Date.now());
+        // Clear aiError only if fast didn't already register a soft message
+        // we want to keep — but full success should reset transient errors.
+        setAiError(null);
+        if (r.adviceEventId) {
+          setAdviceEventLast(r.adviceEventId);
+          setAdviceEventIds((prev) => [...prev, r.adviceEventId as string]);
+        }
+      } catch (err) {
+        window.clearTimeout(fullTimer);
+        if (myFullId !== fullRequestIdRef.current) return;
+        const failure = classifyAnalyzeError(err, fullCtrl);
+        const durationMs = Math.round(performance.now() - startedAt);
+        console.warn(
+          `[sales-assistant] fullReq=${myFullId} FAIL reason=${failure.reason} ` +
+          `status=${failure.status ?? '-'} durationMs=${durationMs} ` +
+          `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}"`,
+        );
+        // If fast gave the user something to read, full's failure is purely
+        // a missed enrichment — don't pollute UI with an error in that case.
+        const fastDelivered = Boolean(fastLockForFullMerge) || Boolean(fastCardRef.current);
+        if (!fastDelivered) {
+          const fullMsg = failure.reason === 'timeout'
+            ? 'Полный разбор не успел обновиться, можно повторить.'
+            : failure.reason === 'unknown' || failure.reason === 'server_error'
+              ? 'Аналитика временно недоступна. Попробуйте обновить подсказку.'
+              : failure.userMessage;
+          setAiError(fullMsg);
+        }
+      } finally {
+        if (myFullId === fullRequestIdRef.current) setIsFullLoading(false);
+        if (fullAbortRef.current === fullCtrl) fullAbortRef.current = null;
       }
-      const latencyMs = Math.round(performance.now() - tFullStart);
-      console.debug(`[sales-assistant] requestId=${myRequestId} phase=full done latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
-      // Sprint 49 hotfix 7 — applyCardSticky вместо setCard: защита от
-      // regression-overwrite, см. helper выше. История adviceHistory копит
-      // именно полученный r.card (не merged), чтобы AI на следующем шаге
-      // видел реальный путь, а UI получает merged-стейт.
-      // Sprint 50 hotfix — pass the fastLock so the live mainQuestion +
-      // backupQuestions the founder already started reading stay put. Full
-      // fills the remaining 20+ fields (situation, whatToDo, risks, tone,
-      // spinStage, …) — that's the additive surface, not the replace surface.
-      applyCardSticky(r.card, myRequestId, fastLockForThisRequest);
-      // Полная аналитика свежее fast — снимаем fastCard, чтобы AdviceCard
-      // взяла mainQuestion из card, а не из старого fallback'а.
-      setFastCard(null);
-      setAdviceHistory((prev) => [...prev, toAdviceHistoryItem(r.card)].slice(-6));
-      setLastAnalyzeAt(Date.now());
-      setAiError(null);
-      setAnalyzePhase('idle');
-      // Sprint 43 P0.6 — копим adviceEventIds текущей встречи. Бэкенд
-      // вернёт null если запись advice event'а упала — это не критично, ID
-      // просто не появится в массиве (и outcome нельзя будет линковать —
-      // ok, спокойно живёт без линка по adviceEventId).
-      if (r.adviceEventId) {
-        setAdviceEventLast(r.adviceEventId);
-        setAdviceEventIds((prev) => [...prev, r.adviceEventId as string]);
-      }
-    } catch (err) {
-      window.clearTimeout(fullTimer);
-      if (isStale()) return;
-      // Sprint 49 hotfix 8 — структурный лог + гранулярная UX-копия. На этой
-      // фазе fastCard уже на экране, card (если был) сохраняется sticky-логикой
-      // в applyCardSticky. Здесь ничего НЕ сбрасываем.
-      const failure = classifyAnalyzeError(err, controller);
-      const durationMs = Math.round(performance.now() - tFullStart);
-      console.warn(
-        `[sales-assistant] requestId=${myRequestId} phase=full FAIL ` +
-        `reason=${failure.reason} status=${failure.status ?? '-'} durationMs=${durationMs} ` +
-        `transcriptChars=${transcriptForApi.length} message="${failure.body.slice(0, 200)}"`,
-      );
-      // Fast уже на экране — мягкая формулировка про аналитику.
-      const fullMsg = failure.reason === 'timeout'
-        ? 'Полный разбор не успел обновиться, можно повторить.'
-        : failure.reason === 'unknown' || failure.reason === 'server_error'
-          ? 'Аналитика временно недоступна. Главный вопрос и запасные показаны. Попробуйте обновить подсказку.'
-          : failure.userMessage;
-      setAiError(fullMsg);
-      setAnalyzePhase('error');
-    } finally {
-      if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
-    }
+    })();
   }
 
   function startRecognition() {
@@ -1066,7 +1077,11 @@ export default function SalesAssistant() {
     setLastAnalyzeAt(null);
     setAiError(null);
     setFastCard(null);
-    setAnalyzePhase('idle');
+    // Sprint 50 hotfix — clear both loading flags + cancel in-flight pipelines.
+    setIsFastLoading(false);
+    setIsFullLoading(false);
+    if (fastAbortRef.current) { try { fastAbortRef.current.abort(); } catch { /* ignore */ } fastAbortRef.current = null; }
+    if (fullAbortRef.current) { try { fullAbortRef.current.abort(); } catch { /* ignore */ } fullAbortRef.current = null; }
     // Sprint 49 — следующая встреча заново выбирает provider.
     setTranscriptionProvider(null);
     setRealtimeModel(null);
@@ -1129,13 +1144,13 @@ export default function SalesAssistant() {
     setLastAnalyzeAt(null);
     setAiError(null);
     setFastCard(null);
-    setAnalyzePhase('idle');
-    // Hotfix 2026-05-15 — обнуляем sequence-id и abort'им висящий запрос.
-    if (analysisAbortRef.current) {
-      try { analysisAbortRef.current.abort(); } catch { /* ignore */ }
-      analysisAbortRef.current = null;
-    }
-    analysisRequestIdRef.current++;
+    // Sprint 50 hotfix — clear both loading flags + cancel in-flight pipelines.
+    setIsFastLoading(false);
+    setIsFullLoading(false);
+    if (fastAbortRef.current) { try { fastAbortRef.current.abort(); } catch { /* ignore */ } fastAbortRef.current = null; }
+    if (fullAbortRef.current) { try { fullAbortRef.current.abort(); } catch { /* ignore */ } fullAbortRef.current = null; }
+    fastRequestIdRef.current++;
+    fullRequestIdRef.current++;
   }
 
   const wordCount = useMemo(
@@ -1212,7 +1227,7 @@ export default function SalesAssistant() {
             iconLeft={<RefreshCw size={14} />}
             onClick={() => runAnalyze()}
             disabled={!hasFinalTranscript}
-            loading={analyzePhase === 'fast' || analyzePhase === 'full'}
+            loading={isFastLoading}
           >
             {analyzeButtonLabel(analyzePhase, Boolean(card || fastCard))}
           </Button>
