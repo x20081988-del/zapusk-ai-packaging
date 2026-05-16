@@ -370,6 +370,70 @@ export default function SalesAssistant() {
     return text.length > 6_000 ? text.slice(-6_000) : text;
   }
 
+  // Sprint 49 hotfix 7 — sticky card guard. Защита от regression-overwrite:
+  // если новый analyze-результат «беднее» текущего (потерял KB sources,
+  // откатился по SPIN на 2+ стадии, или вернул generic placeholder
+  // mainQuestion), сохраняем те поля из предыдущей карточки, которые ушли.
+  // Это убирает race: «AI разобрал Delphi → через 10 сек повторный analyze
+  // получил короткий transcript-снимок и вернул generic SPIN-вопрос».
+  // Sequence-id (analysisRequestIdRef) уже отсеивает stale fetch'и; этот
+  // слой защищает от валидного, но менее богатого ответа.
+  const GENERIC_QUESTION_RE = /расскажите.{0,40}интерес|что.{0,5}вас.{0,5}интерес|продолжаем.{0,5}обще|расскажите.{0,40}о.{0,4}себе/i;
+
+  function isCardPoorer(prev: AssistantCard | null, next: AssistantCard): boolean {
+    if (!prev) return false;
+    const prevSources = prev.usedKnowledgeSources?.length ?? 0;
+    const nextSources = next.usedKnowledgeSources?.length ?? 0;
+    if (prevSources > 0 && nextSources === 0) return true;
+    const stageRank: Record<AssistantCard['spinStage'], number> = { S: 0, P: 1, I: 2, N: 3 };
+    if (stageRank[next.spinStage] < stageRank[prev.spinStage] - 1) return true;
+    if (GENERIC_QUESTION_RE.test(next.mainQuestion) && !GENERIC_QUESTION_RE.test(prev.mainQuestion)) {
+      return true;
+    }
+    return false;
+  }
+
+  // Merge нынешний result с sticky-полями предыдущего. Никогда не
+  // перетираем не-пустые KB sources пустыми; в случае «poorer» —
+  // также сохраняем mainQuestion + situation от prev, чтобы UI не моргал
+  // generic placeholder'ом.
+  function applyCardSticky(next: AssistantCard, myRequestId: number): void {
+    const prev = cardRef.current;
+    const poorer = isCardPoorer(prev, next);
+    if (poorer && prev) {
+      const merged: AssistantCard = {
+        ...next,
+        mainQuestion: prev.mainQuestion,
+        situation: prev.situation,
+        usedKnowledgeSources: (next.usedKnowledgeSources?.length ?? 0) > 0
+          ? next.usedKnowledgeSources
+          : prev.usedKnowledgeSources,
+        miniPitch: next.miniPitch ?? prev.miniPitch,
+      };
+      console.debug(
+        `[sales-assistant/context] requestId=${myRequestId} new card poorer — keeping sticky fields ` +
+        `prevSources=${prev.usedKnowledgeSources?.length ?? 0} nextSources=${next.usedKnowledgeSources?.length ?? 0} ` +
+        `prevStage=${prev.spinStage} nextStage=${next.spinStage} ` +
+        `genericQ=${GENERIC_QUESTION_RE.test(next.mainQuestion)}`,
+      );
+      setCard(merged);
+      return;
+    }
+    const merged: AssistantCard = prev
+      ? {
+          ...next,
+          usedKnowledgeSources: (next.usedKnowledgeSources?.length ?? 0) > 0
+            ? next.usedKnowledgeSources
+            : prev.usedKnowledgeSources,
+        }
+      : next;
+    console.debug(
+      `[sales-assistant/context] requestId=${myRequestId} commit ` +
+      `mergedSources=${merged.usedKnowledgeSources?.length ?? 0} stage=${merged.spinStage}`,
+    );
+    setCard(merged);
+  }
+
   function toAdviceHistoryItem(next: AssistantCard): AdviceHistoryItem {
     return {
       situation: next.situation,
@@ -528,7 +592,11 @@ export default function SalesAssistant() {
       }
       const latencyMs = Math.round(performance.now() - tFullStart);
       console.debug(`[sales-assistant] requestId=${myRequestId} phase=full done latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
-      setCard(r.card);
+      // Sprint 49 hotfix 7 — applyCardSticky вместо setCard: защита от
+      // regression-overwrite, см. helper выше. История adviceHistory копит
+      // именно полученный r.card (не merged), чтобы AI на следующем шаге
+      // видел реальный путь, а UI получает merged-стейт.
+      applyCardSticky(r.card, myRequestId);
       // Полная аналитика свежее fast — снимаем fastCard, чтобы AdviceCard
       // взяла mainQuestion из card, а не из старого fallback'а.
       setFastCard(null);
