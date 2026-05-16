@@ -195,13 +195,30 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
       });
     }
 
-    const data = (await upstream.json()) as RealtimeSessionResponse;
-    const clientSecret = data.client_secret?.value;
-    const expiresAt = data.client_secret?.expires_at ?? null;
-    if (!clientSecret) {
-      console.warn(`[realtime] openai response missing client_secret model=${model} modelSource=${modelSource}`);
-      return res.status(502).json({ error: 'openai_session_invalid' });
+    const data = (await upstream.json()) as Record<string, unknown>;
+    const extracted = extractClientSecret(data);
+    if (!extracted.value) {
+      // Sprint 49 hotfix 6 — структурный debug. Логируем top-level keys и
+      // shape поля client_secret/clientSecret, чтобы можно было понять,
+      // что именно OpenAI вернула. Сам секрет НЕ логируем.
+      const keys = Object.keys(data);
+      const cs = (data as { client_secret?: unknown }).client_secret;
+      const csType = cs === null ? 'null' : Array.isArray(cs) ? 'array' : typeof cs;
+      console.warn(
+        `[realtime] openai response missing client_secret model=${model} modelSource=${modelSource} ` +
+        `responseKeys=[${keys.join(',')}] clientSecretType=${csType}`,
+      );
+      return res.status(502).json({
+        error: 'openai_session_invalid',
+        model,
+        promptSupported,
+        turnDetectionSupported,
+        responseKeys: keys,
+        clientSecretShape: csType,
+      });
     }
+    const clientSecret = extracted.value;
+    const expiresAt = extracted.expiresAt;
 
     await recordAudit(req, {
       action: 'realtime.transcription_session.issued',
@@ -250,8 +267,43 @@ realtimeRoutes.post('/transcription-session', async (req, res) => {
   }
 });
 
-interface RealtimeSessionResponse {
-  client_secret?: { value?: string; expires_at?: number };
+// Sprint 49 hotfix 6 — терпимый парсинг ответа /v1/realtime/client_secrets.
+// GA shape: `client_secret` — строка на верхнем уровне, `expires_at`
+// тоже на верхнем уровне. Legacy shape (transcription_sessions endpoint):
+// `client_secret.value` + `client_secret.expires_at`. Парсер поддерживает
+// обе формы плюс camelCase варианты, не зная заранее, какая модель отдала.
+function extractClientSecret(data: Record<string, unknown>): { value: string | null; expiresAt: number | null } {
+  if (!data || typeof data !== 'object') return { value: null, expiresAt: null };
+
+  // Top-level expires_at / expiresAt (GA shape).
+  let expiresAt: number | null = null;
+  if (typeof data.expires_at === 'number') expiresAt = data.expires_at;
+  else if (typeof (data as { expiresAt?: unknown }).expiresAt === 'number') expiresAt = (data as { expiresAt: number }).expiresAt;
+
+  // Try in order: top-level string → top-level object.value → camelCase
+  // variants → legacy `secret` / `value` shapes.
+  const candidates: Array<unknown> = [
+    data.client_secret,
+    (data as { clientSecret?: unknown }).clientSecret,
+    (data as { secret?: unknown }).secret,
+    (data as { value?: unknown }).value,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.length > 10) {
+      return { value: c, expiresAt };
+    }
+    if (c && typeof c === 'object') {
+      const obj = c as { value?: unknown; expires_at?: unknown; expiresAt?: unknown };
+      if (typeof obj.value === 'string' && obj.value.length > 10) {
+        if (expiresAt == null) {
+          if (typeof obj.expires_at === 'number') expiresAt = obj.expires_at;
+          else if (typeof obj.expiresAt === 'number') expiresAt = obj.expiresAt;
+        }
+        return { value: obj.value, expiresAt };
+      }
+    }
+  }
+  return { value: null, expiresAt };
 }
 
 async function safeText(r: Response): Promise<string> {
