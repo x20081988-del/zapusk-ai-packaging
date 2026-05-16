@@ -79,8 +79,7 @@ export default function NewProject() {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
     if (!form.name.trim()) return setErr('Название обязательно');
     setSubmitting(true);
     setErr(null);
@@ -126,6 +125,13 @@ export default function NewProject() {
     }
   }
 
+  function preventImplicitSubmit(e: React.KeyboardEvent<HTMLFormElement>) {
+    if (e.key !== 'Enter') return;
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'TEXTAREA') return;
+    e.preventDefault();
+  }
+
   return (
     <AppLayout
       title="Новый проект"
@@ -146,7 +152,7 @@ export default function NewProject() {
           </p>
         </div>
 
-        <form onSubmit={submit} className="space-y-4">
+        <form onSubmit={(e) => e.preventDefault()} onKeyDown={preventImplicitSubmit} className="space-y-4">
           <Card>
             <CardHeader title="Идентификация" subtitle="Что и кто" />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -194,24 +200,28 @@ export default function NewProject() {
                 label="Сколько хотите привлечь, ₽"
                 type="number"
                 inputMode="numeric"
+                min={0}
                 value={form.raiseAmount}
-                onChange={(e) => set('raiseAmount', e.target.value)}
+                onChange={(e) => set('raiseAmount', sanitizeNumber(e.target.value, { min: 0 }))}
                 placeholder="20 000 000"
               />
               <Input
                 label="Минимальный чек инвестора, ₽"
                 type="number"
                 inputMode="numeric"
+                min={0}
                 value={form.minCheck}
-                onChange={(e) => set('minCheck', e.target.value)}
+                onChange={(e) => set('minCheck', sanitizeNumber(e.target.value, { min: 0 }))}
                 placeholder="1 000 000"
               />
               <Input
                 label="Доля для инвестора, %"
                 type="number"
                 inputMode="decimal"
+                min={0}
+                max={100}
                 value={form.equityOffered}
-                onChange={(e) => set('equityOffered', e.target.value)}
+                onChange={(e) => set('equityOffered', sanitizeNumber(e.target.value, { min: 0, max: 100 }))}
                 placeholder="10"
               />
               <Input
@@ -302,10 +312,11 @@ export default function NewProject() {
               Отмена
             </Button>
             <Button
-              type="submit"
+              type="button"
               loading={submitting || uploadingMaterials}
               size="lg"
               iconLeft={<Rocket size={14} />}
+              onClick={submit}
             >
               {pendingFiles.length > 0
                 ? `Создать проект и загрузить ${pendingFiles.length} файл${pluralizeFiles(pendingFiles.length)}`
@@ -324,4 +335,14 @@ function pluralizeFiles(n: number): string {
   if (mod10 === 1 && mod100 !== 11) return '';
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'а';
   return 'ов';
+}
+
+function sanitizeNumber(value: string, limits: { min?: number; max?: number }): string {
+  if (value === '') return '';
+  if (value.trim().startsWith('-')) return String(limits.min ?? 0);
+  const num = Number(value);
+  if (!Number.isFinite(num)) return value;
+  if (limits.min != null && num < limits.min) return String(limits.min);
+  if (limits.max != null && num > limits.max) return String(limits.max);
+  return value;
 }

@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { forwardRef } from 'react';
-import type { InputHTMLAttributes, TextareaHTMLAttributes, SelectHTMLAttributes, ReactNode } from 'react';
+import type { InputHTMLAttributes, TextareaHTMLAttributes, SelectHTMLAttributes, ReactNode, WheelEvent } from 'react';
 
 interface FieldProps {
   label?: string;
@@ -12,10 +12,16 @@ interface FieldProps {
 interface InputProps extends InputHTMLAttributes<HTMLInputElement>, FieldProps {}
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, hint, error, required, className, id, ...rest },
+  { label, hint, error, required, className, id, onWheel, ...rest },
   ref,
 ) {
   const inputId = id ?? rest.name;
+  const handleWheel = (event: WheelEvent<HTMLInputElement>) => {
+    onWheel?.(event);
+    if (event.defaultPrevented || rest.type !== 'number') return;
+    event.preventDefault();
+    event.currentTarget.blur();
+  };
   return (
     <Field label={label} hint={hint} error={error} required={required} htmlFor={inputId}>
       <input
@@ -28,6 +34,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           className,
         )}
         {...rest}
+        onWheel={handleWheel}
       />
     </Field>
   );
