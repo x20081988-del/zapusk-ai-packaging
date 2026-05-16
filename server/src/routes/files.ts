@@ -10,13 +10,20 @@ import { storage } from '../services/storage.js';
 import { recordAudit } from '../lib/audit.js';
 import { env } from '../env.js';
 import { getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
+import { multerFileFilter, uploadRejectionMessage } from '../lib/uploadValidation.js';
 
 export const filesRoutes = Router();
 filesRoutes.use(authMiddleware);
 // Sprint 37 P0.4 — INVESTOR не имеет доступа к founder-files.
 filesRoutes.use(requireNotInvestor());
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+// Sprint 50 P1.2 — fileFilter rejects non-document uploads upstream of
+// the buffer copy. See lib/uploadValidation.ts for the allowlist.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: multerFileFilter('project_file'),
+});
 
 async function assertOwnership(userId: string, projectId: string) {
   const p = await prisma.project.findFirst({ where: { id: projectId, userId } });
@@ -34,7 +41,25 @@ async function actorCanAccessProject(req: Parameters<typeof getUser>[0], project
   return assertOwnership(getUser(req).id, projectId);
 }
 
-filesRoutes.post('/:projectId/upload', upload.array('files', 20), async (req, res) => {
+// Sprint 50 P1.2 — wrap multer to catch its fileFilter rejection and turn
+// it into a friendly 400 instead of multer's default 500.
+function multerUploadWithGuard(req: Parameters<typeof getUser>[0], res: { status: (code: number) => { json: (body: unknown) => void } }, next: () => void): void {
+  upload.array('files', 20)(req as never, res as never, (err: unknown) => {
+    if (!err) return next();
+    if (err instanceof Error && err.message.startsWith('upload_rejected:')) {
+      const reason = err.message.split(':')[1];
+      res.status(400).json({ error: 'upload_rejected', reason, message: uploadRejectionMessage(reason) });
+      return;
+    }
+    if (err instanceof Error && /file too large/i.test(err.message)) {
+      res.status(413).json({ error: 'file_too_large' });
+      return;
+    }
+    res.status(400).json({ error: 'upload_failed', message: err instanceof Error ? err.message : 'unknown' });
+  });
+}
+
+filesRoutes.post('/:projectId/upload', multerUploadWithGuard, async (req, res) => {
   const user = getUser(req);
   if (!(await assertOwnership(user.id, req.params.projectId))) {
     return res.status(404).json({ error: 'project_not_found' });

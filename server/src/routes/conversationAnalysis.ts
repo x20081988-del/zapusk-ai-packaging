@@ -13,6 +13,7 @@ import {
 } from '../services/conversationAnalysisService.js';
 import { isAIGuardrailError } from '../ai/client.js';
 import { withRateLimit } from '../lib/rateLimit.js';
+import { multerFileFilter, uploadRejectionMessage } from '../lib/uploadValidation.js';
 
 export const conversationAnalysisRoutes = Router();
 conversationAnalysisRoutes.use(authMiddleware);
@@ -20,7 +21,14 @@ conversationAnalysisRoutes.use(authMiddleware);
 conversationAnalysisRoutes.use(requireNotInvestor());
 
 // 60 MB cap — handles ~2 hours of compressed audio on most codecs.
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
+// Sprint 50 P1.2 — fileFilter rejects non-audio uploads before the buffer
+// reaches memory. Throws "upload_rejected:<reason>" which the route catch
+// turns into a 400 with friendly message.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 60 * 1024 * 1024 },
+  fileFilter: multerFileFilter('audio'),
+});
 
 // POST /api/conversation-analysis — single entry point. Accepts:
 //   • multipart with `file` field   (audio upload)
@@ -78,6 +86,12 @@ conversationAnalysisRoutes.post('/', withRateLimit('file_upload'), upload.single
     }
     if (err instanceof Error && err.message === 'transcript_too_short') {
       return res.status(400).json({ error: 'transcript_too_short', message: 'Transcript слишком короткий для анализа.' });
+    }
+    // Sprint 50 P1.2 — multer throws "upload_rejected:<reason>" when the
+    // fileFilter denies a request. Translate to a user-friendly 400.
+    if (err instanceof Error && err.message.startsWith('upload_rejected:')) {
+      const reason = err.message.split(':')[1];
+      return res.status(400).json({ error: 'upload_rejected', reason, message: uploadRejectionMessage(reason) });
     }
     console.error('[conversation-analysis]', err instanceof Error ? err.message : err);
     res.status(500).json({ error: 'analysis_failed' });
