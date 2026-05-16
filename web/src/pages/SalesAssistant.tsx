@@ -700,12 +700,26 @@ export default function SalesAssistant() {
     const previousSpinStage = cardRef.current?.spinStage ?? null;
     const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
     const startedAt = performance.now();
+    // Sprint 50 hotfix — diagnostic surface for repeated-click debugging.
+    // Tracks: clickId, manual/live char split, previous mainQuestion (so a
+    // later mainQuestionChanged check can fire), and absolute timestamps for
+    // each pipeline boundary. No raw transcript in logs — only counts.
+    const liveChars = transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n').length
+      + (interimRef.current?.trim().length ?? 0);
+    const manualChars = manualTranscriptRef.current.trim().length;
+    const prevMainQuestion = cardRef.current?.mainQuestion ?? fastCardRef.current?.mainQuestion ?? null;
     console.debug(
-      `[sales-assistant] click fastReq=${myFastId} fullReq=${myFullId} ` +
-      `transcriptChars=${transcriptForApi.length} total=${transcriptText.length}`,
+      `[sales-assistant/click] fastReq=${myFastId} fullReq=${myFullId} ` +
+      `manualChars=${manualChars} liveChars=${liveChars} ` +
+      `transcriptCharsToApi=${transcriptForApi.length} total=${transcriptText.length} ` +
+      `prevMainQuestion="${(prevMainQuestion ?? '').slice(0, 60)}"`,
     );
 
-    let fastLockForFullMerge: { requestId: number; mainQuestion: string; backupQuestions: string[] } | null = null;
+    // `let` is mutated inside the fast IIFE and read inside the full IIFE.
+    // TS doesn't track concurrent closure mutations and narrows the type to
+    // `null` from the initializer. The `as` cast preserves the union so
+    // both branches type-check at the read sites.
+    let fastLockForFullMerge = null as { requestId: number; mainQuestion: string; backupQuestions: string[] } | null;
     let fastHardStopped = false; // set by fast pipeline if it hit a hard-stop reason
 
     // ── FAST pipeline (priority — never blocked by full) ────────────────
@@ -731,11 +745,17 @@ export default function SalesAssistant() {
         );
         window.clearTimeout(fastTimer);
         if (myFastId !== fastRequestIdRef.current) {
-          console.debug(`[sales-assistant] fastReq=${myFastId} stale, ignoring`);
+          console.debug(`[sales-assistant/fast] fastReq=${myFastId} STALE-DISCARD (current=${fastRequestIdRef.current})`);
           return;
         }
         const latencyMs = Math.round(performance.now() - startedAt);
-        console.debug(`[sales-assistant] fastReq=${myFastId} done latencyMs=${latencyMs} spinStage=${r.fast.spinStage} source=${r.fast.source ?? 'ai'}`);
+        const mainQuestionChanged = r.fast.mainQuestion !== prevMainQuestion;
+        console.debug(
+          `[sales-assistant/fast] fastReq=${myFastId} done latencyMs=${latencyMs} ` +
+          `spinStage=${r.fast.spinStage} source=${r.fast.source ?? 'ai'} ` +
+          `mainQuestionChanged=${mainQuestionChanged} ` +
+          `mainQuestion="${(r.fast.mainQuestion ?? '').slice(0, 60)}"`,
+        );
         setFastCard(r.fast);
         setLastAnalyzeAt(Date.now());
         setPermError(null);
@@ -800,7 +820,7 @@ export default function SalesAssistant() {
         );
         window.clearTimeout(fullTimer);
         if (myFullId !== fullRequestIdRef.current) {
-          console.debug(`[sales-assistant] fullReq=${myFullId} stale, ignoring`);
+          console.debug(`[sales-assistant/full] fullReq=${myFullId} STALE-DISCARD (current=${fullRequestIdRef.current})`);
           return;
         }
         // Wait for fast to settle so the lock is set (or known to be null).
@@ -809,7 +829,21 @@ export default function SalesAssistant() {
         if (myFullId !== fullRequestIdRef.current) return;
         if (fastHardStopped) return; // user already sees an error; don't write a card under it
         const latencyMs = Math.round(performance.now() - startedAt);
-        console.debug(`[sales-assistant] fullReq=${myFullId} done latencyMs=${latencyMs} spinStage=${r.card?.spinStage ?? '?'}`);
+        // Sprint 50 hotfix — log the value that will actually land on screen
+        // after the fastLock override inside applyCardSticky. lockedMQ
+        // === fastLockForFullMerge.mainQuestion if click had a non-mock fast;
+        // otherwise the raw full mainQuestion.
+        const lockedMQ = fastLockForFullMerge
+          ? fastLockForFullMerge.mainQuestion
+          : (r.card.mainQuestion ?? '');
+        const fullMainQuestionChanged = lockedMQ !== prevMainQuestion;
+        console.debug(
+          `[sales-assistant/full] fullReq=${myFullId} done latencyMs=${latencyMs} ` +
+          `spinStage=${r.card?.spinStage ?? '?'} ` +
+          `fastLockApplied=${Boolean(fastLockForFullMerge)} ` +
+          `mainQuestionChanged=${fullMainQuestionChanged} ` +
+          `committedMainQuestion="${lockedMQ.slice(0, 60)}"`,
+        );
         // Full = enrichment. fastLock pins mainQuestion + backupQuestions;
         // applyCardSticky preserves KB sources / non-generic main question.
         applyCardSticky(r.card, myFullId, fastLockForFullMerge);
@@ -1627,26 +1661,32 @@ function AdviceCard({
   fastCard: FastCardShape | null;
   analyzePhase: 'idle' | 'fast' | 'full' | 'error';
 }) {
-  // Hotfix 2026-05-15 — приоритезация фикснута. Раньше `fastCard ?? card`
-  // оставлял fast-ответ навсегда поверх card даже после успешного полного
-  // ответа. Теперь: если есть свежий card — берём mainQuestion из него.
-  // fastCard используется как «опережающий» рендер только пока card=null.
-  // Дополнительно: runAnalyze() сейчас setFastCard(null) после успеха full,
-  // так что эта проверка — defense-in-depth.
-  const action = card
-    ? {
-        mainQuestion: card.mainQuestion,
-        backupQuestions: card.backupQuestions,
-        selfSaleQuestions: card.selfSaleQuestions,
-        spinStage: card.spinStage,
-        provider: card.provider,
-        model: card.model,
-        fellBackToMock: card.fellBackToMock,
-        promptSource: card.promptSource,
-        promptTemplateId: card.promptTemplateId,
-      }
-    : fastCard;
-  if (!action) return null;
+  // Sprint 50 hotfix — actionable fields ALWAYS prefer fastCard when present.
+  // Previously (`card > fastCard` globally) the second click's fresh fast was
+  // INVISIBLE: card from click N had stale mainQuestion + backupQuestions +
+  // selfSaleQuestions, click N+1's setFastCard(newFast) didn't take effect
+  // until full landed, and if full silently failed (because "fast was
+  // delivered" path), the user kept seeing click N's advice forever.
+  //
+  // New rule (matches the spec for fast-owned fields):
+  //   mainQuestion / backupQuestions / selfSaleQuestions  → fastCard wins
+  //   spinStage + metadata (provider / model / promptSource / …) → card wins
+  //
+  // applyCardSticky already merges fastLock INTO card on full success, so
+  // when fastCard is cleared after full lands, card.mainQuestion = the
+  // freshest fast value. Continuity is preserved across the fast/full cycle.
+  if (!card && !fastCard) return null;
+  const action = {
+    mainQuestion: fastCard?.mainQuestion ?? card?.mainQuestion ?? '—',
+    backupQuestions: fastCard?.backupQuestions ?? card?.backupQuestions ?? [],
+    selfSaleQuestions: fastCard?.selfSaleQuestions ?? card?.selfSaleQuestions ?? [],
+    spinStage: card?.spinStage ?? fastCard?.spinStage ?? 'S',
+    provider: card?.provider ?? fastCard?.provider ?? 'ai',
+    model: card?.model ?? fastCard?.model ?? '',
+    fellBackToMock: card?.fellBackToMock ?? fastCard?.fellBackToMock ?? false,
+    promptSource: card?.promptSource ?? fastCard?.promptSource,
+    promptTemplateId: card?.promptTemplateId ?? fastCard?.promptTemplateId,
+  };
 
   return (
     <Card padded accent={card?.tone === 'CLOSE' ? 'zapusk' : 'ai'}>
