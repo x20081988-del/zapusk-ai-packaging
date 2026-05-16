@@ -596,11 +596,15 @@ function mockText(opts: AICallOptions): string {
   return `# Mock AI response\n\n_Provider: mock — set ANTHROPIC_API_KEY or OPENAI_API_KEY to use real model._\n\n## System prompt (excerpt)\n${opts.system.slice(0, 200)}…\n\n## User input (excerpt)\n${opts.user.slice(0, 200)}…`;
 }
 
-// Sprint 49 hotfix 9 — выбор JSON shape для mock fallback по фиче.
+// Sprint 49 hotfix 9 + 13 — выбор JSON shape для mock fallback по фиче.
 // sales_assistant.analyze ждёт AssistantCard (situation/mainQuestion/spinStage/…),
-// analyze_fast ждёт FastAssistantCard (mainQuestion/backupQuestions/spinStage/…).
-// Если отдать им mockBrief, downstream-парсер уйдёт в heuristicCard и user
-// видит generic SPIN — этого Codex audit и просил починить.
+// analyze_fast ждёт FastAssistantCard (mainQuestion/backupQuestions/spinStage/…),
+// conversation_analysis.analyze ждёт ConversationAnalysisCard (summary/mistakes/…),
+// sales_session.complete ждёт SessionSummary (summary/objections/checkRange/…).
+// Если отдать им mockBrief, downstream-парсер не находит required-полей и
+// уходит в свой собственный heuristic-fallback — user видит generic ответ
+// без явного signal'а что это mock. Sprint 49 hotfix 9 закрыл sales_assistant;
+// hotfix 13 — conversation_analysis и sales_session.
 function mockJsonForFeature(opts: AICallOptions): Record<string, unknown> {
   const feature = opts.feature ?? '';
   if (feature === 'sales_assistant.analyze_fast') {
@@ -645,6 +649,43 @@ function mockJsonForFeature(opts: AICallOptions): Record<string, unknown> {
       conversationTemperature: 'COLD',
       emotionalRisks: [],
       toneShiftGuidance: 'Сохранять мягкий тон, задать уточняющий вопрос',
+    };
+  }
+  if (feature === 'conversation_analysis.analyze') {
+    return {
+      summary: 'AI временно отвечает резервной формой — реальный анализ не получен. Главные сигналы по разговору требуют ручной проверки.',
+      spinStage: 'S',
+      conversationQuality: 45,
+      investorInterest: 'Уровень интереса требует уточнения по дополнительным вопросам.',
+      investorConcerns: ['Точные сомнения инвестора не разобраны — нужен ручной просмотр транскрипта.'],
+      mistakes: ['AI не получил расширенного контекста — главные ошибки видны по реплике инвестора.'],
+      whatWorked: ['Менеджер удержал тон, дал инвестору высказаться.'],
+      nextBestAction: 'Зафиксировать следующий шаг и направить материалы.',
+      followUpMessage: 'Спасибо за встречу. Готов прислать материалы по обсуждённым вопросам в течение дня.',
+      probabilityScore: 40,
+      recommendedMaterials: ['Investment summary', 'Финмодель (если ещё не отправлена)'],
+      managerAdvice: 'Перечитайте транскрипт вручную — резервная подсказка не заменяет полный AI-разбор.',
+      sentiment: 'neutral',
+      aiScore: 45,
+      aiScoreBreakdown: {
+        rapport: 50, spin: 40, nextStepFixation: 40, objectionHandling: 40, clarity: 50, confidence: 45,
+      },
+    };
+  }
+  if (feature === 'sales_session.complete') {
+    return {
+      summary: 'AI временно отвечает резервной формой — карточка встречи собрана по эвристике, реальный AI-разбор не получен.',
+      investorInterest: 'Уточнить уровень интереса при следующем контакте.',
+      checkRange: 'не уточнён',
+      objections: ['Сомнения инвестора не разобраны автоматически — пересмотрите транскрипт.'],
+      risks: ['Резервная подсказка вместо полного AI-разбора.'],
+      materialsToSend: ['Investment summary'],
+      nextStep: 'Согласовать следующий звонок и определить, какие материалы прислать.',
+      followUpMessage: 'Спасибо за встречу. Готов прислать материалы по обсуждённым вопросам.',
+      probabilityScore: 35,
+      investorType: 'unknown',
+      tone: 'warm',
+      managerNote: 'Резервная карточка — проверьте транскрипт вручную.',
     };
   }
   // Default — brief shape (back-compat for brief.generate, ai_visibility_report, etc.)
