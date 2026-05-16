@@ -29,6 +29,13 @@ For project context (what the app is, how it works, current architecture), read 
 
 5. **Never bypass safety in git.** No `--no-verify`, no `--force` push, no `git reset --hard` on shared branches. If a hook fails, fix the cause.
 
+5a. **Never set `AI_PROVIDER=mock` for production.** The AI client silently falls back to mock output when the real provider fails, so a mocked prod looks healthy while serving fake answers. Mock is only allowed in:
+   - Local dev (default).
+   - Tests.
+   - An explicitly demo Render environment where both `AI_PROVIDER=mock` *and* `ALLOW_MOCK_AI_IN_PRODUCTION=true` are set in the dashboard. `/health.ai.warning` will still surface this to operators.
+
+   When in doubt: `AI_PROVIDER=openai` (or `anthropic`) for any environment a real user can reach. `render.yaml` must ship a real provider value as the default.
+
 6. **Don't run destructive DB commands without asking.** `prisma migrate reset`, dropping tables, manual SQL — confirm with the user. `prisma migrate dev` for additive changes is fine.
 
 7. **Respect existing endpoint contracts.** Routes documented in [AGENTS.md](AGENTS.md) under `## API surface` are used by the web client; do not change request/response shapes without updating both sides in the same change.

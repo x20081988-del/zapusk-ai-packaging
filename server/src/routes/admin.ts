@@ -7,7 +7,7 @@ import { prisma } from '../db.js';
 import { authMiddleware, getRole, getUser, normalizeRole, requireRole } from '../auth.js';
 import { generateInviteToken, signToken } from '../authCrypto.js';
 import { recordAudit } from '../lib/audit.js';
-import { env } from '../env.js';
+import { env, aiProviderStatus } from '../env.js';
 import { isFtsAvailable } from '../services/knowledgeFts.js';
 
 export const adminRoutes = Router();
@@ -214,6 +214,7 @@ adminRoutes.post('/smoke-token', async (req, res) => {
 adminRoutes.get('/security-scan', async (req, res) => {
   if (getRole(req) !== 'SUPER_ADMIN') return res.status(403).json({ error: 'super_admin_required' });
 
+  const aiStatus = aiProviderStatus();
   const checks = [
     check('uploads_exposure', true, 'uploads are served only through protected download endpoint; /uploads is hard-404'),
     check('demo_login_disabled', !env.DEMO_LOGIN_ALLOWED, 'POST /api/auth/demo must be disabled on production'),
@@ -222,6 +223,19 @@ adminRoutes.get('/security-scan', async (req, res) => {
     check('database_url_present', Boolean(process.env.DATABASE_URL), 'DATABASE_URL must be configured', 'critical'),
     check('uploads_dir_present', Boolean(env.UPLOADS_DIR), 'UPLOADS_DIR must be configured', 'warning'),
     check('smoke_token_super_admin_only', true, 'smoke-token endpoint is guarded by SUPER_ADMIN check'),
+    // Sprint 49 hotfix 11 — production AI provider guard. CRITICAL only when
+    // prod+mock AND no explicit override. With ALLOW_MOCK_AI_IN_PRODUCTION=true
+    // it's still surfaced but as a warning (operator explicitly chose this).
+    check(
+      'production_ai_provider_real',
+      aiStatus.warningSeverity !== 'critical',
+      aiStatus.warning === 'production_ai_provider_is_mock'
+        ? 'AI_PROVIDER=mock in production without ALLOW_MOCK_AI_IN_PRODUCTION — real AI is disabled, requests silently return mock output'
+        : aiStatus.warning === 'production_ai_provider_is_mock_explicit_override'
+          ? 'AI_PROVIDER=mock in production with ALLOW_MOCK_AI_IN_PRODUCTION=true — confirm this is intended for a demo URL'
+          : 'production AI provider is a real model',
+      aiStatus.warningSeverity === 'critical' ? 'critical' : aiStatus.warningSeverity === 'warning' ? 'warning' : undefined,
+    ),
     check(
       'ai_guardrails_enabled',
       env.AI_MAX_REQUESTS_PER_USER_PER_DAY > 0

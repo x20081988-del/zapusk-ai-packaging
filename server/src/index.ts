@@ -3,7 +3,7 @@ import cors from 'cors';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { env, isProd } from './env.js';
+import { env, isProd, aiProviderStatus, assertAiProviderOnStartup } from './env.js';
 import { demoGuard } from './middleware/demoGuard.js';
 import { authedAndActive } from './middleware/workspaceAccess.js';
 import { authRoutes } from './routes/auth.js';
@@ -89,13 +89,22 @@ app.get('/health', (_req, res) => {
     spaPath: webDistPath,
     disk,
     // Legacy ai block — оставляем для обратной совместимости c существующими
-    // диагностическими скриптами (см. Sprint 11.1 hotfix).
-    ai: {
-      provider: env.AI_PROVIDER,
-      openaiKeyConfigured: openaiConfigured,
-      anthropicKeyConfigured: anthropicConfigured,
-      openaiModelMain: env.OPENAI_MODEL_MAIN,
-    },
+    // диагностическими скриптами (см. Sprint 11.1 hotfix). Sprint 49 hotfix 11
+    // расширили блок: realProviderEnabled + warning делают невидимый mock-fallback
+    // громким сигналом для prod-smoke и operator'ов.
+    ai: (() => {
+      const status = aiProviderStatus();
+      return {
+        provider: status.provider,
+        openaiKeyConfigured: openaiConfigured,
+        anthropicKeyConfigured: anthropicConfigured,
+        openaiModelMain: env.OPENAI_MODEL_MAIN,
+        realProviderEnabled: status.realProviderEnabled,
+        warning: status.warning,
+        warningSeverity: status.warningSeverity,
+        allowMockInProduction: status.allowMockInProduction,
+      };
+    })(),
     // Sprint 17: новый блок — все 4 интеграции одним взглядом.
     integrations: {
       openai: openaiConfigured,
@@ -164,6 +173,11 @@ if (webDistPath) {
     res.sendFile(path.join(webDistPath, 'index.html'));
   });
 }
+
+// Sprint 49 hotfix 11 — optional fail-fast on prod misconfiguration. Always
+// logs the warning; only exits the process when ENFORCE_REAL_AI_PROVIDER=true.
+// Runs before app.listen so a refused boot doesn't bind the port.
+assertAiProviderOnStartup();
 
 app.listen(env.PORT, () => {
   console.log(`[zapusk-api] listening on port ${env.PORT}`);

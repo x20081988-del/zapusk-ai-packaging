@@ -151,6 +151,28 @@ async function checkOutcomeEditArchive(role: RoleName, projectId: string) {
 }
 
 async function main() {
+  // Sprint 49 hotfix 11 — guard against the silent prod→mock regression.
+  // /health.ai.provider drifted to mock once because the blueprint default
+  // shipped that way and a Blueprint sync could revert the dashboard
+  // override. Now the smoke fails CRITICAL if prod isn't on a real provider.
+  await check('production AI provider is real (not mock)', async () => {
+    const res = await request('/health');
+    const text = await res.text();
+    let parsed: { ai?: { provider?: string; realProviderEnabled?: boolean; warning?: string | null } } = {};
+    try { parsed = JSON.parse(text); } catch { /* leave parsed empty, check fails below */ }
+    const provider = parsed.ai?.provider;
+    const real = parsed.ai?.realProviderEnabled;
+    const warning = parsed.ai?.warning ?? null;
+    const ok = res.status === 200 && provider === 'openai' && real === true && warning === null;
+    return {
+      ok,
+      status: res.status,
+      detail: ok
+        ? `provider=${provider} realProviderEnabled=${real}`
+        : `CRITICAL: production AI provider is not openai (provider=${provider}, realProviderEnabled=${real}, warning=${warning})`,
+    };
+  });
+
   await check('public /api/auth/demo is 403', async () => {
     const res = await request('/api/auth/demo', {
       method: 'POST',

@@ -70,6 +70,25 @@ export const env = {
   BOOTSTRAP_DEMO_INVESTOR_EMAIL: process.env.BOOTSTRAP_DEMO_INVESTOR_EMAIL ?? 'demo-investor@zapusk.tech',
 
   AI_PROVIDER: (process.env.AI_PROVIDER ?? 'mock') as 'anthropic' | 'openai' | 'mock',
+  // Sprint 49 hotfix 11 — production AI provider guard.
+  //
+  // The AI client falls back to mock output when the configured provider is
+  // unreachable, so a production deploy that drifts to AI_PROVIDER=mock keeps
+  // serving traffic — only with fake answers. The blueprint shipped
+  // AI_PROVIDER=mock as the default for months because of an early-stage
+  // demo-friendly choice; the dashboard override to `openai` was reversible
+  // by any Blueprint sync. These flags make the regression loud:
+  //
+  // - ALLOW_MOCK_AI_IN_PRODUCTION=true is the only sanctioned way to run
+  //   mock in production (e.g., a public demo URL). Without it, health
+  //   surfaces `warning: production_ai_provider_is_mock` and the
+  //   security-scan returns a CRITICAL.
+  // - ENFORCE_REAL_AI_PROVIDER=true escalates: in production with
+  //   provider=mock and no allow flag, the process refuses to start.
+  //   OFF by default so that turning the flag on is an opt-in choice
+  //   that doesn't accidentally take prod down.
+  ALLOW_MOCK_AI_IN_PRODUCTION: truthy(process.env.ALLOW_MOCK_AI_IN_PRODUCTION),
+  ENFORCE_REAL_AI_PROVIDER: truthy(process.env.ENFORCE_REAL_AI_PROVIDER),
   AI_LOG_USAGE: truthy(process.env.AI_LOG_USAGE),
   AI_MAX_REQUESTS_PER_USER_PER_DAY: Number(process.env.AI_MAX_REQUESTS_PER_USER_PER_DAY ?? 500),
   AI_MAX_REQUESTS_PER_PROJECT_PER_DAY: Number(process.env.AI_MAX_REQUESTS_PER_PROJECT_PER_DAY ?? 2_000),
@@ -115,3 +134,75 @@ export const env = {
 };
 
 export const isProd = env.NODE_ENV === 'production';
+
+// Sprint 49 hotfix 11 — single source of truth for "is the AI provider real
+// in this environment". Consumed by /health, /api/admin/security-scan and the
+// optional fail-fast startup check. Keep this pure so it's safe to call from
+// anywhere without side effects.
+export type AiProviderStatusWarning =
+  | 'production_ai_provider_is_mock'
+  | 'production_ai_provider_is_mock_explicit_override'
+  | null;
+
+export interface AiProviderStatus {
+  provider: 'openai' | 'anthropic' | 'mock';
+  realProviderEnabled: boolean;
+  warning: AiProviderStatusWarning;
+  warningSeverity: 'critical' | 'warning' | 'info' | null;
+  allowMockInProduction: boolean;
+  enforceRealProvider: boolean;
+}
+
+export function aiProviderStatus(): AiProviderStatus {
+  const provider = env.AI_PROVIDER;
+  const realProviderEnabled = provider !== 'mock';
+  if (!isProd || realProviderEnabled) {
+    return {
+      provider,
+      realProviderEnabled,
+      warning: null,
+      warningSeverity: null,
+      allowMockInProduction: env.ALLOW_MOCK_AI_IN_PRODUCTION,
+      enforceRealProvider: env.ENFORCE_REAL_AI_PROVIDER,
+    };
+  }
+  // Production + mock. Severity depends on the explicit override.
+  if (env.ALLOW_MOCK_AI_IN_PRODUCTION) {
+    return {
+      provider,
+      realProviderEnabled: false,
+      warning: 'production_ai_provider_is_mock_explicit_override',
+      warningSeverity: 'warning',
+      allowMockInProduction: true,
+      enforceRealProvider: env.ENFORCE_REAL_AI_PROVIDER,
+    };
+  }
+  return {
+    provider,
+    realProviderEnabled: false,
+    warning: 'production_ai_provider_is_mock',
+    warningSeverity: 'critical',
+    allowMockInProduction: false,
+    enforceRealProvider: env.ENFORCE_REAL_AI_PROVIDER,
+  };
+}
+
+// Optional fail-fast on boot. Called from index.ts before app.listen so the
+// container crashes loudly when prod is misconfigured AND the operator opted
+// into strict enforcement. OFF by default to avoid taking prod down when the
+// flag is flipped during an unrelated incident.
+export function assertAiProviderOnStartup(): void {
+  const status = aiProviderStatus();
+  if (status.warning === 'production_ai_provider_is_mock' && env.ENFORCE_REAL_AI_PROVIDER) {
+    const msg =
+      '[startup] CRITICAL: AI_PROVIDER=mock in production without ALLOW_MOCK_AI_IN_PRODUCTION. ' +
+      'ENFORCE_REAL_AI_PROVIDER=true is set — refusing to start. ' +
+      'Set AI_PROVIDER=openai (or =anthropic) in Render env, OR unset ENFORCE_REAL_AI_PROVIDER to start anyway.';
+    console.error(msg);
+    process.exit(1);
+  }
+  if (status.warning) {
+    console.warn(`[startup] AI provider warning: ${status.warning} (severity=${status.warningSeverity}). ` +
+      `realProviderEnabled=${status.realProviderEnabled} allowMockInProduction=${status.allowMockInProduction}`);
+  }
+}

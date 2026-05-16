@@ -71,8 +71,17 @@ services:
         value: /var/data/uploads
       - key: CORS_ORIGIN
         value: "*"
+      # Production runs against a real OpenAI key. The blueprint must NEVER
+      # ship AI_PROVIDER=mock in production: the AI client silently falls
+      # back to mock output if the provider is unreachable, and a yaml
+      # default of `mock` made it impossible to distinguish "no key" from
+      # "explicitly mocked". Audit + guard live in server/src/env.ts and
+      # surface via /health.ai.warning + /api/admin/security-scan. If you
+      # need mock for a one-off demo env, override AI_PROVIDER=mock AND
+      # ALLOW_MOCK_AI_IN_PRODUCTION=true in the dashboard — yaml stays
+      # safe-by-default.
       - key: AI_PROVIDER
-        value: mock
+        value: openai
       # Fill these in the Render dashboard (Secret), not in source.
       - key: ANTHROPIC_API_KEY
         sync: false
