@@ -307,6 +307,20 @@ export const TEMPLATE_ORCHESTRATION: Record<string, TemplateOrchestration> = {
     model: 'gpt-4o-transcribe',
     outputType: 'transcription',
   },
+  // Sprint 51 hotfix P0.4 — qualification desk скрипты. Реальный AI-вызов
+  // делает sales_gpt (через analyzeSalesTurn / Fast), эти шаблоны
+  // используются как DB-managed контекстный блок, который layer'ится
+  // поверх. Поэтому orchestration совпадает с sales_gpt: OpenAI GPT-4.1
+  // для full advice + GPT-4o-mini для fast. modelRoute разруливается в
+  // aiClient — здесь фиксируем только основной tool/provider, чтобы в
+  // Super Admin не висело «инструмент не назначен».
+  'qualification.dlfy_vamlyam':         { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
+  'qualification.dlfy_base':            { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
+  'qualification.glavsnab':             { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
+  'qualification.zapusk_base':          { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
+  'qualification.zapusk_after_vamlyam': { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
+  'qualification.funnel_return':        { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
+  'qualification.generic':              { provider: 'openai', tool: 'gpt-4.1', model: null, outputType: 'sales_assistant' },
 };
 
 export function resolveOrchestration(templateKey: string): TemplateOrchestration | null {

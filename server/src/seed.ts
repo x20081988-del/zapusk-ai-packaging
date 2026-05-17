@@ -27,14 +27,38 @@ async function main() {
   // Future flag SEED_UPDATE_TEMPLATES=true можно ввести позже, если понадобится
   // force-обновление; в Sprint 35 он сознательно не реализован, чтобы не было
   // легального пути «случайно перетереть продакшен».
-  log('seeding prompt templates (create-if-missing)...');
+  log('seeding prompt templates (create-if-missing + null-orchestration backfill)...');
   for (const t of SEED_TEMPLATES) {
     const existing = await prisma.promptTemplate.findUnique({ where: { key: t.key } });
+    const orch = resolveOrchestration(t.key);
     if (existing) {
-      console.log(`[seed] template exists, skip update: ${t.key}`);
+      // Sprint 35 P0.1 — body/name/active/category/description никогда не
+      // переписываем (могут быть ручные правки админа).
+      // Sprint 51 hotfix P0.5 — но если provider/tool/outputType пусты
+      // (template был засеен до появления orchestration), безопасно дозаливаем
+      // их из TEMPLATE_ORCHESTRATION — это устраняет «инструмент не назначен»
+      // в Super Admin без перетирания ручных правок. Не-null значения не
+      // трогаем: админ мог сознательно переключить provider.
+      if (orch) {
+        const patch: Record<string, string> = {};
+        if (!existing.provider && orch.provider) patch.provider = orch.provider;
+        if (!existing.tool && orch.tool) patch.tool = orch.tool;
+        if (!existing.outputType && orch.outputType) patch.outputType = orch.outputType;
+        // model оставляем как есть: даже null валиден (route fallback'нется на env).
+        if (Object.keys(patch).length > 0) {
+          await prisma.promptTemplate.update({
+            where: { key: t.key },
+            data: patch,
+          });
+          console.log(`[seed] template orchestration backfilled: ${t.key} (${Object.keys(patch).join(', ')})`);
+        } else {
+          console.log(`[seed] template exists, skip update: ${t.key}`);
+        }
+      } else {
+        console.log(`[seed] template exists, skip update: ${t.key}`);
+      }
       continue;
     }
-    const orch = resolveOrchestration(t.key);
     await prisma.promptTemplate.create({
       data: {
         ...t,

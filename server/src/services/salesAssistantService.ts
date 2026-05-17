@@ -430,12 +430,41 @@ function applyDeskMode(system: string, input: AnalyzeInput): string {
   return `${system}\n\n${QUALIFICATION_SYSTEM_OVERLAY}`;
 }
 
+// Sprint 51 hotfix P0.4 — DB-first lookup для qualification скриптов.
+// Структура: `qualification.<scriptKey>` в PromptTemplate.body. Если шаблон
+// есть, активен и body длиннее 80 символов — используем его как контекстный
+// блок (суперадмин может править без redeploy). Иначе fallback на
+// hardcoded QUALIFICATION_SCRIPTS catalog. log'аем, какой источник
+// сработал, чтобы было видно в operational telemetry.
+async function resolveQualificationScriptBody(scriptKey: QualificationScriptKey): Promise<{
+  body: string;
+  source: 'db' | 'fallback';
+  templateId: string | null;
+}> {
+  const dbKey = `qualification.${scriptKey}`;
+  try {
+    const tpl = await prisma.promptTemplate.findFirst({ where: { key: dbKey } });
+    if (tpl && tpl.active && tpl.body && tpl.body.trim().length > 80) {
+      return { body: tpl.body, source: 'db', templateId: tpl.id };
+    }
+  } catch (err) {
+    console.warn(`[sales-assistant] qualification template fetch failed for ${dbKey}, using fallback:`, err);
+  }
+  return { body: formatQualificationContextBlock(scriptKey), source: 'fallback', templateId: null };
+}
+
 // Sprint 51 — qualification script block для user prompt. В режиме
-// 'meeting' возвращает пустую строку (промпт остаётся прежним).
-function qualificationContextLines(input: AnalyzeInput): string[] {
+// 'meeting' возвращает пустую строку (промпт остаётся прежним). В
+// qualification mode сначала смотрит в DB, иначе — fallback.
+async function qualificationContextLines(input: AnalyzeInput): Promise<string[]> {
   if (input.mode !== 'qualification') return [];
   const key = isQualificationScriptKey(input.scriptKey) ? input.scriptKey : 'generic';
-  return [formatQualificationContextBlock(key), ''];
+  const resolved = await resolveQualificationScriptBody(key);
+  console.log(
+    `[sales-assistant] qualification.${key} source=${resolved.source} ` +
+    `templateId=${resolved.templateId ?? 'none'}`,
+  );
+  return [resolved.body, ''];
 }
 
 export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCard> {
@@ -485,6 +514,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     console.log(`[sales-assistant] kb sources=${knowledge.sources.length} scanned=${knowledge.totalChunksScanned}`);
   }
 
+  const qualLines = await qualificationContextLines(input);
   const user = [
     deskMode === 'qualification'
       ? 'Режим работы: первичный звонок инвестору (qualification). Цель — назначить Zoom-встречу с экспертом + узнать чек/срок/критерии. См. system overlay.'
@@ -492,7 +522,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     'Сформируй structured mini-brief для текущего момента. Каждый блок 1-3 строки, не больше.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно. Если этап S уже закрыт — двигай в P/I/N.',
     '',
-    ...qualificationContextLines(input),
+    ...qualLines,
     'Контекст проекта:',
     projectContext,
     '',
@@ -714,6 +744,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     totalChars: knowledgeBlock.length,
   };
 
+  const qualLines = await qualificationContextLines(input);
   const user = [
     deskMode === 'qualification'
       ? 'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ПОДСКАЗКА ДЛЯ ПЕРВИЧНОГО ЗВОНКА. Цель — Zoom-слот с экспертом + чек/срок/критерии.'
@@ -723,7 +754,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
       : 'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно.',
     '',
-    ...qualificationContextLines(input),
+    ...qualLines,
     'Контекст проекта:',
     projectContext,
     '',

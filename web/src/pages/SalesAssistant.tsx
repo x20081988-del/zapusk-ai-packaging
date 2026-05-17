@@ -771,7 +771,9 @@ export default function SalesAssistant() {
   async function runPrepare() {
     const context = transcriptWithInterim().trim();
     if (context.length < 20) {
-      setPermError('Вставьте контекст встречи перед подготовкой (минимум 20 символов).');
+      setPermError(deskMode === 'qualification'
+        ? 'Вставьте контекст звонка перед подготовкой (минимум 20 символов).'
+        : 'Вставьте контекст встречи перед подготовкой (минимум 20 символов).');
       return;
     }
     setIsPreparing(true);
@@ -1219,7 +1221,7 @@ export default function SalesAssistant() {
     if (meetingState === 'finalized') return; // уже сохранили
     const transcriptText = fullTranscript();
     if (transcriptText.trim().length < 10) {
-      setPermError('Слишком короткая встреча. Дайте AI хотя бы пару фраз для анализа.');
+      setPermError(labels.finalizeTooShort);
       return;
     }
     finishingRef.current = true;
@@ -1268,7 +1270,7 @@ export default function SalesAssistant() {
     if (/project_required/i.test(rawMessage)) {
       // После hotfix 10 backend больше так не отвечает, но защита остаётся
       // на случай старого сервера.
-      return 'Встреча сохранена без привязки к проекту. Попробуйте ещё раз.';
+      return labels.finalizeProjectFallback;
     }
     if (/transcript_too_short/i.test(rawMessage)) {
       return 'Транскрипция слишком короткая. Поговорите ещё минуту и нажмите ещё раз.';
@@ -1283,9 +1285,9 @@ export default function SalesAssistant() {
       return 'AI ограничил частоту запросов. Подождите минуту и попробуйте ещё раз.';
     }
     if (/^5\d{2}\s|complete_session_failed/i.test(rawMessage)) {
-      return 'Не удалось сохранить встречу. Транскрипция и подсказки сохранены на экране, попробуйте ещё раз.';
+      return labels.finalizeGeneric;
     }
-    return 'Не удалось завершить встречу. Транскрипция и подсказки сохранены, попробуйте ещё раз.';
+    return labels.finalizeGeneric2;
   }
 
   function closeFinishModal() {
@@ -1439,25 +1441,30 @@ export default function SalesAssistant() {
 
   // Sprint 34В — отдельные статусы транскрипции и AI-подсказки.
   // Транскрипция идёт непрерывно; подсказка обновляется ТОЛЬКО по кнопке.
+  // Sprint 51 hotfix P0.3 — title зависит от deskMode (звонок vs встреча).
+  // Для idle / stopped используем общую формулировку.
+  const isQual = deskMode === 'qualification';
   const statusText: Record<SpeechStatus, { title: string; hint: string }> = {
     idle: {
       title: 'Готов к старту',
-      hint: 'Нажмите «Начать прослушивание» и разрешите доступ к микрофону.',
+      hint: isQual
+        ? 'Нажмите «Начать звонок» и разрешите доступ к микрофону.'
+        : 'Нажмите «Начать прослушивание» и разрешите доступ к микрофону.',
     },
     listening: {
-      title: 'Слушаю встречу',
+      title: isQual ? 'Слушаю звонок' : 'Слушаю встречу',
       hint: 'Говорите естественно. Паузы не сбрасывают транскрипцию. Подсказку обновите по кнопке, когда нужно.',
     },
-    // Sprint 34A/В — restarting рендерится как «Слушаю встречу», без отдельного title.
-    // Браузер делит speech на сегменты; для пользователя это должно выглядеть
-    // как непрерывное прослушивание.
+    // Sprint 34A/В — restarting рендерится так же, без отдельного title.
     restarting: {
-      title: 'Слушаю встречу',
+      title: isQual ? 'Слушаю звонок' : 'Слушаю встречу',
       hint: 'Пауза в речи, продолжаю слушать. Транскрипция не прерывается.',
     },
     stopped: {
       title: 'Остановлено пользователем',
-      hint: 'Можно продолжить встречу или сбросить текущую транскрипцию.',
+      hint: isQual
+        ? 'Можно продолжить звонок или сбросить текущую транскрипцию.'
+        : 'Можно продолжить встречу или сбросить текущую транскрипцию.',
     },
     mic_error: {
       title: 'Ошибка микрофона',
@@ -1474,16 +1481,35 @@ export default function SalesAssistant() {
     : role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER'
       ? (card?.provider === 'openai' ? 'OpenAI' : card?.provider ?? 'AI')
       : 'AI слушает встречу';
-  const isLiveMeetingLayout = isLiveSessionActive;
+  // Sprint 51 hotfix P0.1 — раньше layout привязывался к isLiveSessionActive,
+  // которое прошлый CTA-fix сохранял true после Stop (если был транскрипт) —
+  // чтобы кнопка «Получить подсказку» не откатывалась к «Подготовиться». Но
+  // тот же флаг управлял Stop/Start toggle: layout оставался в live-режиме,
+  // Stop-кнопка не пропадала, второй клик не давал визуальной реакции →
+  // пользователь репортит «Stop не работает».
+  //
+  // Решение: разделить два решения.
+  //   • isLiveSessionActive — «было ли когда-то нажато Start» → используется
+  //     только в inPrepMode/CTA-логике («Получить подсказку» vs «Подготовиться»).
+  //   • isMicCapturing — «прямо сейчас идёт захват аудио» → используется
+  //     для рендера Stop vs Start кнопки и live-layout. После Stop этот флаг
+  //     гарантированно становится false, даже если транскрипт сохранён.
+  const isMicCapturing = listening || meetingState === 'listening';
+  const isLiveMeetingLayout = isMicCapturing;
   const showPreparationBlocks = !isLiveMeetingLayout;
   const actionButtonClass = 'w-full sm:w-auto min-w-0 sm:min-w-[132px] lg:min-w-[168px] whitespace-nowrap';
   // Sprint 51 — лейблы CTA меняются по deskMode. Логика рендера не
   // дублируется: одна и та же кнопка показывает «Начать прослушивание»
   // на встрече и «Начать звонок» в qualification.
+  // Sprint 51 hotfix P0.3 — единая словарная разметка под deskMode. В meeting
+  // mode тексты остаются прежними («встреча», «прослушивание»); в qualification
+  // mode заменяются на «звонок». Это устраняет смешение терминов внутри
+  // одного режима.
   const labels = deskMode === 'qualification'
     ? {
         deskHeader: 'Квалификация инвестора',
         deskSubtitle: 'Помогает менеджеру провести первичный звонок и назначить встречу с экспертом',
+        liveHeader: 'Живой звонок',
         startLong: 'Начать звонок',
         startShort: 'Начать',
         stop: 'Остановить',
@@ -1493,12 +1519,35 @@ export default function SalesAssistant() {
         finishShort: 'Завершить',
         finishedLong: 'Звонок сохранён',
         finishedShort: 'Сохранён',
+        pasteCtxLong: 'Вставить контекст звонка',
+        ctxAddedBadge: 'Контекст звонка добавлен',
+        ctxPlaceholder: 'Вставьте контекст звонка: данные лида (Авито, ВамЛям, Telegram), переписку, цель, чек. Система подготовит план звонка и первые вопросы.',
+        ctxHelpPreCall: 'Добавьте контекст инвестора и сценария перед звонком',
+        ctxHelpPreCallLong: 'Добавьте контекст инвестора, проекта или предыдущего общения — AI подготовит структуру звонка и первые вопросы.',
+        listeningTitle: 'Слушаю звонок',
+        listeningHintFirst: 'Слушаю звонок. Первые фразы появятся здесь.',
+        projectHeader: 'Проект для звонка',
+        projectHint: 'AI использует контекст проекта в подсказках. Можно оставить «Без проекта» — звонок сохранится отдельно.',
+        projectEmptyOption: 'Без проекта (отдельная сессия)',
+        projectEmptyHint: 'У вас пока нет проектов. Сессия будет сохранена без привязки — можно завести проект позже.',
+        investorFieldsHint: 'Эти поля попадут в карточку звонка. Можно оставить пустыми — система сохранит «инвестор без имени».',
+        planTabLabel: 'План звонка',
+        planTabTooltipNeedPrep: 'Сначала «Подготовиться к звонку»',
+        planTabTooltipOpen: 'Открыть план звонка',
+        prepStep2Title: 'Живой звонок + подсказки',
+        prepStep2Text: 'Транскрипция и ручное обновление подсказок',
+        engineBadge: 'слушаю звонок',
+        finalizeTooShort: 'Слишком короткий звонок. Дайте AI хотя бы пару фраз для анализа.',
+        finalizeProjectFallback: 'Звонок сохранён без привязки к проекту. Попробуйте ещё раз.',
+        finalizeGeneric: 'Не удалось сохранить звонок. Транскрипция и подсказки сохранены на экране, попробуйте ещё раз.',
+        finalizeGeneric2: 'Не удалось завершить звонок. Транскрипция и подсказки сохранены, попробуйте ещё раз.',
       }
     : {
         deskHeader: 'Живая встреча',
         deskSubtitle: isLiveMeetingLayout
           ? 'Транскрипция и подсказка ниже.'
           : 'Подготовьте план или начните разговор.',
+        liveHeader: 'Живая встреча',
         startLong: 'Начать прослушивание',
         startShort: 'Начать',
         stop: 'Остановить',
@@ -1508,6 +1557,28 @@ export default function SalesAssistant() {
         finishShort: 'Завершить',
         finishedLong: 'Встреча сохранена',
         finishedShort: 'Сохранена',
+        pasteCtxLong: 'Вставить контекст встречи',
+        ctxAddedBadge: 'Контекст встречи добавлен',
+        ctxPlaceholder: 'Вставьте контекст встречи: переписку, заметки, описание проекта или расшифровку разговора. Система подготовит план встречи и первые вопросы.',
+        ctxHelpPreCall: 'Добавьте контекст инвестора или проекта перед встречей',
+        ctxHelpPreCallLong: 'Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.',
+        listeningTitle: 'Слушаю встречу',
+        listeningHintFirst: 'Слушаю встречу. Первые фразы появятся здесь.',
+        projectHeader: 'Проект для этой встречи',
+        projectHint: 'AI использует контекст проекта в подсказках. Можно оставить «Без проекта» — встреча сохранится отдельно.',
+        projectEmptyOption: 'Без проекта (отдельная встреча)',
+        projectEmptyHint: 'У вас пока нет проектов. Встреча будет сохранена без привязки — можно завести проект позже.',
+        investorFieldsHint: 'Эти поля попадут в карточку встречи. Можно оставить пустыми — система сохранит «инвестор без имени».',
+        planTabLabel: 'План встречи',
+        planTabTooltipNeedPrep: 'Сначала «Подготовиться ко встрече»',
+        planTabTooltipOpen: 'Открыть план встречи',
+        prepStep2Title: 'Живая встреча + подсказки',
+        prepStep2Text: 'Транскрипция и ручное обновление подсказок',
+        engineBadge: 'слушаю встречу',
+        finalizeTooShort: 'Слишком короткая встреча. Дайте AI хотя бы пару фраз для анализа.',
+        finalizeProjectFallback: 'Встреча сохранена без привязки к проекту. Попробуйте ещё раз.',
+        finalizeGeneric: 'Не удалось сохранить встречу. Транскрипция и подсказки сохранены на экране, попробуйте ещё раз.',
+        finalizeGeneric2: 'Не удалось завершить встречу. Транскрипция и подсказки сохранены, попробуйте ещё раз.',
       };
 
   return (
@@ -1520,32 +1591,48 @@ export default function SalesAssistant() {
           переключаться можно только когда не listening. */}
       <Card padded className="mb-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs">
+          {/* Sprint 51 hotfix P0.2 — active vs disabled visual должны быть
+              различимыми. Активный таб всегда: bg-grad-ai + canvas-text +
+              shadow-ai-glow + aria-pressed=true. Disabled (только во время
+              захвата аудио) добавляет opacity-50 + cursor-not-allowed; на
+              активный таб opacity НЕ накладываем, чтобы он не сливался с
+              неактивным. */}
+          <div
+            role="tablist"
+            aria-label="Режим AI-ассистента"
+            className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs"
+          >
             <button
               type="button"
+              role="tab"
+              aria-pressed={deskMode === 'meeting'}
               className={clsx(
                 'px-3 h-8 rounded font-semibold transition-colors whitespace-nowrap',
                 deskMode === 'meeting'
-                  ? 'bg-ai/15 text-ai-glow'
+                  ? 'bg-grad-ai text-canvas shadow-ai-glow'
                   : 'text-secondary hover:text-primary',
+                isMicCapturing && deskMode !== 'meeting' && 'opacity-50 cursor-not-allowed',
               )}
-              onClick={() => !isLiveSessionActive && setDeskMode('meeting')}
-              disabled={isLiveSessionActive}
-              title={isLiveSessionActive ? 'Завершите сессию, чтобы переключить режим' : 'Полноценная встреча с инвестором'}
+              onClick={() => !isMicCapturing && setDeskMode('meeting')}
+              disabled={isMicCapturing}
+              title={isMicCapturing ? 'Остановите захват, чтобы переключить режим' : 'Полноценная встреча с инвестором'}
             >
               Проведение встречи
             </button>
             <button
               type="button"
+              role="tab"
+              aria-pressed={deskMode === 'qualification'}
               className={clsx(
                 'px-3 h-8 rounded font-semibold transition-colors whitespace-nowrap',
                 deskMode === 'qualification'
-                  ? 'bg-ai/15 text-ai-glow'
+                  ? 'bg-grad-ai text-canvas shadow-ai-glow'
                   : 'text-secondary hover:text-primary',
+                isMicCapturing && deskMode !== 'qualification' && 'opacity-50 cursor-not-allowed',
               )}
-              onClick={() => !isLiveSessionActive && setDeskMode('qualification')}
-              disabled={isLiveSessionActive}
-              title={isLiveSessionActive ? 'Завершите сессию, чтобы переключить режим' : 'Первичный звонок инвестору, цель — Zoom с экспертом'}
+              onClick={() => !isMicCapturing && setDeskMode('qualification')}
+              disabled={isMicCapturing}
+              title={isMicCapturing ? 'Остановите захват, чтобы переключить режим' : 'Первичный звонок инвестору, цель — Zoom с экспертом'}
             >
               Квалификация инвестора
             </button>
@@ -1557,7 +1644,7 @@ export default function SalesAssistant() {
                 id="quali-script"
                 value={scriptKey}
                 onChange={(e) => setScriptKey(e.target.value as QualificationScriptKey)}
-                disabled={isLiveSessionActive}
+                disabled={isMicCapturing}
                 className="bg-elevated border border-line text-primary rounded-md px-2 h-8 text-xs disabled:opacity-50"
                 title={QUALIFICATION_SCRIPTS.find((s) => s.key === scriptKey)?.hint ?? ''}
               >
@@ -1713,7 +1800,7 @@ export default function SalesAssistant() {
                 <StatusBadge tone="warning" dot>резервная браузерная</StatusBadge>
               )}
               {(speechStatus === 'listening' || speechStatus === 'restarting') && (
-                <StatusBadge tone="success" dot>слушаю встречу</StatusBadge>
+                <StatusBadge tone="success" dot>{labels.engineBadge}</StatusBadge>
               )}
               {speechStatus === 'stopped' && <StatusBadge tone="neutral" dot>остановлено</StatusBadge>}
               {speechStatus === 'mic_error' && <StatusBadge tone="danger" dot>ошибка микрофона</StatusBadge>}
@@ -1793,9 +1880,9 @@ export default function SalesAssistant() {
         <div className="flex items-center gap-3 mb-3">
           <BriefcaseBusiness size={16} className="text-zapusk-400" />
           <div>
-            <div className="text-sm font-semibold text-primary">Проект для этой встречи</div>
+            <div className="text-sm font-semibold text-primary">{labels.projectHeader}</div>
             <div className="text-[11px] text-muted">
-              AI использует контекст проекта в подсказках. Можно оставить «Без проекта» — встреча сохранится отдельно.
+              {labels.projectHint}
             </div>
           </div>
         </div>
@@ -1803,13 +1890,13 @@ export default function SalesAssistant() {
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
           options={[
-            { value: '', label: 'Без проекта (отдельная встреча)' },
+            { value: '', label: labels.projectEmptyOption },
             ...visibleProjects.map((p) => ({ value: p.id, label: p.name })),
           ]}
         />
         {visibleProjects.length === 0 && (
           <p className="text-[11px] text-muted mt-2">
-            У вас пока нет проектов. Встреча будет сохранена без привязки — можно завести проект позже.
+            {labels.projectEmptyHint}
           </p>
         )}
       </Card>
@@ -1833,7 +1920,7 @@ export default function SalesAssistant() {
           />
         </div>
         <p className="text-[11px] text-muted mt-2">
-          Эти поля попадут в карточку встречи. Можно оставить пустыми — система сохранит «инвестор без имени».
+          {labels.investorFieldsHint}
         </p>
       </Card>
       )}
@@ -1844,21 +1931,23 @@ export default function SalesAssistant() {
           <PrepFlowStep
             step="ЭТАП 1"
             title="Подготовка"
-            text="Контекст встречи и план разговора"
+            text={deskMode === 'qualification' ? 'Контекст звонка и план разговора' : 'Контекст встречи и план разговора'}
             active={inPrepMode || meetingMode === 'plan'}
             done={Boolean(meetingPlan)}
           />
           <ChevronRight size={18} className="hidden lg:block text-ai-glow shrink-0" />
           <PrepFlowStep
             step="ЭТАП 2"
-            title="Живая встреча + подсказки"
-            text="Транскрипция и ручное обновление подсказок"
+            title={labels.prepStep2Title}
+            text={labels.prepStep2Text}
             active={listening || meetingMode === 'live'}
             done={Boolean(card || fastCard)}
           />
         </div>
         <p className="mt-3 text-xs text-secondary">
-          Сначала подготовьте структуру встречи, затем запускайте живую транскрипцию.
+          {deskMode === 'qualification'
+            ? 'Сначала подготовьте структуру звонка, затем запускайте живую транскрипцию.'
+            : 'Сначала подготовьте структуру встречи, затем запускайте живую транскрипцию.'}
         </p>
       </Card>
       )}
@@ -1868,7 +1957,10 @@ export default function SalesAssistant() {
         {/* TRANSCRIPT */}
         <Card padded>
           <div className="flex items-start justify-between gap-3 mb-3">
-            <CardHeader title="Живая транскрипция" subtitle="Слева растёт диалог встречи в реальном времени" />
+            <CardHeader
+              title="Живая транскрипция"
+              subtitle={deskMode === 'qualification' ? 'Слева растёт диалог звонка в реальном времени' : 'Слева растёт диалог встречи в реальном времени'}
+            />
             {/* Sprint 50 hotfix — manual paste mode. Founders import Zoom Notes /
                 Telegram transcripts and run advice without ever turning the
                 mic on. Combined with live transcript when both present. */}
@@ -1887,11 +1979,11 @@ export default function SalesAssistant() {
                     setIsEditingTranscript(true);
                   }}
                 >
-                  {manualTranscript ? 'Дальше вставить текст' : 'Вставить контекст встречи'}
+                  {manualTranscript ? 'Дальше вставить текст' : labels.pasteCtxLong}
                 </Button>
                 {!manualTranscript && (
                   <span className="max-w-[220px] text-right text-[11px] leading-snug text-muted">
-                    Добавьте контекст инвестора или проекта перед встречей
+                    {labels.ctxHelpPreCall}
                   </span>
                 )}
               </div>
@@ -1903,7 +1995,7 @@ export default function SalesAssistant() {
               <textarea
                 value={manualDraft}
                 onChange={(e) => setManualDraft(e.target.value)}
-                placeholder="Вставьте контекст встречи: переписку, заметки, описание проекта или расшифровку разговора. Система подготовит план встречи и первые вопросы."
+                placeholder={labels.ctxPlaceholder}
                 className="w-full h-[55vh] bg-canvas border border-hairline rounded-md p-3 text-[13.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
               />
               <div className="flex items-center justify-between gap-2">
@@ -1936,7 +2028,7 @@ export default function SalesAssistant() {
               {manualTranscript && (
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <StatusBadge tone="success" dot>Контекст встречи добавлен</StatusBadge>
+                    <StatusBadge tone="success" dot>{labels.ctxAddedBadge}</StatusBadge>
                     <StatusBadge tone="info">Текст вставлен вручную</StatusBadge>
                     {isLiveMeetingLayout && (
                       <span className="text-[11px] text-muted">
@@ -1964,9 +2056,7 @@ export default function SalesAssistant() {
               >
                 {transcript.length === 0 && !interim && (!manualTranscript || isLiveMeetingLayout) && (
                   <p className="text-sm text-muted text-center py-8">
-                    {isLiveMeetingLayout
-                      ? 'Слушаю встречу. Первые фразы появятся здесь.'
-                      : 'Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.'}
+                    {isLiveMeetingLayout ? labels.listeningHintFirst : labels.ctxHelpPreCallLong}
                   </p>
                 )}
                 {/* Manual context is not a spoken live segment. Keep the body
@@ -2022,9 +2112,9 @@ export default function SalesAssistant() {
                 )}
                 onClick={() => meetingPlan && setMeetingMode('plan')}
                 disabled={!meetingPlan}
-                title={!meetingPlan ? 'Сначала «Подготовиться ко встрече»' : 'Открыть план встречи'}
+                title={!meetingPlan ? labels.planTabTooltipNeedPrep : labels.planTabTooltipOpen}
               >
-                План встречи
+                {labels.planTabLabel}
               </button>
             </div>
           )}
@@ -2035,11 +2125,13 @@ export default function SalesAssistant() {
                 <Sparkles size={18} />
               </div>
               <h3 className="text-base font-semibold text-primary mb-1">
-                {inPrepMode ? 'Готовы подготовиться к встрече?' : 'Подсказки появятся здесь'}
+                {inPrepMode
+                  ? (deskMode === 'qualification' ? 'Готовы подготовиться к звонку?' : 'Готовы подготовиться к встрече?')
+                  : 'Подсказки появятся здесь'}
               </h3>
               <p className="text-xs text-secondary max-w-sm mx-auto">
                 {inPrepMode
-                  ? 'Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.'
+                  ? labels.ctxHelpPreCallLong
                   : 'Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.'}
               </p>
             </Card>
@@ -2047,7 +2139,7 @@ export default function SalesAssistant() {
 
           {/* План встречи (prep mode result) */}
           {meetingMode === 'plan' && meetingPlan && (
-            <MeetingPlanCard plan={meetingPlan} />
+            <MeetingPlanCard plan={meetingPlan} title={labels.planTabLabel} />
           )}
 
           {/* Sprint 34В — fast tactical reply показывается СРАЗУ; полная
@@ -2631,7 +2723,7 @@ function OutcomePanel({
 // Sprint 50 hotfix — meeting prep plan view. Renders the 8 sections of the
 // MeetingPlan returned by /api/sales-assistant/prepare. Distinct from
 // AdviceCard (live "what to say next") — this is the pre-call strategy.
-function MeetingPlanCard({ plan }: { plan: MeetingPlan }) {
+function MeetingPlanCard({ plan, title = 'План встречи' }: { plan: MeetingPlan; title?: string }) {
   const TONE_LABEL: Record<MeetingPlan['conversationStyle']['tone'], string> = {
     aggressive: 'Активно вести разговор',
     soft: 'Мягко, без давления',
@@ -2648,7 +2740,7 @@ function MeetingPlanCard({ plan }: { plan: MeetingPlan }) {
       <div className="flex items-center gap-2 mb-4">
         <Compass size={16} className="text-ai-glow" />
         <h2 className="text-[13px] uppercase tracking-[0.16em] text-ai-glow font-bold">
-          План встречи
+          {title}
         </h2>
         {plan.promptSource === 'db' && <StatusBadge tone="success" dot>шаблон из админки</StatusBadge>}
         {plan.promptSource === 'fallback' && !plan.fellBackToMock && <StatusBadge tone="warning" dot>резервный шаблон</StatusBadge>}

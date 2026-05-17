@@ -29,6 +29,11 @@ export interface SeedTemplate {
 // PromptTemplate с key='brief_extractor', briefService читает динамически.
 import { SYSTEM_BRIEF_EXTRACTOR } from '../ai/prompts.js';
 import { MEETING_PREP_SYSTEM_FALLBACK } from '../ai/meetingPrepPrompt.js';
+import {
+  QUALIFICATION_SCRIPTS,
+  formatQualificationContextBlock,
+  type QualificationScriptKey,
+} from '../ai/qualificationPrompts.js';
 
 // Sprint 20 — AI Search Visibility & AEO layer.
 // Все landing-style материалы (landing, one_pager, lovable_pitch, pitch_structure)
@@ -1163,3 +1168,42 @@ ZAPUSK AI, Zapusk, Запуск; DLFY, Delphi, Делфи; Главснаб, Gla
 Не переводи бренды на русский (Zapusk ≠ «запуск», DLFY ≠ «делфи»). Не вставляй «[неразборчиво]» — лучше многоточие. Только транскрипция, без комментариев.`,
   },
 ];
+
+// ─────────────────────────────────────────────────────────────
+// N. Qualification Desk scripts (Sprint 51 hotfix P0.4)
+// ─────────────────────────────────────────────────────────────
+// 7 шаблонов первичного обзвона инвестора — DLFY с двух источников,
+// ГлавСнаб, два Zapusk-варианта (база и после ВамЛям), возврат в воронку,
+// generic. Каждый шаблон — самодостаточный prompt body: содержит pitch,
+// qualifying questions, Zoom-close фразу и блок типовых возражений.
+//
+// Backend (salesAssistantService → resolveQualificationScript) сначала
+// смотрит в DB по ключу `qualification.<scriptKey>`. Если template есть
+// и активен — body используется как контекстный блок. Если нет — fallback
+// на формируемый QUALIFICATION_SCRIPTS catalog в коде. Это даёт
+// суперадмину возможность поправить любой скрипт без redeploy.
+function buildQualificationSeed(key: QualificationScriptKey): SeedTemplate {
+  const script = QUALIFICATION_SCRIPTS[key];
+  return {
+    key: `qualification.${key}`,
+    name: `Qualification · ${script.label}`,
+    category: 'qualification',
+    description:
+      `Скрипт первичного звонка «${script.label}». Используется в AI-ассистенте в режиме «Квалификация инвестора». Цель — назначить Zoom с экспертом, не продать сделку.`,
+    body: formatQualificationContextBlock(key),
+  };
+}
+
+const QUALIFICATION_SCRIPT_KEYS: QualificationScriptKey[] = [
+  'dlfy_vamlyam',
+  'dlfy_base',
+  'glavsnab',
+  'zapusk_base',
+  'zapusk_after_vamlyam',
+  'funnel_return',
+  'generic',
+];
+
+for (const key of QUALIFICATION_SCRIPT_KEYS) {
+  SEED_TEMPLATES.push(buildQualificationSeed(key));
+}
