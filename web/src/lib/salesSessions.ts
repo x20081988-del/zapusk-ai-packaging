@@ -46,6 +46,14 @@ export interface SalesSession {
   aiProvider: string | null;
   aiModel: string | null;
   fellBackToMock: boolean;
+  // Sprint 52 P0.3 — outcome dataset
+  outcome?: string | null;
+  managerOutcomeNotes?: string | null;
+  // Sprint 54 P0 — hybrid transcription. Optional because legacy rows
+  // pre-date the schema; service treats null as draft / no-audio.
+  transcriptSource?: 'realtime_draft' | 'offline_clean' | 'uploaded_audio' | 'manual' | null;
+  transcriptQualityStatus?: 'draft' | 'clean' | 'failed' | 'not_available' | null;
+  audioStoragePath?: string | null;
   createdAt: string;
   updatedAt: string;
   project?: { id: string; name: string } | null;
@@ -96,6 +104,22 @@ export function updateMeetingOutcome(
     `/api/sales-sessions/${id}/outcome`,
     patch,
   );
+}
+
+// Sprint 54 P0 — hybrid transcription: загрузить recorded audio после
+// финализации. Backend запустит gpt-4o-transcribe и заменит draft на clean.
+// Response status: 'clean' | 'failed' | 'not_available'.
+export interface AudioUploadResult {
+  status: 'clean' | 'failed' | 'not_available';
+  audioStoragePath?: string;
+  provider?: string | null;
+  model?: string | null;
+  latencyMs?: number;
+}
+export function uploadMeetingAudio(id: string, blob: Blob, filename: string) {
+  const form = new FormData();
+  form.append('audio', blob, filename);
+  return api.upload<AudioUploadResult>(`/api/sales-sessions/${id}/audio`, form);
 }
 
 export function listMeetings(filters: { projectId?: string; leadId?: string } = {}) {

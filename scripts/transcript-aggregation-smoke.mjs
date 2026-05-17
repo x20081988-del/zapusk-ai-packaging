@@ -21,14 +21,37 @@
 //   6. Interim updates do NOT pollute the final array.
 
 // ─── Helpers under test (mirror of web/src/pages/SalesAssistant.tsx) ───
-function appendFinalSegment(prev, text, source) {
+// Hallucination guard config — keep in sync with web/src/pages/SalesAssistant.tsx
+const SUSPICIOUS_AI_PROMPT_PHRASES = [
+  /^Чек или доля\??$/i,
+  /^Ну, если вы настаиваете[.…]{0,3}$/i,
+  /^Подскажите.{0,30}\?$/i,
+  /^Я правильно понимаю\??$/i,
+  /^Что для вас важнее.{0,40}\?$/i,
+];
+const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000;
+const HALLUCINATION_MAX_CHARS = 40;
+
+function looksLikeAiHallucination(text, prev, now) {
+  if (text.length > HALLUCINATION_MAX_CHARS) return false;
+  if (!SUSPICIOUS_AI_PROMPT_PHRASES.some((re) => re.test(text))) return false;
+  const last = prev[prev.length - 1];
+  if (!last) return true;
+  return (now - last.ts) >= HALLUCINATION_ISOLATION_WINDOW_MS;
+}
+
+function appendFinalSegment(prev, text, source, nowOverride) {
   const trimmed = (text ?? '').trim();
   if (!trimmed) return prev;
   const last = prev[prev.length - 1];
   if (last && last.final && last.text.trim() === trimmed) {
     return prev; // dedup
   }
-  return [...prev, { ts: Date.now(), final: true, text: trimmed, source }];
+  const now = nowOverride ?? Date.now();
+  if (looksLikeAiHallucination(trimmed, prev, now)) {
+    return prev; // hallucination drop
+  }
+  return [...prev, { ts: now, final: true, text: trimmed, source }];
 }
 
 // Brand normalizer (mirror of web/src/lib/transcriptNormalize.ts)
@@ -64,17 +87,19 @@ const SIMULATED_EVENTS = [
 ];
 
 // ─── Replay simulation ───
+// Simulate timing: events arrive every 2s, except where noted.
+let now = 1_000_000;
 let transcript = [];
 const currentSessionId = 1;
 let dropped = 0;
 for (const ev of SIMULATED_EVENTS) {
-  // Session-id guard (same logic as SalesAssistant onFinal)
+  now += 2_000; // 2 sec between events
   if (ev.sessionId !== currentSessionId) {
     dropped++;
     continue;
   }
   const normalized = normalizeTranscript(ev.transcript);
-  transcript = appendFinalSegment(transcript, normalized, 'realtime');
+  transcript = appendFinalSegment(transcript, normalized, 'realtime', now);
 }
 
 // ─── Assertions ───
@@ -135,3 +160,97 @@ if (!ok) {
   process.exit(1);
 }
 console.log('\n✓ PASS — all required phrases survived aggregation.\n');
+
+// ─── Sprint 54 P0.5 — Hallucination guard scenarios ───
+console.log('\n=== Hallucination Guard Test ===\n');
+
+function runHallucinationCase(label, events, expect) {
+  let t = [];
+  let n = 1_000_000;
+  for (const ev of events) {
+    n += ev.advanceMs ?? 2_000;
+    t = appendFinalSegment(t, ev.text, 'realtime', n);
+  }
+  const final = t.map((s) => s.text);
+  const expectInFinal = expect.includes ?? [];
+  const expectNotInFinal = expect.excludes ?? [];
+  const okIncludes = expectInFinal.every((p) => final.some((seg) => seg.includes(p)));
+  const okExcludes = expectNotInFinal.every((p) => !final.some((seg) => seg.includes(p)));
+  const pass = okIncludes && okExcludes;
+  console.log(`  ${pass ? '✓' : '✗'} ${label}`);
+  console.log(`     final = ${JSON.stringify(final)}`);
+  if (!pass) {
+    if (!okIncludes) {
+      const missing = expectInFinal.filter((p) => !final.some((seg) => seg.includes(p)));
+      console.log(`     missing: ${JSON.stringify(missing)}`);
+    }
+    if (!okExcludes) {
+      const present = expectNotInFinal.filter((p) => final.some((seg) => seg.includes(p)));
+      console.log(`     should-be-dropped but present: ${JSON.stringify(present)}`);
+    }
+  }
+  return pass;
+}
+
+const halluResults = [
+  // Case 1: «Чек или доля?» arrives in isolation (long silence) — must be dropped.
+  runHallucinationCase(
+    'Drops «Чек или доля?» when isolated (>8 sec after last segment)',
+    [
+      { text: 'Алло, здравствуйте.', advanceMs: 2_000 },
+      { text: 'Я перезвоню позже.', advanceMs: 2_000 },
+      { text: 'Чек или доля?', advanceMs: 10_000 }, // 10 sec gap → isolated
+    ],
+    { excludes: ['Чек или доля'] },
+  ),
+  // Case 2: «Да» short reply right after recent segment — must be PRESERVED.
+  runHallucinationCase(
+    'Preserves short reply «Да» when in dense conversation',
+    [
+      { text: 'Вы рассматриваете инвестиции?', advanceMs: 2_000 },
+      { text: 'Да.', advanceMs: 1_500 },
+    ],
+    { includes: ['Да'] },
+  ),
+  // Case 3: «Угу» short reply — must be PRESERVED.
+  runHallucinationCase(
+    'Preserves «Угу» — common Russian backchannel',
+    [
+      { text: 'Я отправлю вам ссылку.', advanceMs: 2_000 },
+      { text: 'Угу.', advanceMs: 1_000 },
+    ],
+    { includes: ['Угу'] },
+  ),
+  // Case 4: First segment is the AI-pattern phrase — must be dropped (no prior context to trust).
+  runHallucinationCase(
+    'Drops AI-pattern phrase when it is the very first segment',
+    [
+      { text: 'Ну, если вы настаиваете…', advanceMs: 2_000 },
+    ],
+    { excludes: ['настаиваете'] },
+  ),
+  // Case 5: AI-pattern phrase right after another segment (no isolation) — preserved (could be legit).
+  runHallucinationCase(
+    'Preserves AI-pattern phrase if NOT isolated (manager actually said it)',
+    [
+      { text: 'Хорошо, как пожелаете.', advanceMs: 2_000 },
+      { text: 'Чек или доля?', advanceMs: 1_500 }, // 1.5 sec — not isolated
+    ],
+    { includes: ['Чек или доля'] },
+  ),
+  // Case 6: Long phrase matching pattern — preserved (length filter).
+  runHallucinationCase(
+    'Preserves long phrase even with AI-prompt keyword',
+    [
+      { text: 'У меня вопрос на счет распределения долей в этой сделке.', advanceMs: 12_000 },
+    ],
+    { includes: ['распределения долей'] },
+  ),
+];
+
+const halluOk = halluResults.every(Boolean);
+if (!halluOk) {
+  console.log('\n✗ FAIL — hallucination guard regression.');
+  process.exit(1);
+}
+console.log(`\n✓ PASS — hallucination guard: ${halluResults.length}/${halluResults.length} scenarios.\n`);

@@ -18,7 +18,8 @@ import { MeetingCard } from '../components/ui/MeetingCard';
 import { api, type Project } from '../lib/api';
 import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
-import { completeMeeting, updateMeetingOutcome, type CompleteResult } from '../lib/salesSessions';
+import { completeMeeting, updateMeetingOutcome, uploadMeetingAudio, type CompleteResult, type SalesSession } from '../lib/salesSessions';
+import { startCallAudioRecorder, type CallAudioRecorder } from '../lib/callAudioRecorder';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
@@ -62,6 +63,41 @@ interface TranscriptSegment {
   final: boolean;
   text: string;
 }
+
+// Sprint 54 P0.5 — conservative hallucination guard. Realtime sometimes
+// fills silence with phrases from the AI's own prompt vocabulary
+// («Чек или доля?», «Ну, если вы настаиваете…»). Without context they're
+// indistinguishable from real speech, BUT they have a tell:
+//   • they arrive in isolation (no prior segments in the last N seconds)
+//   • they're short (<= 40 chars)
+//   • they match a curated list of «AI-prompt-style» short phrases
+//
+// We DROP only if ALL three hold. Legitimate one-word replies («Да», «Нет»,
+// «Угу») are preserved because they're not on the curated list AND/OR
+// arrive in dense exchanges (preceded by recent segments).
+const SUSPICIOUS_AI_PROMPT_PHRASES = [
+  /^Чек или доля\??$/i,
+  // `[.…]{0,3}` matches literal dot OR Unicode ellipsis (U+2026 «…»).
+  // Realtime/Whisper emits «…» as a real character, not three dots.
+  /^Ну, если вы настаиваете[.…]{0,3}$/i,
+  /^Подскажите.{0,30}\?$/i,    // generic AI «Подскажите, …?» openers
+  /^Я правильно понимаю\??$/i,
+  /^Что для вас важнее.{0,40}\?$/i,
+];
+const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000; // segment is "isolated" if no prior segment in 8 sec
+const HALLUCINATION_MAX_CHARS = 40;
+
+function looksLikeAiHallucination(text: string, prev: TranscriptSegment[]): boolean {
+  if (text.length > HALLUCINATION_MAX_CHARS) return false;
+  const matchesPattern = SUSPICIOUS_AI_PROMPT_PHRASES.some((re) => re.test(text));
+  if (!matchesPattern) return false;
+  // Isolation check: no prior final segment within isolation window.
+  const last = prev[prev.length - 1];
+  if (!last) return true; // first segment + matches pattern → drop
+  const sinceLast = Date.now() - last.ts;
+  return sinceLast >= HALLUCINATION_ISOLATION_WINDOW_MS;
+}
+
 function appendFinalSegment(
   prev: TranscriptSegment[],
   text: string,
@@ -72,6 +108,13 @@ function appendFinalSegment(
   const last = prev[prev.length - 1];
   if (last && last.final && last.text.trim() === trimmed) {
     console.debug(`[sales-assistant/transcript] DEDUP ${source} "${trimmed.slice(0, 60)}"`);
+    return prev;
+  }
+  if (looksLikeAiHallucination(trimmed, prev)) {
+    console.debug(
+      `[sales-assistant/transcript] HALLUCINATION-GUARD drop ${source} ` +
+      `"${trimmed}" — isolated short AI-prompt-pattern after silence`,
+    );
     return prev;
   }
   const next = [...prev, { ts: Date.now(), final: true, text: trimmed }];
@@ -451,6 +494,10 @@ export default function SalesAssistant() {
   const finalizeIdempotencyKeyRef = useRef<string | null>(null);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
   const [finishResult, setFinishResult] = useState<CompleteResult | null>(null);
+  // Sprint 54 P0 — флаг «во время финализации мы отправили audio blob».
+  // Если true → TranscriptStatusPanel polls для clean-statusа. Если false
+  // → сразу показываем «черновая» без polling'а.
+  const [hadAudioOnFinalize, setHadAudioOnFinalize] = useState(false);
   // Sprint 34В legacy alias — оставляем для совместимости с UI кнопкой loading.
   const finishing = meetingState === 'finalizing';
   const [investorName, setInvestorName] = useState('');
@@ -477,6 +524,11 @@ export default function SalesAssistant() {
   // переключается на Web Speech как fallback, чтобы транскрипция всё равно
   // работала. Пользователь видит бейдж того, что реально слушает встречу.
   const realtimeRef = useRef<RealtimeSession | null>(null);
+  // Sprint 54 P0 — параллельная локальная запись mic'а для hybrid
+  // транскрипции. Stop() закрывает recorder и держит blob в
+  // finalizeAudioBlobRef до фактической отправки в finishMeeting().
+  const audioRecorderRef = useRef<CallAudioRecorder | null>(null);
+  const finalizeAudioBlobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
   type TranscriptionProvider = 'realtime' | 'web-speech';
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider | null>(null);
   const [realtimeModel, setRealtimeModel] = useState<string | null>(null);
@@ -1337,6 +1389,21 @@ export default function SalesAssistant() {
       setListening(true);
       speechStatusRef.current = 'listening';
       setSpeechStatus('listening');
+      // Sprint 54 P0 — параллельно с realtime запускаем локальный
+      // MediaRecorder на ТОТ ЖЕ audio track. По окончании звонка blob
+      // отправится в /api/sales-sessions/:id/audio, backend сделает
+      // чистую транскрипцию через gpt-4o-transcribe. На fallback-пути
+      // (web-speech) audio track недоступен → recorder=null, остаёмся на
+      // draft.
+      if (session.mediaStream) {
+        const recorder = startCallAudioRecorder(session.mediaStream);
+        if (recorder) {
+          audioRecorderRef.current = recorder;
+          console.debug(`[sales-assistant/recorder] started mime=${recorder.mimeType}`);
+        } else {
+          console.debug('[sales-assistant/recorder] not supported in this browser');
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';
       console.warn('[sales-assistant] realtime unavailable, falling back to web-speech:', msg);
@@ -1396,7 +1463,46 @@ export default function SalesAssistant() {
       // Только после успеха останавливаем listening и переходим в finalized.
       setFinishResult(result);
       setMeetingState('finalized');
+      // Sprint 54 P0 — если рекордер ещё активен (пользователь нажал Финиш
+      // во время прослушивания), останавливаем его и забираем blob ДО
+      // stop() (которое закроет mediaStream tracks).
+      if (audioRecorderRef.current) {
+        const recorder = audioRecorderRef.current;
+        audioRecorderRef.current = null;
+        try {
+          const blob = await recorder.stopAndGetBlob();
+          if (blob) {
+            finalizeAudioBlobRef.current = { blob, mimeType: recorder.mimeType };
+            console.debug(`[sales-assistant/recorder] blob captured in finish size=${blob.size}`);
+          }
+        } catch (err) {
+          console.warn('[sales-assistant/recorder] stop in finish failed', err);
+        }
+      }
       stop();
+      // Sprint 54 P0 — отправляем recorded audio на backend для clean
+      // transcription. Fire-and-forget: блокировать UI не нужно, статус
+      // обновится в БД и поступит при следующем GET карточки.
+      const audio = finalizeAudioBlobRef.current;
+      finalizeAudioBlobRef.current = null;
+      setHadAudioOnFinalize(Boolean(audio));
+      if (audio && result.session.id) {
+        const ext = audio.mimeType.includes('webm') ? 'webm'
+          : audio.mimeType.includes('ogg')  ? 'ogg'
+          : audio.mimeType.includes('mp4')  ? 'm4a'
+          : audio.mimeType.includes('wav')  ? 'wav'
+          : 'webm';
+        const filename = `${result.session.id}.${ext}`;
+        console.debug(`[sales-assistant/recorder] uploading audio size=${audio.blob.size} mime=${audio.mimeType} filename=${filename}`);
+        uploadMeetingAudio(result.session.id, audio.blob, filename)
+          .then((r) => {
+            console.log(`[sales-assistant/recorder] upload done status=${r.status} latencyMs=${r.latencyMs}`);
+          })
+          .catch((err) => {
+            // Upload failure is non-fatal — draft transcript is already saved.
+            console.warn('[sales-assistant/recorder] upload failed:', err);
+          });
+      }
     } catch (err) {
       // Не делаем optimistic reset: listening остаётся active (если был),
       // transcript и card на экране. Пользователь либо ретраит, либо
@@ -1439,6 +1545,7 @@ export default function SalesAssistant() {
 
   function closeFinishModal() {
     setFinishResult(null);
+    setHadAudioOnFinalize(false);
     // Reset transcript so next meeting starts clean. Investor fields keep state
     // — менеджеру обычно нужно проводить серию встреч с одним проектом.
     setTranscript([]);
@@ -1508,6 +1615,24 @@ export default function SalesAssistant() {
     try { srRef.current?.stop(); } catch { /* ignore */ }
     srRef.current = null;
     recognitionActiveRef.current = false;
+    // Sprint 54 P0 — останавливаем локальную запись ПЕРЕД закрытием
+    // realtime/mic. Recorder'у нужен живой stream чтобы сбросить trailing
+    // буфер; иначе хвост ~5 сек теряется. Async, fire-and-forget:
+    // finalizeAudioBlobRef будет готов к моменту finishMeeting().
+    if (audioRecorderRef.current) {
+      const recorder = audioRecorderRef.current;
+      audioRecorderRef.current = null;
+      recorder.stopAndGetBlob()
+        .then((blob) => {
+          if (blob) {
+            finalizeAudioBlobRef.current = { blob, mimeType: recorder.mimeType };
+            console.debug(`[sales-assistant/recorder] blob ready size=${blob.size} mime=${recorder.mimeType}`);
+          } else {
+            console.debug('[sales-assistant/recorder] no blob produced');
+          }
+        })
+        .catch((err) => console.warn('[sales-assistant/recorder] stop failed', err));
+    }
     // Sprint 49 — закрываем WebRTC канал; mic-track release происходит внутри
     // realtimeRef.stop(). Без этого индикатор записи в браузере остаётся
     // включённым после нажатия «Остановить».
@@ -2404,6 +2529,15 @@ export default function SalesAssistant() {
               </div>
             </div>
             <MeetingCard session={finishResult.session} />
+            {/* Sprint 54 P0 — hybrid transcription status. Показывает,
+                чистовая запись готовится или нет. Если был uploaded audio
+                — обновляет статус через 6 сек polling. */}
+            <TranscriptStatusPanel
+              sessionId={finishResult.session.id}
+              initialSession={finishResult.session}
+              hasAudioUpload={hadAudioOnFinalize}
+              deskMode={deskMode}
+            />
             {/* Sprint 52 P0.3 — outcome dataset. Менеджер сразу размечает
                 результат (либо позже из карточки). Foundation для
                 training dataset: successful vs failed vs follow-up. */}
@@ -2485,6 +2619,97 @@ export default function SalesAssistant() {
 //   • success / failed / followup / unknown
 //   • optional manager notes — что сработало / что нет.
 // Foundation под training dataset (см. P0.3 spec).
+// Sprint 54 P0 — Hybrid transcription status panel.
+// При финализации показывает 3 состояния:
+//   • hasAudioUpload=true + status='draft' → «Записываем чистую транскрипцию…» (с
+//     polling раз в 6 сек, до 5 попыток).
+//   • status='clean' → «Чистовая транскрипция готова».
+//   • status='failed' OR (status='draft' AND !hasAudioUpload) → «Черновая транскрипция».
+//
+// Никаких raw OpenAI errors. Ops видят детали через console + audit log.
+function TranscriptStatusPanel({
+  sessionId,
+  initialSession,
+  hasAudioUpload,
+  deskMode,
+}: {
+  sessionId: string;
+  initialSession: SalesSession;
+  hasAudioUpload: boolean;
+  deskMode: AssistantDeskMode;
+}) {
+  const [status, setStatus] = useState<'draft' | 'clean' | 'failed' | 'not_available' | null>(
+    initialSession.transcriptQualityStatus ?? 'draft',
+  );
+  const [polling, setPolling] = useState(hasAudioUpload && status === 'draft');
+
+  useEffect(() => {
+    if (!polling) return;
+    let cancelled = false;
+    let attempts = 0;
+    const tick = async () => {
+      if (cancelled) return;
+      attempts++;
+      try {
+        const r = await api.get<{ session: SalesSession }>(`/api/sales-sessions/${sessionId}`);
+        if (cancelled) return;
+        const next = r.session.transcriptQualityStatus;
+        if (next && next !== 'draft') {
+          setStatus(next as typeof status);
+          setPolling(false);
+          return;
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+      if (attempts >= 10) {
+        // ~60 sec total. Stop polling; show «черновая» / «не готова».
+        setPolling(false);
+        return;
+      }
+      window.setTimeout(tick, 6_000);
+    };
+    window.setTimeout(tick, 6_000);
+    return () => {
+      cancelled = true;
+    };
+  }, [polling, sessionId]);
+
+  const sessionWord = deskMode === 'qualification' ? 'звонка' : 'встречи';
+
+  let toneClass = 'border-line bg-elevated';
+  let dot = 'bg-muted';
+  let title = 'Черновая транскрипция';
+  let subtitle = `Сохранена транскрипция из live-канала ${sessionWord}. Она может содержать неточности.`;
+
+  if (status === 'clean') {
+    toneClass = 'border-success/40 bg-success/10';
+    dot = 'bg-success';
+    title = 'Чистовая транскрипция готова';
+    subtitle = 'Запись обработана повторно — этот текст используется для памяти и аналитики.';
+  } else if (status === 'failed') {
+    toneClass = 'border-warning/40 bg-warning/10';
+    dot = 'bg-warning';
+    title = 'Черновая транскрипция';
+    subtitle = 'Не удалось получить чистовую запись. Используется live-черновик. Можно загрузить аудио позже.';
+  } else if (polling) {
+    toneClass = 'border-ai/40 bg-ai/10';
+    dot = 'bg-ai animate-pulse';
+    title = 'Записываем чистую транскрипцию…';
+    subtitle = 'Повторно прогоняем запись через AI. Обычно 10–30 секунд.';
+  }
+
+  return (
+    <div className={clsx('rounded-md border p-3 text-sm', toneClass)}>
+      <div className="flex items-center gap-2 font-semibold text-primary">
+        <span className={clsx('w-1.5 h-1.5 rounded-full', dot)} />
+        {title}
+      </div>
+      <div className="text-[12px] text-secondary mt-0.5">{subtitle}</div>
+    </div>
+  );
+}
+
 function OutcomeForm({ sessionId, deskMode }: { sessionId: string; deskMode: AssistantDeskMode }) {
   type OutcomeChoice = 'success' | 'failed' | 'followup' | 'unknown';
   const [outcome, setOutcomeState] = useState<OutcomeChoice>('unknown');

@@ -47,6 +47,13 @@ export interface RealtimeSession {
   stop: () => void;
   /** Технические данные текущей сессии — для UI badge. */
   info: RealtimeSessionInfo;
+  /**
+   * Sprint 54 P0 — снимок mediaStream'а для параллельной локальной записи
+   * (MediaRecorder) с тем же самым audio track, что слушает Realtime API.
+   * Снимок может быть null если в этой сессии mic не открылся (защита
+   * от race / fallback path).
+   */
+  mediaStream: MediaStream | null;
 }
 
 export class RealtimeUnavailableError extends Error {
@@ -273,7 +280,7 @@ export async function startRealtimeTranscription(
     await pc.setRemoteDescription(answer);
     realtimeLog('sdp-exchange-complete', { traceId: session.traceId });
 
-    return { stop, info: session };
+    return { stop, info: session, mediaStream };
   } catch (err) {
     stop();
     if (err instanceof RealtimeUnavailableError) throw err;
