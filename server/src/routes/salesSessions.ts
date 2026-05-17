@@ -428,6 +428,12 @@ salesSessionsRoutes.get('/:id/transcript-diff', async (req, res) => {
     draftStats: diff.draftStats,
     cleanStats: diff.cleanStats,
     similarity: diff.similarity,
+    // Sprint 58 P0.7 — additional integrity metrics.
+    mutationRatio: diff.mutationRatio,
+    tokenSurvivalRate: diff.tokenSurvivalRate,
+    phrasePreservationRate: diff.phrasePreservationRate,
+    draftTokenCount: diff.draftTokenCount,
+    cleanTokenCount: diff.cleanTokenCount,
     hallucinationCandidates: diff.hallucinationCandidates.slice(0, 10).map(trim),
     addedPhrasesPreview: diff.addedPhrases.slice(0, 5).map(trim),
     removedPhrasesPreview: diff.removedPhrases.slice(0, 5).map(trim),

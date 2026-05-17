@@ -31,6 +31,14 @@ export interface TranscriptDiff {
   addedPhrases: string[];    // sentences in clean only
   removedPhrases: string[];  // sentences in draft only
   hallucinationCandidates: string[];  // subset of removed: short + matches AI pattern
+  // Sprint 58 P0.7 — quality metrics. Lets ops quantify «how much did
+  // the model change between draft and clean» beyond a single similarity
+  // number. All values 0..1 unless noted.
+  mutationRatio: number;     // 1 - similarity (overall token churn)
+  tokenSurvivalRate: number; // share of draft tokens that survived into clean
+  phrasePreservationRate: number; // share of draft SENTENCES that have a >=0.4 Jaccard match in clean
+  draftTokenCount: number;
+  cleanTokenCount: number;
 }
 
 // Лёгкая токенизация на русский язык: разбиваем по , . ! ? ; … и фильтруем
@@ -107,6 +115,13 @@ export function compareDraftVsClean(draft: string, clean: string): TranscriptDif
   const draftAllTokens = tokenize(draft);
   const cleanAllTokens = tokenize(clean);
   const similarity = jaccard(draftAllTokens, cleanAllTokens);
+  // Sprint 58 P0.7 — additional integrity metrics.
+  const tokenSurvivalRate = draftAllTokens.size === 0
+    ? 1
+    : Array.from(draftAllTokens).filter((t) => cleanAllTokens.has(t)).length / draftAllTokens.size;
+  const phrasePreservationRate = draftSentences.length === 0
+    ? 1
+    : draftSentences.filter((s) => findMatch(s, cleanIndexed)).length / draftSentences.length;
 
   return {
     draftStats: {
@@ -123,5 +138,10 @@ export function compareDraftVsClean(draft: string, clean: string): TranscriptDif
     addedPhrases: added,
     removedPhrases: removed,
     hallucinationCandidates,
+    mutationRatio: 1 - similarity,
+    tokenSurvivalRate,
+    phrasePreservationRate,
+    draftTokenCount: draftAllTokens.size,
+    cleanTokenCount: cleanAllTokens.size,
   };
 }

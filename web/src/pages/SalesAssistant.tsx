@@ -23,6 +23,7 @@ import { startCallAudioRecorder, type CallAudioRecorder } from '../lib/callAudio
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
+import { newSegmentId, recordLifecycle } from '../lib/transcriptPipeline';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
 interface SRResultLike { transcript: string; isFinal?: boolean }
@@ -62,6 +63,9 @@ interface TranscriptSegment {
   ts: number;
   final: boolean;
   text: string;
+  // Sprint 58 P0.2 — lifecycle correlator. Optional because legacy
+  // segments and web-speech path may not always have one assigned.
+  segmentId?: string;
 }
 
 // Sprint 54 P0.5 — conservative hallucination guard. Realtime sometimes
@@ -118,31 +122,55 @@ function appendFinalSegment(
   prev: TranscriptSegment[],
   text: string,
   source: 'realtime' | 'web-speech',
+  segmentId: string,
+  sessionId: string,
 ): TranscriptSegment[] {
   const trimmed = text.trim();
   if (!trimmed) {
-    console.debug('[transcription/segment-dropped]', { source, reason: 'empty' });
+    recordLifecycle({
+      segmentId,
+      sessionId,
+      source,
+      stage: 'dedup_filtered',
+      status: 'dropped',
+      text: '',
+      reason: 'empty_after_trim',
+    });
     return prev;
   }
   const last = prev[prev.length - 1];
   if (last && last.final && last.text.trim() === trimmed) {
-    console.debug('[transcription/segment-dedup]', { source, preview: trimmed.slice(0, 60) });
-    return prev;
-  }
-  if (looksLikeAiHallucination(trimmed, prev)) {
-    console.debug('[transcription/hallucination-guard]', {
+    recordLifecycle({
+      segmentId,
+      sessionId,
       source,
-      reason: 'isolated_short_ai_pattern_after_silence',
-      preview: trimmed.slice(0, 60),
+      stage: 'dedup_filtered',
+      status: 'dropped',
+      text: trimmed,
+      reason: 'duplicate_of_previous_final',
     });
     return prev;
   }
-  const next = [...prev, { ts: Date.now(), final: true, text: trimmed }];
-  console.debug('[transcription/segment-appended]', {
+  if (looksLikeAiHallucination(trimmed, prev)) {
+    recordLifecycle({
+      segmentId,
+      sessionId,
+      source,
+      stage: 'hallucination_filtered',
+      status: 'dropped',
+      text: trimmed,
+      reason: 'isolated_short_ai_pattern_after_silence',
+    });
+    return prev;
+  }
+  const next = [...prev, { ts: Date.now(), final: true, text: trimmed, segmentId }];
+  recordLifecycle({
+    segmentId,
+    sessionId,
     source,
-    idx: next.length,
-    chars: trimmed.length,
-    preview: trimmed.slice(0, 60),
+    stage: 'appended',
+    status: 'ok',
+    text: trimmed,
   });
   return next;
 }
@@ -1221,25 +1249,42 @@ export default function SalesAssistant() {
           if (res.isFinal) final.push({ ts: Date.now(), final: true, text: t });
           else interimText += (interimText ? ' ' : '') + t;
         }
+        const sessionTag = `web-speech-${recognitionSessionId}`;
         if (
           !shouldListenRef.current ||
           !liveSessionStartedRef.current ||
           recognitionSessionId !== liveSessionIdRef.current
         ) {
-          console.debug('[transcription/stale-drop]', {
-            source: 'web-speech',
-            sessionId: recognitionSessionId,
-            currentSessionId: liveSessionIdRef.current,
-            shouldListen: shouldListenRef.current,
-            active: liveSessionStartedRef.current,
-          });
+          // For web-speech the segmentId isn't carried by the API,
+          // so we mint one ONLY when we have actual final segments
+          // about to be dropped — for logging purposes.
+          for (const seg of final) {
+            recordLifecycle({
+              segmentId: newSegmentId(),
+              sessionId: sessionTag,
+              source: 'web-speech',
+              stage: 'stale_dropped',
+              status: 'dropped',
+              text: seg.text,
+              reason: `stale_session expected=${recognitionSessionId} current=${liveSessionIdRef.current}`,
+            });
+          }
           return;
         }
         if (final.length) {
           setTranscript((prev) => {
             let next = prev;
             for (const seg of final) {
-              next = appendFinalSegment(next, seg.text, 'web-speech');
+              const segmentId = newSegmentId();
+              recordLifecycle({
+                segmentId,
+                sessionId: sessionTag,
+                source: 'web-speech',
+                stage: 'raw_received',
+                status: 'ok',
+                text: seg.text,
+              });
+              next = appendFinalSegment(next, seg.text, 'web-speech', segmentId, sessionTag);
             }
             return next;
           });
@@ -1368,25 +1413,27 @@ export default function SalesAssistant() {
           ) return;
           setInterim(text);
         },
-        onFinal: (text) => {
+        onFinal: (text, segmentId) => {
+          const sessionTag = `live-${currentLiveSessionId}`;
           if (
             !shouldListenRef.current ||
             !liveSessionStartedRef.current ||
             currentLiveSessionId !== liveSessionIdRef.current
           ) {
-            // Sprint 57 P0.3 — structured tag. Lets ops grep
-            // `transcription/stale-drop` to count dropped events per
-            // session vs total events fired.
-            console.debug('[transcription/stale-drop]', {
+            // Sprint 58 P0.2 — stale-drop is a lifecycle stage. Same
+            // segmentId continues the trace from raw_received.
+            recordLifecycle({
+              segmentId,
+              sessionId: sessionTag,
               source: 'realtime',
-              sessionId: currentLiveSessionId,
-              currentSessionId: liveSessionIdRef.current,
-              shouldListen: shouldListenRef.current,
-              active: liveSessionStartedRef.current,
+              stage: 'stale_dropped',
+              status: 'dropped',
+              text,
+              reason: `stale_session expected=${currentLiveSessionId} current=${liveSessionIdRef.current}`,
             });
             return;
           }
-          setTranscript((prev) => appendFinalSegment(prev, text, 'realtime'));
+          setTranscript((prev) => appendFinalSegment(prev, text, 'realtime', segmentId, sessionTag));
           setInterim('');
         },
         onError: (err) => {

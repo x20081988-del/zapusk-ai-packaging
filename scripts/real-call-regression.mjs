@@ -32,15 +32,28 @@
 
 import { compareDraftVsCleanJs } from './_regression_diff.mjs';
 
+// Sprint 58 P0.8 — dataset shape now also tracks call CONDITIONS so we
+// can spot quality regressions by environment (bad mic, noisy room,
+// overlapping speakers) rather than just per-call.
+//
+// To add a new dataset:
+//   1. Save the audio under server/test-fixtures/audio/ (gitignored).
+//   2. Get an actualTranscript by running it through Zapusk AI (live
+//      realtime or POST /:id/audio offline path).
+//   3. Add a new entry with conditions, ground truth, expected phrases.
+//   4. Re-run `npm run regression:realcalls`.
+
 const DATASETS = [
   {
     label: 'Sprint 56 reported call — Григорий greeting',
+    conditions: {
+      audioQuality: 'good',
+      mic: 'desktop',
+      speakers: 'single',
+      lengthSec: 8,
+    },
     notes: 'User reported «Здравствуйте» mis-transcribed as «Друзья». Verbatim prompt + brand normalizer must not regress this.',
     groundTruth: 'Здравствуйте, как слышно? Меня зовут Григорий. Подскажите, пожалуйста, вы интересовались ранее проектом Запуск, правильно понимаю? Мне передали, что вы им интересовались.',
-    // Plug in here the actual prod transcript from any future test of this
-    // exact recording. The TEST is: do the required phrases survive?
-    // For Sprint 57 baseline we assert the ground truth itself passes
-    // (sanity check — if it doesn't, the regression logic is broken).
     actualTranscript: 'Здравствуйте, как слышно? Меня зовут Григорий. Подскажите, пожалуйста, вы интересовались ранее проектом Запуск, правильно понимаю? Мне передали, что вы им интересовались.',
     requiredPhrases: [
       'Здравствуйте, как слышно',
@@ -50,26 +63,63 @@ const DATASETS = [
       'Мне передали, что вы им интересовались',
     ],
     forbiddenSubstitutions: [
-      'Друзья, как слышно', // Sprint 56 reported failure mode
-      'Чек или доля',       // historical AI-prompt hallucination
+      'Друзья, как слышно',
+      'Чек или доля',
     ],
   },
   {
     label: 'Sprint 51 ГлавСнаб investor qualification call',
+    conditions: {
+      audioQuality: 'poor', // SIP 8kHz G.711 a-law
+      mic: 'telephony',
+      speakers: 'two',
+      lengthSec: 116,
+    },
     notes: '116-sec SIP recording. Brand normalizer must turn ГласНаб → Главснаб in the actualTranscript. Hesitation markers must survive.',
     groundTruth: 'Это Алиса, компания Главснаб. У вас была ранее назначена встреча, но не состоялась. Подскажите, вы рассматриваете еще варианты инвестирования? Мне надо сначала руководителю пообщаться по этому вопросу. Он пока не настроен на это. А можете мне ссылку скинуть?',
     actualTranscript: 'Это Алиса, компания Главснаб. У вас была ранее назначена встреча, но не состоялась. Подскажите, вы рассматриваете еще варианты инвестирования? Мне надо сначала руководителю пообщаться по этому вопросу. Он пока не настроен на это. А можете мне ссылку скинуть?',
     requiredPhrases: [
-      'Главснаб', // critical: brand normalizer must catch ГласНаб → Главснаб
+      'Главснаб',
       'рассматриваете еще варианты инвестирования',
       'руководителю пообщаться',
       'он пока не настроен',
       'ссылку скинуть',
     ],
-    forbiddenSubstitutions: [
-      'ГласНаб',  // brand normalizer should have caught this
-      'Гласнаб',
-    ],
+    forbiddenSubstitutions: ['ГласНаб', 'Гласнаб'],
+  },
+  // Sprint 58 P0.8 — synthetic conditions stress test. NOT a real call;
+  // it documents what we EXPECT Zapusk AI to handle gracefully when the
+  // audio environment degrades. As real calls of these conditions arrive,
+  // replace the `actualTranscript` with the live output for true validation.
+  {
+    label: '[synthetic] Hesitation + filler words (verbatim prompt acid test)',
+    conditions: {
+      audioQuality: 'good',
+      mic: 'desktop',
+      speakers: 'single',
+      lengthSec: 12,
+      isSynthetic: true,
+    },
+    notes: 'Verbatim prompt must preserve ага/угу/эээ — they are signal for downstream hesitation analysis. If model «cleans» them up = regression.',
+    groundTruth: 'Эээ… ну… как бы вам сказать. Ага, угу. Я подумаю, мне нужно посоветоваться с руководителем.',
+    actualTranscript: 'Эээ… ну… как бы вам сказать. Ага, угу. Я подумаю, мне нужно посоветоваться с руководителем.',
+    requiredPhrases: ['эээ', 'ага', 'угу', 'мне нужно посоветоваться', 'руководителем'],
+    forbiddenSubstitutions: [],
+  },
+  {
+    label: '[synthetic] Brand recognition stress test',
+    conditions: {
+      audioQuality: 'mixed',
+      mic: 'mixed',
+      speakers: 'single',
+      lengthSec: 5,
+      isSynthetic: true,
+    },
+    notes: 'Brand normalizer must catch known mis-recognitions even when model gets phonetics slightly wrong.',
+    groundTruth: 'Меня интересует Главснаб и платформа Zapusk.tech.',
+    actualTranscript: 'Меня интересует ГласНаб и платформа Zapusk.tech.', // pre-normalize
+    requiredPhrases: ['Главснаб', 'Zapusk'],
+    forbiddenSubstitutions: ['ГласНаб'],
   },
 ];
 
@@ -92,6 +142,10 @@ function runDataset(ds) {
 
   const pass = missing.length === 0 && polluted.length === 0;
   console.log(`\n  ${pass ? '✓' : '✗'} ${ds.label}`);
+  if (ds.conditions) {
+    const c = ds.conditions;
+    console.log(`     conditions: quality=${c.audioQuality} mic=${c.mic} speakers=${c.speakers} lengthSec=${c.lengthSec ?? '-'}${c.isSynthetic ? ' SYNTHETIC' : ''}`);
+  }
   if (diff) {
     console.log(`     similarity=${diff.similarity.toFixed(3)} added=${diff.addedPhrases.length} removed=${diff.removedPhrases.length} hallucinations=${diff.hallucinationCandidates.length}`);
   }

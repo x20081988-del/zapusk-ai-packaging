@@ -1,5 +1,10 @@
 import { api } from './api';
 import { normalizeTranscript } from './transcriptNormalize';
+import {
+  newSegmentId,
+  recordLifecycle,
+  compareInterimVsFinal,
+} from './transcriptPipeline';
 
 // Sprint 49 — OpenAI Realtime live transcription через WebRTC.
 //
@@ -35,7 +40,12 @@ export interface RealtimeCallbacks {
   /** Partial / delta transcript для текущего сегмента. */
   onInterim: (text: string) => void;
   /** Финальный сегмент (закончившаяся реплика). */
-  onFinal: (text: string) => void;
+  /**
+   * Sprint 58 P0.2 — каждый final сегмент несёт lifecycle id, чтобы
+   * UI-приёмник мог пометить его «appended» под тем же ID, что был
+   * присвоен при `raw_received`.
+   */
+  onFinal: (text: string, segmentId: string) => void;
   /** Ошибка после успешного подключения — UI должен переключиться на fallback. */
   onError: (err: Error) => void;
   /** Закрытие соединения (по stop() или со стороны OpenAI). */
@@ -202,26 +212,56 @@ export async function startRealtimeTranscription(
         }
         if (msg.type === 'conversation.item.input_audio_transcription.completed') {
           const rawTranscript = typeof msg.transcript === 'string' ? msg.transcript.trim() : '';
+          // Snapshot interim BEFORE we reset it — needed for the
+          // interim-vs-final mutation diff (P0.3).
+          const interimSnapshot = interimBuffer;
           interimBuffer = '';
           if (rawTranscript.length) {
             finalSegmentCount++;
+            // Sprint 58 P0.1/P0.2 — assign segmentId at the FIRST stage
+            // (raw_received). All downstream stages reuse this same ID
+            // so we can trace one phrase end-to-end via getSegmentLifecycle.
+            const segmentId = newSegmentId();
+            recordLifecycle({
+              segmentId,
+              sessionId: session.traceId ?? 'unknown',
+              source: 'realtime',
+              stage: 'raw_received',
+              status: 'ok',
+              text: rawTranscript,
+            });
             // Sprint 53 Voice QA — нормализуем известные мис-распознавания
             // брендов («ГласНаб» → «Главснаб» и т.п.) до того как сегмент
-            // попадает в UI / в analyze-payload. Без этого AI и Память
-            // встреч хранят искажённое имя проекта.
+            // попадает в UI / в analyze-payload.
             const normalized = normalizeTranscript(rawTranscript);
-            // Sprint 57 P0.3 — structured tag. NEVER log full transcript
-            // (privacy + bundle size). 60-char preview is enough to
-            // identify hallucination patterns vs real speech.
-            try {
-              console.debug('[transcription/segment-finalized]', {
-                traceId: session.traceId,
-                idx: finalSegmentCount,
-                chars: normalized.length,
-                preview: normalized.slice(0, 60),
-              });
-            } catch { /* ignore */ }
-            callbacks.onFinal(normalized);
+            recordLifecycle({
+              segmentId,
+              sessionId: session.traceId ?? 'unknown',
+              source: 'realtime',
+              stage: 'normalized',
+              status: 'ok',
+              text: normalized,
+              ...(normalized !== rawTranscript ? { reason: 'brand_normalize_applied' } : {}),
+            });
+            // Sprint 58 P0.3 — interim-vs-final mutation diff.
+            // High mutation = OpenAI rewrote what it heard. Surfaces silent
+            // paraphrasing. Threshold + suspicious flag inside helper.
+            if (interimSnapshot) {
+              const diff = compareInterimVsFinal(interimSnapshot, normalized);
+              if (diff.suspiciousMutation) {
+                console.warn('[transcription/interim-final-mutation]', {
+                  segmentId,
+                  sessionId: session.traceId,
+                  similarity: diff.similarity.toFixed(3),
+                  mutationRatio: diff.mutationRatio.toFixed(3),
+                  interimChars: diff.interimChars,
+                  finalChars: diff.finalChars,
+                  interimPreview: interimSnapshot.slice(0, 60),
+                  finalPreview: normalized.slice(0, 60),
+                });
+              }
+            }
+            callbacks.onFinal(normalized, segmentId);
           } else {
             try {
               console.debug('[transcription/segment-dropped]', {
