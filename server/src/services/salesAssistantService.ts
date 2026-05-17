@@ -14,6 +14,17 @@ import {
   formatKnowledgeForPrompt,
   formatKnowledgeForUi,
 } from './knowledgeService.js';
+// Sprint 61 — Project Knowledge Layer. Единый формат проектного контекста +
+// финансовые факты deterministically + finance-trigger detector.
+import {
+  loadProjectsForContext,
+  loadProjectForContext,
+  formatProjectsContextForAssistant,
+  formatProjectContextForAssistant,
+  detectFinancialQuestion,
+  type LoadedProject,
+} from './projectContextFormatter.js';
+import { buildProjectFinancialFacts } from './projectFinancialFacts.js';
 
 // Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
 // `analyzeSalesTurn` теперь читает активный template `sales_gpt` из БД и
@@ -522,7 +533,10 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   const projectIdsForContext = input.projectIds && input.projectIds.length > 0
     ? input.projectIds
     : (input.projectId ? [input.projectId] : []);
-  const projectContext = await loadProjectsContext(projectIdsForContext);
+  // Sprint 61 — единый loader + formatter. Грузим проекты ОДИН раз,
+  // переиспользуем shape для финансовых фактов и project-context блока.
+  const loadedProjects: LoadedProject[] = await loadProjectsForContext(projectIdsForContext);
+  const projectContext = formatProjectsContextForAssistant(loadedProjects, { verbosity: 'full' });
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const adviceHistory = formatAdviceHistory(input.adviceHistory);
@@ -542,6 +556,10 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   // и role-based visibility гарантируются knowledgeService.
   // Retrieval не падает при пустой KB — просто возвращает sources=[] и
   // блок «Релевантный опыт» в prompt не появляется.
+  // Sprint 61 — Финансовый-триггер детектор. Используется для буста retrieval
+  // (project_presentation + financial_question) и для инжекта детерминированного
+  // блока «Финансовые факты проекта» (buildProjectFinancialFacts).
+  const isFinanceQuestion = detectFinancialQuestion(input.transcript);
   const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
@@ -551,6 +569,8 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     mode: 'full',
     // Sprint 41 P0.8 — environment-filter из workspaceStatus.
     environment: workspaceToEnvironment(input.workspaceStatus),
+    // Sprint 61 — finance-boost project files when transcript is financial.
+    financeBoost: isFinanceQuestion,
   });
   // Sprint 40 P0.5 — full analyze: до 4000 символов (Sprint 41 P0.6 поднял с 2500
   // ради hybrid'ного шире-canditate'а; top-result-dominance проверка не даст
@@ -571,6 +591,13 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   const qualLines = await qualificationContextLines(input);
   // Sprint 52 P0.6 — memory injection (см. buildMemoryBlock).
   const memoryLines = await buildMemoryBlock(input);
+  // Sprint 61 — financial facts block. Deterministic, без AI. Вставляется
+  // только если transcript содержит финансовые триггеры (выручка / прибыль /
+  // CAC / 2027 etc.) И только если в проекте есть структурные данные.
+  const financialFactsBlock = buildProjectFinancialFacts(loadedProjects, input.transcript, {
+    forceInclude: false,
+    charBudget: 1500,
+  });
   const user = [
     deskMode === 'qualification'
       ? 'Режим работы: первичный звонок инвестору (qualification). Цель — назначить Zoom-встречу с экспертом + узнать чек/срок/критерии. См. system overlay.'
@@ -583,6 +610,9 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     'Контекст проекта:',
     projectContext,
     '',
+    // Sprint 61 — детерминированные финансовые факты (если применимо). Идут
+    // СРАЗУ за project context и ПЕРЕД sales KB — у них высокий приоритет.
+    ...(financialFactsBlock ? [financialFactsBlock, ''] : []),
     // Sprint 38 — knowledge block. Вставляется ПОСЛЕ project context и ПЕРЕД
     // SPIN-history, чтобы AI «знал» команду до того, как смотрит на текущий
     // разговор. Если KB пустая — блок пропускается.
@@ -613,6 +643,15 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
       '8. whatToDo: 1-2 действия. whatNotToDo: 1-3 пункта.',
       '9. conversationObjective — цель именно текущего этапа. conversationDirection — куда ведём дальше.',
       '10. dealNextStep — конкретный шаг сделки, если уже уместно (диапазон чека, дата встречи).',
+      // Sprint 61 — source discipline. Жёсткое правило: не выдумывать цифры
+      // проекта. Если фактического значения нет в контексте — сказать, что
+      // нужно проверить по финмодели/брифу, а не назвать удобную круглую сумму.
+      '',
+      'ИСТОЧНИКИ ФАКТОВ (правила достоверности):',
+      '• Используй ТОЛЬКО факты из блоков «Контекст проекта», «Финансовые факты проекта», «Релевантный опыт ZAPUSK» и transcript.',
+      '• НЕ выдумывай метрики проекта (выручку, прибыль, оценку, чек, доходность, EBITDA, окупаемость, CAC/LTV/MRR/ARR). Если точного числа нет — скажи «нужно уточнить по финмодели/брифу», а не подставляй удобное.',
+      '• При ссылке на цифру явно указывай источник: «по загруженной финмодели», «по брифу проекта», «по условиям инвестирования», «по карточке проекта». Если факта нет — «не найдено в материалах, нужно уточнить».',
+      '• Project-факты ИМЕЮТ ПРИОРИТЕТ над generic-советами из sales KB. KB — это контекст-примеры, а не источник цифр конкретного проекта.',
       'Верни строго JSON без markdown.',
     ].join('\n'),
   ].join('\n');
@@ -771,7 +810,10 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const projectIdsForContext = input.projectIds && input.projectIds.length > 0
     ? input.projectIds
     : (input.projectId ? [input.projectId] : []);
-  const projectContext = await loadProjectsContext(projectIdsForContext);
+  // Sprint 61 — единый loader + formatter (fast verbosity: ~1.5K chars/project,
+  // без файлов и weaknesses, чтобы вписаться в latency-budget 1-3s).
+  const loadedProjects: LoadedProject[] = await loadProjectsForContext(projectIdsForContext);
+  const projectContext = formatProjectsContextForAssistant(loadedProjects, { verbosity: 'fast' });
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const projectDetailsSignal = detectProjectDetailsRequest(input);
@@ -786,6 +828,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   // 8s timeout'ом, поэтому keyword-retrieval (без AI-вызова) подходит идеально:
   // 100-200ms максимум, дальше уходит токеновый бюджет в OpenAI. Маленький
   // topN (3) чтобы prompt не разрастался.
+  const isFinanceQuestionFast = detectFinancialQuestion(input.transcript);
   const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
@@ -794,6 +837,9 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     feature: 'sales_assistant.analyze_fast',
     mode: 'fast',
     environment: workspaceToEnvironment(input.workspaceStatus),
+    // Sprint 61 — fast mode тоже умеет бустить project-presentation и
+    // financial_question, но bandwidth ограничен 1200 chars => помогает редко.
+    financeBoost: isFinanceQuestionFast,
   });
   // Sprint 41 P0.6 — fast analyze: жёсткий 1200-character budget (раньше 1000).
   const knowledgeBlock = formatKnowledgeForPrompt(knowledge, input.actorRole ?? 'FOUNDER', { charBudget: 1200 });
@@ -809,6 +855,11 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const qualLines = await qualificationContextLines(input);
   // Sprint 52 P0.6 — memory injection (см. buildMemoryBlock).
   const memoryLines = await buildMemoryBlock(input);
+  // Sprint 61 — financial facts на fast пути. Бюджет жёстче: 800 chars.
+  const financialFactsBlockFast = buildProjectFinancialFacts(loadedProjects, input.transcript, {
+    forceInclude: false,
+    charBudget: 800,
+  });
   const user = [
     deskMode === 'qualification'
       ? 'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ПОДСКАЗКА ДЛЯ ПЕРВИЧНОГО ЗВОНКА. Цель — Zoom-слот с экспертом + чек/срок/критерии.'
@@ -817,12 +868,14 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
       ? 'Менеджер на первичном звонке. Дай ему реплику прямо сейчас, без аналитики.'
       : 'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно.',
+    'Не выдумывай цифры проекта. Если точного значения нет — скажи, что нужно уточнить по финмодели/брифу.',
     '',
     ...qualLines,
     ...memoryLines,
     'Контекст проекта:',
     projectContext,
     '',
+    ...(financialFactsBlockFast ? [financialFactsBlockFast, ''] : []),
     ...(knowledgeBlock
       ? ['Релевантный опыт ZAPUSK (используй как контекст, не цитируй дословно):', knowledgeBlock, '']
       : []),
@@ -890,44 +943,9 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   }, projectDetailsSignal);
 }
 
-async function loadProjectContext(projectId?: string): Promise<string> {
-  if (!projectId) return '— проект не выбран, работай как универсальный AI Sales Assistant Zapusk';
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { brief: true },
-  });
-  if (!project) return '— проект не найден';
-  const napkin = safeParse(project.brief?.napkin, {});
-  return [
-    `Проект: ${project.name}`,
-    `Отрасль: ${project.industry ?? 'не указана'} · Стадия: ${project.stage ?? 'не указана'}`,
-    `Раунд: ${project.raiseAmount ?? 'не указано'} ${project.currency} за ${project.equityOffered ?? '—'}% · Min чек: ${project.minCheck ?? 'не указано'} ${project.currency}`,
-    `Бизнес: ${project.brief?.businessSummary ?? '—'}`,
-    `Монетизация: ${project.brief?.monetization ?? '—'}`,
-    `Доход инвестора: ${(napkin as { investorReturn?: string }).investorReturn ?? '—'}`,
-  ].join('\n');
-}
-
-// Sprint 52 P0.4 — multi-project context. Если в звонке упоминается
-// несколько проектов (фаундер сравнивает предложения / менеджер питчит
-// несколько альтернатив) — отдаём AI контекст по каждому, отделённый
-// явным маркером. Безопасный потолок: 5 проектов (больше — теряется
-// фокус, plus prompt-budget). Если массив пустой/один — поведение
-// идентично loadProjectContext.
-async function loadProjectsContext(projectIds: string[]): Promise<string> {
-  const ids = projectIds.filter(Boolean).slice(0, 5);
-  if (ids.length === 0) return loadProjectContext(undefined);
-  if (ids.length === 1) return loadProjectContext(ids[0]);
-  const blocks = await Promise.all(ids.map(async (id, idx) => {
-    const ctx = await loadProjectContext(id);
-    return `=== Проект ${idx + 1} ===\n${ctx}`;
-  }));
-  return [
-    `В разговоре упоминаются ${ids.length} проекта. AI должен ориентироваться по контексту реплики, какой из них активный.`,
-    '',
-    ...blocks,
-  ].join('\n');
-}
+// Sprint 61 — старые loadProjectContext / loadProjectsContext удалены.
+// Использовался только этим файлом, теперь заменён на единый
+// projectContextFormatter (см. projectContextFormatter.ts).
 
 function safeParse(raw: string | null | undefined, fallback: unknown) {
   if (!raw) return fallback;
@@ -1652,7 +1670,13 @@ const MEETING_PLAN_SCHEMA = {
 
 export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPlan> {
   const promptDecision = await resolveMeetingPrepPrompt();
-  const projectContext = await loadProjectContextForPrep(input.projectId);
+  // Sprint 61 — переключили подготовку встречи на единый projectContextFormatter
+  // (verbosity='prep'): полный бриф + InvestorTerms + interview answers + files,
+  // без missingData (избыточно для prep).
+  const loadedProject = input.projectId ? await loadProjectForContext(input.projectId) : null;
+  const projectContext = loadedProject
+    ? formatProjectContextForAssistant(loadedProject, { verbosity: 'prep' })
+    : '';
   const user = [
     'ПОДГОТОВИТЕЛЬНЫЙ КОНТЕКСТ ОТ ФАУНДЕРА',
     '---',
@@ -1756,22 +1780,9 @@ function extractJsonPrep(raw: string): string {
   return m ? m[0] : t;
 }
 
-async function loadProjectContextForPrep(projectId: string | null | undefined): Promise<string> {
-  if (!projectId) return '';
-  const p = await prisma.project.findUnique({
-    where: { id: projectId },
-    include: { brief: true },
-  });
-  if (!p) return '';
-  return [
-    `Проект: ${p.name}`,
-    p.industry ? `Отрасль: ${p.industry}` : '',
-    p.stage ? `Стадия: ${p.stage}` : '',
-    p.raiseAmount ? `Раунд: ${p.raiseAmount} ${p.currency}` : '',
-    p.minCheck ? `Min чек: ${p.minCheck}` : '',
-    p.brief?.businessSummary ? `Бизнес: ${p.brief.businessSummary}` : '',
-  ].filter(Boolean).join('\n');
-}
+// Sprint 61 — loadProjectContextForPrep удалён. prepareForMeeting теперь
+// использует loadProjectForContext + formatProjectContextForAssistant
+// с verbosity='prep'.
 
 function heuristicMeetingPlan(): MeetingPlan {
   return {

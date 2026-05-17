@@ -303,6 +303,12 @@ export interface RetrievalOptions {
   //   • 'full'  — 3-7 sources, шире candidate set, hybrid rerank.
   //   • 'debug' — возвращаем breakdown по каждому result'у (для search-debug-v2).
   mode?: 'fast' | 'full' | 'debug';
+  // Sprint 61 — если transcript содержит финансовые триггеры (выручка / прибыль /
+  // CAC / 2027 / etc.), мы дополнительно бустим project_presentation и
+  // financial_question source'ы. Detector живёт в projectContextFormatter.ts;
+  // route передаёт сюда уже посчитанный bool, чтобы service не зависел от
+  // formatter'а.
+  financeBoost?: boolean;
 }
 
 // Sprint 41 P1 — детальная разбивка score'а для admin debug endpoint'а.
@@ -450,10 +456,31 @@ export async function retrieveKnowledgeForTranscript(
         reasons.push(`quality_${src.qualityScore}`);
       }
 
-      const projectBoost = src.scope === 'project' ? 1.10 : 1.0;
+      // Sprint 61 — Project-scope буст усилен с 1.10 до 1.35. Раньше project KB
+      // (загруженные документы проекта) терялась на фоне глобальной sales KB
+      // даже при равной keyword-релевантности. Теперь, при прочих равных,
+      // project-факты доминируют над generic sales-кейсами — это правильно
+      // для live-встречи (фаундер хочет ответ про СВОЙ проект, не общие советы).
+      const projectBoost = src.scope === 'project' ? 1.35 : 1.0;
       if (projectBoost > 1) reasons.push('project_source');
 
-      const typeBoost = featureBoost[src.sourceType] ?? 1.0;
+      // Sprint 61 — Finance boost. Если transcript явно про деньги (выручка /
+      // прибыль / CAC / 2027 etc.), source'ы типа financial_question и
+      // project_presentation поднимаются дополнительно. Это компенсирует
+      // featureBoosts(sales_assistant.*), где financial_question имеет
+      // multiplier 0.95 (общий sales-сценарий не финансовый).
+      let financeTypeBoost = 1.0;
+      if (options.financeBoost) {
+        if (src.sourceType === 'financial_question') {
+          financeTypeBoost = 1.45;
+          reasons.push('finance_question_boosted');
+        } else if (src.sourceType === 'project_presentation') {
+          financeTypeBoost = 1.20;
+          reasons.push('project_presentation_boosted');
+        }
+      }
+
+      const typeBoost = (featureBoost[src.sourceType] ?? 1.0) * financeTypeBoost;
       if (typeBoost !== 1.0) reasons.push(`type_${src.sourceType}`);
 
       let freshnessBoost = 1.0;
