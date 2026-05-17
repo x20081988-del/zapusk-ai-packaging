@@ -1299,13 +1299,14 @@ export default function SalesAssistant() {
   // something to analyze" gate. Require ≥10 chars on manual to avoid
   // a trivially-pasted "test" enabling the button.
   const hasFinalTranscript = transcript.some((t) => t.final) || manualTranscript.trim().length >= 10;
-  // Sprint 50 hotfix — prep mode: manual context present but the live mic
-  // hasn't produced anything yet. Threshold: prep gates at 20 chars of any
-  // context (matches the backend prepare endpoint); live transcript "active"
-  // is ≥50 chars to allow brief warm-up phrases without flipping the CTA.
-  const liveCharCount = transcript.filter((t) => t.final).map((t) => t.text).join('\n').length;
+  // Sprint 50 hotfix — prep mode: manual context present, but the live
+  // meeting has not started and has not produced any final transcript yet.
+  // Once listening starts, the main CTA must switch to live advice even
+  // before the first phrase arrives.
+  const isMeetingActivelyListening = meetingState === 'listening' || listening;
+  const hasLiveTranscript = transcript.some((t) => t.final && t.text.trim().length > 0);
   const hasMeaningfulPrepContext = manualTranscript.trim().length >= 20;
-  const inPrepMode = hasMeaningfulPrepContext && liveCharCount < 50;
+  const inPrepMode = hasMeaningfulPrepContext && !isMeetingActivelyListening && !hasLiveTranscript;
   const visibleProjects = useMemo(
     () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
     [role, projects],
@@ -1348,7 +1349,7 @@ export default function SalesAssistant() {
     : role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER'
       ? (card?.provider === 'openai' ? 'OpenAI' : card?.provider ?? 'AI')
       : 'AI слушает встречу';
-  const isLiveMeetingLayout = meetingState === 'listening' || listening;
+  const isLiveMeetingLayout = isMeetingActivelyListening;
   const showPreparationBlocks = !isLiveMeetingLayout;
   const actionButtonClass = 'w-full sm:w-auto min-w-0 sm:min-w-[132px] lg:min-w-[168px] whitespace-nowrap';
 
