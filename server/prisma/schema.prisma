@@ -461,6 +461,19 @@ model SalesSession {
   aiDerivedFrom              String?
   cleanTranscriptProcessedAt DateTime?
 
+  // Sprint 60 P0 — Realtime reliability + escalation.
+  //   realtimeReliabilityScore: 0..100 composite (0..100). Computed during
+  //     recompute, mirrors transcriptDiff.realtimeQualityScore. NULL для
+  //     legacy/недостаточно данных.
+  //   requiresManualReview: TRUE если realtime деградировал критично
+  //     (score<50, hallucinations>3, или phrasePreservationRate<0.6).
+  //     Сигнал для ops/QA дашборда: «эту сессию надо посмотреть глазами».
+  //   transcriptFrozenAt: timestamp заморозки clean текста (immutability
+  //     guard в persistCleanTranscript). Раз заморожен — не переписываем.
+  realtimeReliabilityScore   Int?
+  requiresManualReview       Boolean   @default(false)
+  transcriptFrozenAt         DateTime?
+
   // Sprint 52 P0.2 — back-relation на memory entries этой сессии.
   memories            NegotiationMemory[]
 

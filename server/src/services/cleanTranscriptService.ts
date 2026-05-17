@@ -107,6 +107,15 @@ export async function runCleanTranscription(input: RunInput): Promise<CleanTrans
 //      draft-derived. recomputeFromCleanTranscript() — отдельный шаг,
 //      вызывается caller'ом сразу после этого update'а.
 //
+// Sprint 60 P0.4 — Immutability guard.
+//   После того как clean transcript однажды установлен (transcriptFrozenAt
+//   != null), повторный вызов persistCleanTranscript() с другим content
+//   просто LOG'ируется и не пишет в DB. Это защищает от случайного
+//   перезаписывания canonical-источника правды (например, если оператор
+//   загрузил кусок аудио, потом перезалил случайно — первая транскрипция
+//   wins). Для intentional re-transcription смотри recomputeFromCleanTranscript
+//   manual endpoint.
+//
 // На failure — обновляем только статус, не трогаем transcript content.
 export async function persistCleanTranscript(
   sessionId: string,
@@ -118,8 +127,23 @@ export async function persistCleanTranscript(
     // draftTranscript ещё null (защита от перезаписи на повторных uploads).
     const current = await prisma.salesSession.findUnique({
       where: { id: sessionId },
-      select: { transcript: true, draftTranscript: true },
+      select: { transcript: true, draftTranscript: true, transcriptFrozenAt: true },
     });
+    // Sprint 60 P0.4 — Immutability guard.
+    if (current?.transcriptFrozenAt) {
+      console.log(
+        `[clean-transcript] session=${sessionId} ALREADY FROZEN at ${current.transcriptFrozenAt.toISOString()} — ` +
+        `refusing to overwrite (immutability guard). Submitted chars=${result.text.length} ignored.`,
+      );
+      // Update only audioStoragePath if newly provided; no transcript mutation.
+      if (audioStoragePath) {
+        await prisma.salesSession.update({
+          where: { id: sessionId },
+          data: { audioStoragePath },
+        });
+      }
+      return;
+    }
     const preserveDraft = current && !current.draftTranscript && current.transcript
       ? current.transcript
       : null;
@@ -131,8 +155,12 @@ export async function persistCleanTranscript(
         transcriptQualityStatus: 'clean',
         ...(preserveDraft ? { draftTranscript: preserveDraft } : {}),
         ...(audioStoragePath ? { audioStoragePath } : {}),
+        // Sprint 60 P0.4 — freeze. From this moment forward, clean
+        // transcript is canonical and immutable for normal write paths.
+        transcriptFrozenAt: new Date(),
       },
     });
+    console.log(`[clean-transcript] session=${sessionId} FROZEN — clean transcript persisted (chars=${result.text.length})`);
     return;
   }
   // failed / not_available — только статус

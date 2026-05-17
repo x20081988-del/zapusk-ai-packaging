@@ -56,6 +56,25 @@ export interface TranscriptDiff {
   // hallucination knocks the score down by 10 points (signal, not noise).
   realtimeQualityScore: number;
   realtimeQualityClass: 'excellent' | 'good' | 'mediocre' | 'poor';
+  // Sprint 60 P0.5 — filler / hesitation preservation metrics.
+  //
+  // Verbatim prompt explicitly instructs the model to preserve filler
+  // words (ага / угу / эээ). These are SIGNAL for downstream AI
+  // (hesitation, uncertainty, tone). If the realtime path stripped them
+  // but offline kept them — or vice versa — we lose data.
+  //
+  // fillerPreservationRate: how many of the draft's filler occurrences
+  //   survived to the clean transcript. Ideal: 1.0 (verbatim).
+  //   Low rate means one of the two transcripts «cleaned them up» — a
+  //   prompt regression signal.
+  draftFillerCount: number;
+  cleanFillerCount: number;
+  fillerPreservationRate: number; // 0..1
+  // Sprint 60 P0.7 — auto-escalation flag computed alongside the diff.
+  // Set when realtime quality is suspicious enough that ops should
+  // look at this session by hand.
+  requiresManualReview: boolean;
+  manualReviewReason: string | null;
 }
 
 // Лёгкая токенизация на русский язык: разбиваем по , . ! ? ; … и фильтруем
@@ -90,6 +109,17 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 function countWords(text: string): number {
   if (!text) return 0;
   return text.split(/\s+/).filter((t) => t.length > 0).length;
+}
+
+// Sprint 60 P0.5 — filler / hesitation word detection.
+// «ага» / «угу» / «эээ» (with elongated variants) + «ммм», «нуу».
+// Whole-word match (Unicode-aware boundary via lookaround) to avoid
+// hitting substrings inside «когда».
+const FILLER_PATTERN = /(?<![\p{L}\p{N}])(?:а+г+а+|у+г+у+|э+|м+м+|н+у+у+|х+м+м*)(?![\p{L}\p{N}])/giu;
+function countFillers(text: string): number {
+  if (!text) return 0;
+  const matches = text.match(FILLER_PATTERN);
+  return matches ? matches.length : 0;
 }
 
 // Sentence is "in" the other transcript if there's a sentence in `other`
@@ -139,6 +169,21 @@ export function compareDraftVsClean(draft: string, clean: string): TranscriptDif
   const phrasePreservationRate = draftSentences.length === 0
     ? 1
     : draftSentences.filter((s) => findMatch(s, cleanIndexed)).length / draftSentences.length;
+  // Sprint 60 P0.5 — filler preservation.
+  const draftFillerCount = countFillers(draft);
+  const cleanFillerCount = countFillers(clean);
+  const fillerPreservationRate = draftFillerCount === 0
+    ? 1 // no fillers in draft to preserve — neutral score
+    : Math.min(1, cleanFillerCount / draftFillerCount);
+
+  // Compute composite score + auto-escalation BEFORE return so the
+  // return-shape literal stays simple and we don't double-compute.
+  const score = computeRealtimeQualityScore(
+    similarity, tokenSurvivalRate, phrasePreservationRate, hallucinationCandidates.length,
+  );
+  const escalation = computeManualReviewEscalation(
+    score, hallucinationCandidates.length, phrasePreservationRate,
+  );
 
   return {
     draftStats: {
@@ -160,12 +205,13 @@ export function compareDraftVsClean(draft: string, clean: string): TranscriptDif
     phrasePreservationRate,
     draftTokenCount: draftAllTokens.size,
     cleanTokenCount: cleanAllTokens.size,
-    realtimeQualityScore: computeRealtimeQualityScore(
-      similarity, tokenSurvivalRate, phrasePreservationRate, hallucinationCandidates.length,
-    ),
-    realtimeQualityClass: classifyQualityScore(computeRealtimeQualityScore(
-      similarity, tokenSurvivalRate, phrasePreservationRate, hallucinationCandidates.length,
-    )),
+    realtimeQualityScore: score,
+    realtimeQualityClass: classifyQualityScore(score),
+    draftFillerCount,
+    cleanFillerCount,
+    fillerPreservationRate,
+    requiresManualReview: escalation.requires,
+    manualReviewReason: escalation.reason,
   };
 }
 
@@ -188,4 +234,23 @@ function classifyQualityScore(score: number): 'excellent' | 'good' | 'mediocre' 
   if (score >= 75) return 'good';
   if (score >= 50) return 'mediocre';
   return 'poor';
+}
+
+// Sprint 60 P0.7 — Auto-escalation decision per spec:
+//   • reliabilityScore < 50           OR
+//   • hallucinationCandidates > 3      OR
+//   • phrasePreservationRate < 0.6
+// → mark session requires_manual_review=true.
+// Returns reason string so UI/audit can show «why this session was flagged».
+function computeManualReviewEscalation(
+  score: number,
+  hallucinationCount: number,
+  phrasePreservationRate: number,
+): { requires: boolean; reason: string | null } {
+  const reasons: string[] = [];
+  if (score < 50) reasons.push(`score=${score}<50`);
+  if (hallucinationCount > 3) reasons.push(`hallucinations=${hallucinationCount}>3`);
+  if (phrasePreservationRate < 0.6) reasons.push(`phrasePreservation=${phrasePreservationRate.toFixed(2)}<0.6`);
+  if (reasons.length === 0) return { requires: false, reason: null };
+  return { requires: true, reason: reasons.join('; ') };
 }

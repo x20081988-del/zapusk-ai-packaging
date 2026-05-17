@@ -436,6 +436,16 @@ salesSessionsRoutes.get('/:id/transcript-diff', async (req, res) => {
     cleanTokenCount: diff.cleanTokenCount,
     realtimeQualityScore: diff.realtimeQualityScore,
     realtimeQualityClass: diff.realtimeQualityClass,
+    // Sprint 60 P0.5 + P0.7 — filler preservation + escalation.
+    draftFillerCount: diff.draftFillerCount,
+    cleanFillerCount: diff.cleanFillerCount,
+    fillerPreservationRate: diff.fillerPreservationRate,
+    requiresManualReview: diff.requiresManualReview,
+    manualReviewReason: diff.manualReviewReason,
+    // Provenance from the DB row itself (persisted state).
+    persistedReliabilityScore: session.realtimeReliabilityScore,
+    persistedRequiresManualReview: session.requiresManualReview,
+    transcriptFrozenAt: session.transcriptFrozenAt,
     hallucinationCandidates: diff.hallucinationCandidates.slice(0, 10).map(trim),
     addedPhrasesPreview: diff.addedPhrases.slice(0, 5).map(trim),
     removedPhrasesPreview: diff.removedPhrases.slice(0, 5).map(trim),
@@ -445,6 +455,56 @@ salesSessionsRoutes.get('/:id/transcript-diff', async (req, res) => {
       hallucinations: diff.hallucinationCandidates.length,
     },
   });
+});
+
+// Sprint 60 P0.8 — Manual recompute trigger. Used when:
+//   • A session was finalized before Sprint 55 (no auto-recompute on first
+//     audio upload) and we want to retroactively regenerate AI artifacts.
+//   • A clean transcript already exists but admin tweaked something
+//     (rare; mostly a debug helper).
+//
+// Idempotent: recomputeFromCleanTranscript() will return
+// status='skipped_already_processed' if aiDerivedFrom='clean' already.
+// To force re-run, pass `?force=1` which resets cleanTranscriptProcessedAt
+// first. force=1 is admin-only.
+salesSessionsRoutes.post('/:id/recompute', async (req, res) => {
+  const session = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
+  if (!session || session.archivedAt) return res.status(404).json({ error: 'not_found' });
+  const allowed = await actorCanReadSalesSession(req, {
+    projectId: session.projectId,
+    createdById: session.createdById,
+  });
+  if (!allowed) return res.status(404).json({ error: 'not_found' });
+
+  const force = req.query.force === '1';
+  if (force) {
+    if (!isAdminLike(getActorRole(req))) {
+      return res.status(403).json({ error: 'force_recompute_admin_only' });
+    }
+    // Clear the idempotency guard. Transcript content + draftTranscript
+    // stay intact (immutability is preserved at the persistCleanTranscript
+    // level — we're only re-running AI on the existing clean text).
+    await prisma.salesSession.update({
+      where: { id: session.id },
+      data: { cleanTranscriptProcessedAt: null, aiDerivedFrom: 'draft' },
+    });
+  }
+
+  const result = await recomputeFromCleanTranscript(session.id);
+  await recordAudit(req, {
+    action: 'sales_session.recompute_manual',
+    targetType: 'SalesSession',
+    targetId: session.id,
+    payload: {
+      force,
+      status: result.status,
+      durationMs: result.durationMs,
+      hallucinationCandidatesCount: result.hallucinationCandidatesCount,
+      similarity: result.similarity,
+      reason: result.reason,
+    },
+  });
+  res.json(result);
 });
 
 // Sprint 30 — soft-delete + audit. demoGuard на app level продолжает блокировать

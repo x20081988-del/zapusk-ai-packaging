@@ -106,6 +106,14 @@ export async function recomputeFromCleanTranscript(sessionId: string): Promise<R
 
   // Persist update to SalesSession.
   try {
+    // Sprint 60 P0.6 + P0.7 — persist RealtimeReliabilityScore + auto-
+    // escalation flag derived from the diff. If diff failed entirely
+    // (no draft), leave both null/false — we can't grade a session
+    // without comparison data.
+    const reliabilityScore = diff?.realtimeQualityScore ?? null;
+    const requiresManualReview = diff?.requiresManualReview ?? false;
+    const escalationReason = diff?.manualReviewReason ?? null;
+
     await prisma.salesSession.update({
       where: { id: sessionId },
       data: {
@@ -127,8 +135,18 @@ export async function recomputeFromCleanTranscript(sessionId: string): Promise<R
         // Provenance.
         aiDerivedFrom: 'clean',
         cleanTranscriptProcessedAt: new Date(),
+        // Sprint 60 reliability + escalation.
+        ...(reliabilityScore !== null ? { realtimeReliabilityScore: reliabilityScore } : {}),
+        ...(requiresManualReview ? { requiresManualReview: true } : {}),
       },
     });
+
+    if (requiresManualReview) {
+      console.log(
+        `[recompute] session=${sessionId} ESCALATED requires_manual_review=true ` +
+        `reason="${escalationReason}"`,
+      );
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';
     console.warn(`[recompute] session=${sessionId} persist_failed: ${msg.slice(0, 200)}`);
