@@ -213,6 +213,29 @@ model PromptTemplate {
   updatedAt   DateTime @updatedAt
 
   versions    PromptTemplateVersion[]
+  // Sprint 52 P0.1 — context attachments. Foundation под RAG / training data.
+  attachments TemplateAttachment[]
+}
+
+// Sprint 52 P0.1 — Template context files. Admin прикрепляет к шаблону
+// PDF / DOCX / TXT / MD / презентации / dataset'ы. MVP — только metadata
+// + хранение на диске; RAG / vector search накладываются сверху позже.
+// Размещение: env.UPLOADS_DIR/template-attachments/<id><ext>.
+// onDelete: Cascade — при удалении template все его attachments тоже уходят.
+model TemplateAttachment {
+  id           String         @id @default(cuid())
+  templateId   String
+  template     PromptTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  filename     String         // безопасное storage-имя на диске (uuid+ext)
+  originalName String         // что пользователь увидит при скачивании
+  mime         String
+  size         Int            // байт
+  path         String         // relative path в storage-root
+  uploadedById String?
+  createdAt    DateTime       @default(now())
+
+  @@index([templateId])
+  @@index([createdAt])
 }
 
 model PromptTemplateVersion {

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { FileCode2, Plus, Trash2, Cpu, Wand2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { FileCode2, Plus, Trash2, Cpu, Wand2, Paperclip, Download, X as XIcon } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -254,6 +254,10 @@ export default function Templates() {
               className="font-mono text-xs"
             />
             {error && <p className="text-xs text-danger">{error}</p>}
+            {/* Sprint 52 P0.1 — attachments. Только для существующего
+                шаблона (нужен templateId). Для нового шаблона сначала
+                сохраняем, потом можем прикреплять. */}
+            {current && <TemplateAttachmentsSection templateId={current.id} />}
             <div className="flex items-center justify-between gap-2 pt-2">
               <div>
                 {current && (
@@ -271,5 +275,146 @@ export default function Templates() {
         )}
       </Modal>
     </AppLayout>
+  );
+}
+
+// Sprint 52 P0.1 — Template Context Attachments UI. Список + upload + remove.
+// Раздел рендерится только при editing existing template (нужен id).
+function TemplateAttachmentsSection({ templateId }: { templateId: string }) {
+  interface AttachmentRow {
+    id: string;
+    originalName: string;
+    mime: string;
+    size: number;
+    createdAt: string;
+  }
+  const [items, setItems] = useState<AttachmentRow[] | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  async function reload() {
+    try {
+      const r = await api.get<{ attachments: AttachmentRow[] }>(`/api/templates/${templateId}/attachments`);
+      setItems(r.attachments);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось загрузить файлы');
+    }
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId]);
+
+  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      // Используем api.upload (FormData-friendly через api.ts:line 70).
+      await api.upload<{ attachment: AttachmentRow }>(`/api/templates/${templateId}/attachments`, form);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось загрузить файл');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  async function remove(attId: string) {
+    setError(null);
+    try {
+      await api.delete(`/api/templates/${templateId}/attachments/${attId}`);
+      await reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось удалить файл');
+    }
+  }
+
+  function downloadUrl(attId: string) {
+    return `/api/templates/${templateId}/attachments/${attId}/download`;
+  }
+
+  function humanSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return (
+    <div className="rounded-md border border-line bg-elevated p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+          <Paperclip size={14} className="text-zapusk-400" />
+          Контекстные файлы
+          <span className="text-[11px] text-muted font-normal">
+            {items ? `${items.length}` : '…'}
+          </span>
+        </div>
+        <div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.docx,.doc,.txt,.md,.csv,.xlsx,.pptx,.json,.jpg,.jpeg,.png,.webp"
+            className="hidden"
+            onChange={onFileChange}
+            disabled={uploading}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            iconLeft={<Plus size={13} />}
+            onClick={() => fileRef.current?.click()}
+            loading={uploading}
+          >
+            Прикрепить файл
+          </Button>
+        </div>
+      </div>
+      <p className="text-[11px] text-muted">
+        PDF / DOCX / TXT / MD / CSV / XLSX / PPTX / JSON / изображения. До 25 МБ.
+        AI пока не читает их автоматически (foundation под RAG, появится дальше).
+      </p>
+      {error && <p className="text-xs text-danger">{error}</p>}
+      {items && items.length === 0 && (
+        <p className="text-[11px] text-muted italic">К шаблону пока ничего не прикреплено.</p>
+      )}
+      {items && items.length > 0 && (
+        <ul className="space-y-1">
+          {items.map((a) => (
+            <li key={a.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-canvas border border-hairline">
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-primary truncate" title={a.originalName}>{a.originalName}</div>
+                <div className="text-[10.5px] text-muted">
+                  {a.mime} · {humanSize(a.size)} · {new Date(a.createdAt).toLocaleString('ru-RU')}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <a
+                  href={downloadUrl(a.id)}
+                  className="inline-flex items-center justify-center w-7 h-7 rounded text-secondary hover:text-primary hover:bg-elevated"
+                  title="Скачать"
+                >
+                  <Download size={13} />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => remove(a.id)}
+                  className="inline-flex items-center justify-center w-7 h-7 rounded text-secondary hover:text-danger hover:bg-elevated"
+                  title="Удалить"
+                >
+                  <XIcon size={13} />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
