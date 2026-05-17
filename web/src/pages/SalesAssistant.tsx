@@ -155,6 +155,48 @@ interface MeetingPlan {
 }
 
 type MeetingMode = 'live' | 'plan';
+
+// Sprint 51 — два рабочих стола AI-ассистента.
+//   • 'meeting'       — встреча фаундера/менеджера с инвестором (default).
+//   • 'qualification' — первичный звонок инвестору по AI-лидам с целью
+//     назначить Zoom с экспертом. Backend получает mode + scriptKey и
+//     накладывает qualification overlay на sales_gpt system + добавляет
+//     соответствующий script block в user prompt.
+type AssistantDeskMode = 'meeting' | 'qualification';
+
+type QualificationScriptKey =
+  | 'dlfy_vamlyam'
+  | 'dlfy_base'
+  | 'glavsnab'
+  | 'zapusk_base'
+  | 'zapusk_after_vamlyam'
+  | 'funnel_return'
+  | 'generic';
+
+const QUALIFICATION_SCRIPTS: { key: QualificationScriptKey; label: string; hint: string }[] = [
+  { key: 'dlfy_vamlyam',         label: 'DLFY · ВамЛям',           hint: 'Лиды с Авито / ВамЛям. Холодные, нужна сразу ценность.' },
+  { key: 'dlfy_base',            label: 'DLFY · наша база',        hint: 'Тёплая база Zapusk: были на эфирах, смотрели проекты.' },
+  { key: 'glavsnab',             label: 'ГлавСнаб',                hint: 'Маркетплейс стройматериалов: дивиденды, 12 мес минимум.' },
+  { key: 'zapusk_base',          label: 'Zapusk · прозвон базы',   hint: 'База Zapusk без конкретного проекта — подбор по платформе.' },
+  { key: 'zapusk_after_vamlyam', label: 'Zapusk · после ВамЛям',   hint: 'Лид уже общался с менеджером ВамЛям — нужно знать контекст.' },
+  { key: 'funnel_return',        label: 'Возврат в воронку',       hint: 'Мёртвый лид: ранее не сложилось, продавать платформу не проект.' },
+  { key: 'generic',              label: 'Другой проект / вручную', hint: 'Используем тот контекст, который вы вставили вручную.' },
+];
+
+// Sprint 51 — typed assistant session lifecycle. ВСЕ режимы (meeting +
+// qualification) проходят через одну state-machine. Это та же логика, что
+// и раньше, просто сформулированная явно: добавляем 'starting' между idle
+// и listening — окно между кликом «Начать звонок» и моментом когда
+// realtime / Web Speech подтвердили захват.
+type AssistantSessionState =
+  | 'idle'
+  | 'prep'
+  | 'starting'
+  | 'listening'
+  | 'stopped'
+  | 'completed'
+  | 'error';
+
 type AdviceHistoryItem = Pick<
   AssistantCard,
   | 'situation'
@@ -315,6 +357,11 @@ export default function SalesAssistant() {
   const [meetingPlan, setMeetingPlan] = useState<MeetingPlan | null>(null);
   const [meetingMode, setMeetingMode] = useState<MeetingMode>('live');
   const [isPreparing, setIsPreparing] = useState(false);
+  // Sprint 51 — desk mode (meeting | qualification). Default 'meeting' для
+  // обратной совместимости — фаундер на встрече видит ровно то, что видел
+  // до Sprint 51. Qualification mode переключается явно через таб сверху.
+  const [deskMode, setDeskMode] = useState<AssistantDeskMode>('meeting');
+  const [scriptKey, setScriptKey] = useState<QualificationScriptKey>('dlfy_vamlyam');
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
   // Sprint 34A: lastAnalyzeAt / aiError для UX обратной связи.
@@ -824,6 +871,9 @@ export default function SalesAssistant() {
             previousSpinStage,
             adviceHistory: adviceHistorySnapshot,
             projectId: projectId || null,
+            // Sprint 51 — desk mode + script catalog key.
+            mode: deskMode,
+            scriptKey: deskMode === 'qualification' ? scriptKey : null,
           },
           { signal: fastCtrl.signal },
         );
@@ -899,6 +949,9 @@ export default function SalesAssistant() {
             previousSpinStage,
             adviceHistory: adviceHistorySnapshot,
             projectId: projectId || null,
+            // Sprint 51 — desk mode + script catalog key.
+            mode: deskMode,
+            scriptKey: deskMode === 'qualification' ? scriptKey : null,
           },
           { signal: fullCtrl.signal },
         );
@@ -1424,21 +1477,111 @@ export default function SalesAssistant() {
   const isLiveMeetingLayout = isLiveSessionActive;
   const showPreparationBlocks = !isLiveMeetingLayout;
   const actionButtonClass = 'w-full sm:w-auto min-w-0 sm:min-w-[132px] lg:min-w-[168px] whitespace-nowrap';
+  // Sprint 51 — лейблы CTA меняются по deskMode. Логика рендера не
+  // дублируется: одна и та же кнопка показывает «Начать прослушивание»
+  // на встрече и «Начать звонок» в qualification.
+  const labels = deskMode === 'qualification'
+    ? {
+        deskHeader: 'Квалификация инвестора',
+        deskSubtitle: 'Помогает менеджеру провести первичный звонок и назначить встречу с экспертом',
+        startLong: 'Начать звонок',
+        startShort: 'Начать',
+        stop: 'Остановить',
+        prepLong: 'Подготовиться к звонку',
+        prepShort: 'Подготовиться',
+        finishLong: 'Завершить звонок',
+        finishShort: 'Завершить',
+        finishedLong: 'Звонок сохранён',
+        finishedShort: 'Сохранён',
+      }
+    : {
+        deskHeader: 'Живая встреча',
+        deskSubtitle: isLiveMeetingLayout
+          ? 'Транскрипция и подсказка ниже.'
+          : 'Подготовьте план или начните разговор.',
+        startLong: 'Начать прослушивание',
+        startShort: 'Начать',
+        stop: 'Остановить',
+        prepLong: 'Подготовиться ко встрече',
+        prepShort: 'Подготовиться',
+        finishLong: 'Завершить встречу',
+        finishShort: 'Завершить',
+        finishedLong: 'Встреча сохранена',
+        finishedShort: 'Сохранена',
+      };
 
   return (
     <AppLayout
       title="AI-ассистент"
     >
+      {/* Sprint 51 — десковый переключатель «Проведение встречи» vs
+          «Квалификация инвестора». Default — meeting (без регрессии).
+          Disabled-state переключения во время активной сессии:
+          переключаться можно только когда не listening. */}
+      <Card padded className="mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs">
+            <button
+              type="button"
+              className={clsx(
+                'px-3 h-8 rounded font-semibold transition-colors whitespace-nowrap',
+                deskMode === 'meeting'
+                  ? 'bg-ai/15 text-ai-glow'
+                  : 'text-secondary hover:text-primary',
+              )}
+              onClick={() => !isLiveSessionActive && setDeskMode('meeting')}
+              disabled={isLiveSessionActive}
+              title={isLiveSessionActive ? 'Завершите сессию, чтобы переключить режим' : 'Полноценная встреча с инвестором'}
+            >
+              Проведение встречи
+            </button>
+            <button
+              type="button"
+              className={clsx(
+                'px-3 h-8 rounded font-semibold transition-colors whitespace-nowrap',
+                deskMode === 'qualification'
+                  ? 'bg-ai/15 text-ai-glow'
+                  : 'text-secondary hover:text-primary',
+              )}
+              onClick={() => !isLiveSessionActive && setDeskMode('qualification')}
+              disabled={isLiveSessionActive}
+              title={isLiveSessionActive ? 'Завершите сессию, чтобы переключить режим' : 'Первичный звонок инвестору, цель — Zoom с экспертом'}
+            >
+              Квалификация инвестора
+            </button>
+          </div>
+          {deskMode === 'qualification' && (
+            <div className="flex items-center gap-2 text-xs">
+              <label htmlFor="quali-script" className="text-secondary whitespace-nowrap">Сценарий:</label>
+              <select
+                id="quali-script"
+                value={scriptKey}
+                onChange={(e) => setScriptKey(e.target.value as QualificationScriptKey)}
+                disabled={isLiveSessionActive}
+                className="bg-elevated border border-line text-primary rounded-md px-2 h-8 text-xs disabled:opacity-50"
+                title={QUALIFICATION_SCRIPTS.find((s) => s.key === scriptKey)?.hint ?? ''}
+              >
+                {QUALIFICATION_SCRIPTS.map((s) => (
+                  <option key={s.key} value={s.key}>{s.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </Card>
+
       <Card padded className="mb-6">
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-primary">
-              Живая встреча
+              {labels.deskHeader}
             </div>
             <div className="hidden sm:block text-xs text-muted">
-              {isLiveMeetingLayout
-                ? 'Транскрипция и подсказка ниже.'
-                : 'Подготовьте план или начните разговор.'}
+              {deskMode === 'qualification'
+                ? labels.deskSubtitle
+                : (isLiveMeetingLayout
+                  ? 'Транскрипция и подсказка ниже.'
+                  : 'Подготовьте план или начните разговор.')}
             </div>
           </div>
           <div className="grid grid-cols-2 sm:flex sm:flex-wrap xl:flex-nowrap gap-2 w-full xl:w-auto">
@@ -1456,12 +1599,12 @@ export default function SalesAssistant() {
             </Link>
             {isLiveMeetingLayout ? (
               <Button variant="danger" iconLeft={<Square size={14} />} onClick={stop} className={actionButtonClass}>
-                Остановить
+                {labels.stop}
               </Button>
             ) : (
               <Button variant="primary" iconLeft={<Mic size={14} />} onClick={start} className={actionButtonClass}>
-                <span className="hidden lg:inline">Начать прослушивание</span>
-                <span className="lg:hidden">Начать</span>
+                <span className="hidden lg:inline">{labels.startLong}</span>
+                <span className="lg:hidden">{labels.startShort}</span>
               </Button>
             )}
             {inPrepMode ? (
@@ -1473,8 +1616,8 @@ export default function SalesAssistant() {
                 loading={isPreparing}
                 className={clsx(actionButtonClass, 'shadow-ai-glow')}
               >
-                <span className="hidden lg:inline">Подготовиться ко встрече</span>
-                <span className="lg:hidden">Подготовиться</span>
+                <span className="hidden lg:inline">{labels.prepLong}</span>
+                <span className="lg:hidden">{labels.prepShort}</span>
               </Button>
             ) : (
               <Button
@@ -1495,11 +1638,11 @@ export default function SalesAssistant() {
               onClick={finishMeeting}
               loading={finishing}
               disabled={!hasFinalTranscript || meetingState === 'finalized' || meetingState === 'finalizing'}
-              title={meetingState === 'finalized' ? 'Встреча уже сохранена' : 'Превратить разговор в карточку сделки'}
+              title={meetingState === 'finalized' ? 'Сессия уже сохранена' : 'Сохранить транскрипцию и подсказки в карточку'}
               className={actionButtonClass}
             >
-              <span className="hidden lg:inline">{meetingState === 'finalized' ? 'Встреча сохранена' : 'Завершить встречу'}</span>
-              <span className="lg:hidden">{meetingState === 'finalized' ? 'Сохранена' : 'Завершить'}</span>
+              <span className="hidden lg:inline">{meetingState === 'finalized' ? labels.finishedLong : labels.finishLong}</span>
+              <span className="lg:hidden">{meetingState === 'finalized' ? labels.finishedShort : labels.finishShort}</span>
             </Button>
             {transcript.length > 0 && !isLiveMeetingLayout && (
               <Button variant="ghost" onClick={reset} className="w-full sm:w-auto whitespace-nowrap">

@@ -132,6 +132,20 @@ salesAssistantRoutes.use(authMiddleware);
 // Sprint 37 P0.4 — INVESTOR не использует sales co-pilot.
 salesAssistantRoutes.use(requireNotInvestor());
 
+// Sprint 51 — qualification desk. Frontend передаёт `mode` (meeting |
+// qualification) и опциональный `scriptKey` для предзагруженных скриптов
+// (DLFY / ГлавСнаб / возврат и т.д.). Если поля не переданы — поведение
+// идентично прежнему meeting-режиму (gracefully).
+const QUALIFICATION_SCRIPT_KEYS = [
+  'dlfy_vamlyam',
+  'dlfy_base',
+  'glavsnab',
+  'zapusk_base',
+  'zapusk_after_vamlyam',
+  'funnel_return',
+  'generic',
+] as const;
+
 const analyzeSchema = z.object({
   transcript: z.string().trim().min(1).max(32_000),
   recent: z.string().max(16_000).optional().nullable(),
@@ -140,6 +154,8 @@ const analyzeSchema = z.object({
   previousSpinStage: z.enum(['S', 'P', 'I', 'N']).optional().nullable(),
   adviceHistory: z.array(z.unknown()).max(12).optional().nullable(),
   projectId: z.string().optional().nullable(),
+  mode: z.enum(['meeting', 'qualification']).optional().nullable(),
+  scriptKey: z.enum(QUALIFICATION_SCRIPT_KEYS).optional().nullable(),
 });
 
 // Sprint 50 P0.2 — analyze rate-limit. AI cost guardrails already cap the
@@ -173,6 +189,10 @@ salesAssistantRoutes.post('/analyze', withRateLimit('ai_inference'), async (req,
       actorId: getUser(req).id,
       // Sprint 41 P0.8 — workspaceStatus для environment-фильтра.
       workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
+      // Sprint 51 — desk mode + qualification script. По умолчанию meeting,
+      // если фронт ничего не прислал. scriptKey игнорируется в meeting режиме.
+      mode: parsed.data.mode ?? 'meeting',
+      scriptKey: parsed.data.scriptKey ?? null,
     });
     const retrievalEventId = await recordRetrievalObservability(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
     // Sprint 43 P0.3 — пишем AssistantAdviceEvent и возвращаем id фронту,
@@ -248,6 +268,9 @@ salesAssistantRoutes.post('/analyze-fast', withRateLimit('ai_inference'), async 
       actorRole: getActorRole(req),
       actorId: getUser(req).id,
       workspaceStatus: (req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null,
+      // Sprint 51 — see /analyze comment.
+      mode: parsed.data.mode ?? 'meeting',
+      scriptKey: parsed.data.scriptKey ?? null,
     });
     // Sprint 43 — для fast НЕ пишем AssistantAdviceEvent (см. schema comment),
     // только retrieval observability.

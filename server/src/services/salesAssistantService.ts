@@ -3,6 +3,12 @@ import { aiClient } from '../ai/client.js';
 import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js';
 import { MEETING_PREP_SYSTEM_FALLBACK } from '../ai/meetingPrepPrompt.js';
 import {
+  QUALIFICATION_SYSTEM_OVERLAY,
+  formatQualificationContextBlock,
+  isQualificationScriptKey,
+  type QualificationScriptKey,
+} from '../ai/qualificationPrompts.js';
+import {
   retrieveKnowledgeForTranscript,
   formatKnowledgeForPrompt,
   formatKnowledgeForUi,
@@ -105,6 +111,8 @@ async function resolveMeetingPrepPrompt(): Promise<{
   }
 }
 
+export type AssistantDeskMode = 'meeting' | 'qualification';
+
 export interface AnalyzeInput {
   transcript: string;       // полный transcript встречи на момент ручного обновления
   recentContext?: string;   // последние N символов разговора
@@ -121,6 +129,14 @@ export interface AnalyzeInput {
   // может случайно достать production-кейсы. Передаётся route'ом из
   // req.user.workspaceStatus.
   workspaceStatus?: string | null;
+  // Sprint 51 — desk mode. 'meeting' = полная встреча с фаундером (default).
+  // 'qualification' = первичный звонок инвестору с целью назначить Zoom.
+  // Меняет system overlay и user context, но НЕ меняет JSON schema ответа.
+  mode?: AssistantDeskMode;
+  // Sprint 51 — какой скрипт квалификации использовать. Игнорируется в
+  // режиме 'meeting'. Если 'qualification' но scriptKey не передан —
+  // используем 'generic' (опираемся на projectContext / прошлые подсказки).
+  scriptKey?: QualificationScriptKey | null;
 }
 
 // Sprint 38 — KB-источники, использованные в AI-подсказке. Возвращаем их
@@ -405,6 +421,23 @@ function applyProjectDetailsOverrideFast(card: FastAssistantCard, signal: Projec
   };
 }
 
+// Sprint 51 — qualification overlay. Принимает базовый sales_gpt system и,
+// если mode='qualification', добавляет QUALIFICATION_SYSTEM_OVERLAY с
+// явной целью «закрыть на Zoom, не на сделку». В режиме 'meeting' возвращает
+// исходный system без изменений — гарантия отсутствия регрессии.
+function applyDeskMode(system: string, input: AnalyzeInput): string {
+  if (input.mode !== 'qualification') return system;
+  return `${system}\n\n${QUALIFICATION_SYSTEM_OVERLAY}`;
+}
+
+// Sprint 51 — qualification script block для user prompt. В режиме
+// 'meeting' возвращает пустую строку (промпт остаётся прежним).
+function qualificationContextLines(input: AnalyzeInput): string[] {
+  if (input.mode !== 'qualification') return [];
+  const key = isQualificationScriptKey(input.scriptKey) ? input.scriptKey : 'generic';
+  return [formatQualificationContextBlock(key), ''];
+}
+
 export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCard> {
   const projectContext = await loadProjectContext(input.projectId ?? undefined);
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
@@ -414,7 +447,12 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   // Sprint 34Б.2 — system-prompt теперь из template `sales_gpt`. Изменения
   // в админке отражаются на следующем запросе AI, без deploy.
   const promptDecision = await resolveSalesPrompt();
-  console.log(`[sales-assistant] prompt source=${promptDecision.source} templateId=${promptDecision.templateId ?? 'none'}`);
+  const deskMode: AssistantDeskMode = input.mode === 'qualification' ? 'qualification' : 'meeting';
+  console.log(
+    `[sales-assistant] mode=${deskMode} prompt source=${promptDecision.source} ` +
+    `templateId=${promptDecision.templateId ?? 'none'} ` +
+    `scriptKey=${deskMode === 'qualification' ? (input.scriptKey ?? 'generic') : '-'}`,
+  );
 
   // Sprint 38 — Knowledge Base retrieval. Подмешиваем релевантный опыт ZAPUSK
   // в prompt: успешные продажи, objections, follow-up, кейсы. Project isolation
@@ -448,10 +486,13 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   }
 
   const user = [
-    'Режим работы: live AI co-pilot переговоров с инвестором. Это НЕ summary встречи.',
+    deskMode === 'qualification'
+      ? 'Режим работы: первичный звонок инвестору (qualification). Цель — назначить Zoom-встречу с экспертом + узнать чек/срок/критерии. См. system overlay.'
+      : 'Режим работы: live AI co-pilot переговоров с инвестором. Это НЕ summary встречи.',
     'Сформируй structured mini-brief для текущего момента. Каждый блок 1-3 строки, не больше.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно. Если этап S уже закрыт — двигай в P/I/N.',
     '',
+    ...qualificationContextLines(input),
     'Контекст проекта:',
     projectContext,
     '',
@@ -490,7 +531,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   ].join('\n');
 
   const ai = await aiClient.generateJson({
-    system: promptDecision.system,
+    system: applyDeskMode(promptDecision.system, input),
     user,
     feature: 'sales_assistant.analyze',
     modelRoute: 'main',
@@ -643,7 +684,11 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const previousAdvice = formatAdvice(input.previousAdvice);
   const projectDetailsSignal = detectProjectDetailsRequest(input);
   const promptDecision = await resolveSalesPrompt();
-  console.log(`[sales-assistant:fast] prompt source=${promptDecision.source}`);
+  const deskMode: AssistantDeskMode = input.mode === 'qualification' ? 'qualification' : 'meeting';
+  console.log(
+    `[sales-assistant:fast] mode=${deskMode} prompt source=${promptDecision.source} ` +
+    `scriptKey=${deskMode === 'qualification' ? (input.scriptKey ?? 'generic') : '-'}`,
+  );
 
   // Sprint 38 — KB retrieval и для fast endpoint. На fast мы УЖЕ ограничены
   // 8s timeout'ом, поэтому keyword-retrieval (без AI-вызова) подходит идеально:
@@ -670,10 +715,15 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   };
 
   const user = [
-    'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ТАКТИЧЕСКАЯ ПОДСКАЗКА. Live AI co-pilot переговоров.',
-    'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
+    deskMode === 'qualification'
+      ? 'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ПОДСКАЗКА ДЛЯ ПЕРВИЧНОГО ЗВОНКА. Цель — Zoom-слот с экспертом + чек/срок/критерии.'
+      : 'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ТАКТИЧЕСКАЯ ПОДСКАЗКА. Live AI co-pilot переговоров.',
+    deskMode === 'qualification'
+      ? 'Менеджер на первичном звонке. Дай ему реплику прямо сейчас, без аналитики.'
+      : 'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно.',
     '',
+    ...qualificationContextLines(input),
     'Контекст проекта:',
     projectContext,
     '',
@@ -699,7 +749,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   ].join('\n');
 
   const ai = await aiClient.generateJson({
-    system: promptDecision.system,
+    system: applyDeskMode(promptDecision.system, input),
     user,
     feature: 'sales_assistant.analyze_fast',
     modelRoute: 'fast', // gpt-4o-mini / claude-haiku — ~1-3s типичный latency
