@@ -42,6 +42,46 @@ function getSR(): SRCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+// P0 hotfix — transcript aggregation. After 2026-04-08 voice QA call, only
+// 2 of ~15 expected segments survived in the UI. Adds two safeguards on
+// EVERY final segment append:
+//
+//   1. Exact-duplicate dedup of the LAST segment. Realtime occasionally
+//      re-emits the same completed event (or the model hallucinates a
+//      repeated short phrase on silence). Without dedup, the transcript
+//      becomes «Да. Да. Да.» — noise for AI advice + memory.
+//
+//   2. Diagnostic log per append. Without this, ops can't tell «10 events
+//      arrived, 8 stuck» from «only 2 events arrived». Now console.debug
+//      shows the exact picture per call.
+//
+// Returns the new transcript array. Caller does setTranscript(append(prev,...)).
+// Logs are dev-mode console.debug — NOT shipped to production telemetry.
+interface TranscriptSegment {
+  ts: number;
+  final: boolean;
+  text: string;
+}
+function appendFinalSegment(
+  prev: TranscriptSegment[],
+  text: string,
+  source: 'realtime' | 'web-speech',
+): TranscriptSegment[] {
+  const trimmed = text.trim();
+  if (!trimmed) return prev;
+  const last = prev[prev.length - 1];
+  if (last && last.final && last.text.trim() === trimmed) {
+    console.debug(`[sales-assistant/transcript] DEDUP ${source} "${trimmed.slice(0, 60)}"`);
+    return prev;
+  }
+  const next = [...prev, { ts: Date.now(), final: true, text: trimmed }];
+  console.debug(
+    `[sales-assistant/transcript] APPEND ${source} #${next.length} ` +
+    `chars=${trimmed.length} "${trimmed.slice(0, 60)}"`,
+  );
+  return next;
+}
+
 // ─── Card shape returned by /api/sales-assistant/analyze ─────────────────────
 // Sprint 12: расширили AssistantCard до structured mini-brief.
 // Legacy aliases (risk / recommendation / suggestedPhrase / nextStep) сохраняем
@@ -1111,8 +1151,23 @@ export default function SalesAssistant() {
           !shouldListenRef.current ||
           !liveSessionStartedRef.current ||
           recognitionSessionId !== liveSessionIdRef.current
-        ) return;
-        if (final.length) setTranscript((prev) => [...prev, ...final]);
+        ) {
+          console.debug(
+            `[sales-assistant/transcript] DROP web-speech sid=${recognitionSessionId} ` +
+            `currentSid=${liveSessionIdRef.current} ` +
+            `shouldListen=${shouldListenRef.current} active=${liveSessionStartedRef.current}`,
+          );
+          return;
+        }
+        if (final.length) {
+          setTranscript((prev) => {
+            let next = prev;
+            for (const seg of final) {
+              next = appendFinalSegment(next, seg.text, 'web-speech');
+            }
+            return next;
+          });
+        }
         setInterim(interimText);
       };
       sr.onerror = (e) => {
@@ -1242,8 +1297,19 @@ export default function SalesAssistant() {
             !shouldListenRef.current ||
             !liveSessionStartedRef.current ||
             currentLiveSessionId !== liveSessionIdRef.current
-          ) return;
-          setTranscript((prev) => [...prev, { ts: Date.now(), final: true, text }]);
+          ) {
+            // P0 hotfix — log every dropped event with reason. Without this,
+            // a long call that "lost" 90% of segments looks identical to a
+            // call with a quiet investor. Now we can tell from console which
+            // is which.
+            console.debug(
+              `[sales-assistant/transcript] DROP realtime sid=${currentLiveSessionId} ` +
+              `currentSid=${liveSessionIdRef.current} ` +
+              `shouldListen=${shouldListenRef.current} active=${liveSessionStartedRef.current}`,
+            );
+            return;
+          }
+          setTranscript((prev) => appendFinalSegment(prev, text, 'realtime'));
           setInterim('');
         },
         onError: (err) => {

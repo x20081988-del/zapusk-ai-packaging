@@ -143,11 +143,22 @@ export async function startRealtimeTranscription(
     // Аккумулируем delta'ы текущего сегмента, чтобы UI получал растущий
     // interim, а не голые чанки. На .completed — сбрасываем буфер.
     let interimBuffer = '';
+    // P0 hotfix — instrumentation. После реального звонка 2026-04-08
+    // обнаружили, что UI содержал лишь 2 сегмента вместо ~15. Без диагностики
+    // невозможно понять: модель прислала мало completed-событий или они
+    // дропнулись где-то в pipeline. Считаем все события сегмента, чтобы
+    // ops видели в console.debug точный картину «event types per session».
+    let finalSegmentCount = 0;
+    let deltaCount = 0;
     dc = pc.createDataChannel('oai-events');
     dc.onopen = () => realtimeLog('data-channel-open', { traceId: session.traceId });
     dc.onclose = () => realtimeLog('data-channel-close', {
       traceId: session.traceId,
       readyState: dc?.readyState,
+      // P0 hotfix — log session summary on close. Ops can diff
+      // finalSegmentCount with what's actually saved to verify pipeline.
+      finalSegmentCount,
+      deltaCount,
     });
     dc.onerror = () => realtimeLog('data-channel-error', {
       traceId: session.traceId,
@@ -162,18 +173,33 @@ export async function startRealtimeTranscription(
         if (msg.type === 'conversation.item.input_audio_transcription.delta') {
           if (typeof msg.delta === 'string' && msg.delta.length) {
             interimBuffer += msg.delta;
+            deltaCount++;
             callbacks.onInterim(interimBuffer);
           }
           return;
         }
         if (msg.type === 'conversation.item.input_audio_transcription.completed') {
+          const rawTranscript = typeof msg.transcript === 'string' ? msg.transcript.trim() : '';
           interimBuffer = '';
-          if (typeof msg.transcript === 'string' && msg.transcript.trim().length) {
+          if (rawTranscript.length) {
+            finalSegmentCount++;
             // Sprint 53 Voice QA — нормализуем известные мис-распознавания
             // брендов («ГласНаб» → «Главснаб» и т.п.) до того как сегмент
             // попадает в UI / в analyze-payload. Без этого AI и Память
             // встреч хранят искажённое имя проекта.
-            callbacks.onFinal(normalizeTranscript(msg.transcript.trim()));
+            const normalized = normalizeTranscript(rawTranscript);
+            // P0 hotfix — log every final segment with safe excerpt. NEVER
+            // log full transcript (privacy + bundle size). 60-char preview
+            // is enough to identify hallucination patterns vs real speech.
+            realtimeLog('final-segment', {
+              traceId: session.traceId,
+              idx: finalSegmentCount,
+              chars: normalized.length,
+              preview: normalized.slice(0, 60),
+            });
+            callbacks.onFinal(normalized);
+          } else {
+            realtimeLog('final-segment-empty', { traceId: session.traceId, idx: finalSegmentCount });
           }
           // После завершения сегмента очищаем interim в UI.
           callbacks.onInterim('');
