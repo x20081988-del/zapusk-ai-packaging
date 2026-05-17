@@ -1183,8 +1183,32 @@ export default function SalesAssistant() {
       recognitionActiveRef.current = false;
       speechStatusRef.current = 'mic_error';
       setSpeechStatus('mic_error');
-      setPermError(err instanceof Error ? err.message : 'Не удалось включить распознавание речи');
+      // Sprint 53 Task H — никогда не показываем raw OpenAI/WebRTC/SDP-сообщение
+      // напрямую в UI. Делаем friendly копию + логируем raw в console для
+      // диагностики операторов. Это исключает «UnhandledPromiseRejection: ICE
+      // gathering failed» и подобные технические тексты в кабинете фаундера.
+      const rawMsg = err instanceof Error ? err.message : 'unknown';
+      console.warn('[sales-assistant] mic start failed:', rawMsg);
+      setPermError(friendlyMicError(rawMsg));
     }
+  }
+
+  // Sprint 53 Task H — friendly копи для типовых причин отказа браузерного
+  // распознавания. Никаких raw кодов вроде «not-allowed» или «audio-capture».
+  function friendlyMicError(raw: string): string {
+    if (/not.allowed|service.not.allowed|permission/i.test(raw)) {
+      return 'Доступ к микрофону не разрешён. Разрешите доступ в настройках браузера и попробуйте снова.';
+    }
+    if (/audio.capture|no.input|no.microphone/i.test(raw)) {
+      return 'Браузер не видит микрофон. Проверьте устройство ввода и системные настройки.';
+    }
+    if (/not.supported|browser/i.test(raw)) {
+      return 'Голосовой ввод не поддерживается в этом браузере. Откройте в Chrome / Edge / Safari.';
+    }
+    if (/network|fetch|ECONNREFUSED/i.test(raw)) {
+      return 'Не удалось связаться с сервисом распознавания. Проверьте интернет и попробуйте снова.';
+    }
+    return 'Не удалось включить распознавание речи. Попробуйте снова или используйте «Вставить контекст звонка».';
   }
 
   async function start() {
