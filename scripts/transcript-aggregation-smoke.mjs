@@ -484,3 +484,49 @@ if (!sprint56Ok || !guardOk) {
   process.exit(1);
 }
 console.log('\n✓ PASS — Sprint 56 quality regression suite.\n');
+
+// ─── P0 hotfix — Analyze payload composition ───
+// Mirror of web/src/lib/salesAssistantTranscript.ts. The live UI hides the
+// full manual context during an active call, but analyze payload must still
+// include it together with live final segments and the current interim phrase.
+console.log('\n=== Sales Assistant Analyze Payload Composition ===\n');
+
+function composeAnalyzeTranscriptJs(input) {
+  const manual = (input.manualContext ?? '').trim();
+  const live = (input.liveSegments ?? [])
+    .filter((segment) => segment.final)
+    .map((segment) => (segment.text ?? '').trim())
+    .filter(Boolean)
+    .join('\n');
+  const interim = (input.interimTranscript ?? '').trim();
+
+  const parts = [];
+  if (manual) parts.push(manual);
+  if (live) parts.push(live);
+  let base = parts.join('\n');
+  if (!interim) return base;
+  if (base && base.endsWith(interim)) return base;
+  return base ? `${base}\n${interim}` : interim;
+}
+
+const analyzePayload = composeAnalyzeTranscriptJs({
+  manualContext: 'инвестор миллиардер',
+  liveSegments: [
+    { final: true, text: 'Меня зовут Григорий. Начинаем.' },
+  ],
+  interimTranscript: 'Сейчас расскажу коротко по сути.',
+});
+const analyzePayloadOk =
+  analyzePayload.includes('инвестор миллиардер') &&
+  analyzePayload.includes('Меня зовут Григорий. Начинаем.') &&
+  analyzePayload.includes('Сейчас расскажу коротко по сути.');
+
+console.log(`  ${analyzePayloadOk ? '✓' : '✗'} manual context + live transcript + interim all reach analyze input`);
+console.log(`     chars=${analyzePayload.length}`);
+
+if (!analyzePayloadOk) {
+  console.log('\n✗ FAIL — analyze payload lost manual context or live transcript.');
+  console.log(JSON.stringify({ analyzePayload }, null, 2));
+  process.exit(1);
+}
+console.log('\n✓ PASS — analyze payload composition keeps hidden manual context.\n');

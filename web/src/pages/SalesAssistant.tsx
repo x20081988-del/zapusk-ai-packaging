@@ -24,6 +24,7 @@ import { startAudioQualityMeter, type AudioQualityMeter, type AudioQualityClass 
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
+import { composeAnalyzeTranscript, getAnalyzeTranscriptStats } from '../lib/salesAssistantTranscript';
 import { newSegmentId, recordLifecycle } from '../lib/transcriptPipeline';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
@@ -587,11 +588,11 @@ export default function SalesAssistant() {
   // finalizeAudioBlobRef до фактической отправки в finishMeeting().
   const audioRecorderRef = useRef<CallAudioRecorder | null>(null);
   const finalizeAudioBlobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
-  // Sprint 59 P0.2 — live audio quality meter handle + UI class.
-  // null while not capturing. UI class drives a non-blocking warning
-  // banner when quality is `weak`/`silent`/`clipping`.
+  // Sprint 59 P0.2 — live audio quality meter handle.
+  // We keep the diagnostics + aggregate logs, but do not show live warning
+  // banners in the call UI: they distract from the investor conversation.
   const audioMeterRef = useRef<AudioQualityMeter | null>(null);
-  const [audioQualityClass, setAudioQualityClass] = useState<AudioQualityClass | null>(null);
+  const [, setAudioQualityClass] = useState<AudioQualityClass | null>(null);
   type TranscriptionProvider = 'realtime' | 'web-speech';
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider | null>(null);
   const [realtimeModel, setRealtimeModel] = useState<string | null>(null);
@@ -721,10 +722,10 @@ export default function SalesAssistant() {
   // represents the conversation that already happened (Zoom Notes, prior
   // call), and the live mic continues from where the founder is now.
   function fullTranscript(): string {
-    const live = transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n');
-    const manual = manualTranscriptRef.current.trim();
-    if (manual && live) return `${manual}\n${live}`;
-    return manual || live;
+    return composeAnalyzeTranscript({
+      manualContext: manualTranscriptRef.current,
+      liveSegments: transcriptLinesRef.current,
+    });
   }
 
   // Sprint 49 hotfix 9 — для AI analyze важна и interim-фраза (то что только
@@ -732,11 +733,11 @@ export default function SalesAssistant() {
   // отстаёт на одну реплику и теряет свежий контекст. Дедуп: если interim
   // полностью совпадает с хвостом final transcript — не дублируем.
   function transcriptWithInterim(): string {
-    const base = fullTranscript();
-    const interimText = interimRef.current?.trim();
-    if (!interimText) return base;
-    if (base && base.endsWith(interimText)) return base;
-    return base ? `${base}\n${interimText}` : interimText;
+    return composeAnalyzeTranscript({
+      manualContext: manualTranscriptRef.current,
+      liveSegments: transcriptLinesRef.current,
+      interimTranscript: interimRef.current,
+    });
   }
 
   function recentContext(): string {
@@ -1000,7 +1001,13 @@ export default function SalesAssistant() {
 
   async function runAnalyze() {
     // Sprint 49 hotfix 9 — analyze видит final + interim.
-    const transcriptText = transcriptWithInterim();
+    const transcriptInput = {
+      manualContext: manualTranscriptRef.current,
+      liveSegments: transcriptLinesRef.current,
+      interimTranscript: interimRef.current,
+    };
+    const transcriptText = composeAnalyzeTranscript(transcriptInput);
+    const payloadStats = getAnalyzeTranscriptStats(transcriptInput);
     if (transcriptText.trim().length < 10) {
       setPermError('Сначала начните прослушивание и скажите несколько фраз.');
       return;
@@ -1031,13 +1038,21 @@ export default function SalesAssistant() {
     // Tracks: clickId, manual/live char split, previous mainQuestion (so a
     // later mainQuestionChanged check can fire), and absolute timestamps for
     // each pipeline boundary. No raw transcript in logs — only counts.
-    const liveChars = transcriptLinesRef.current.filter((t) => t.final).map((t) => t.text).join('\n').length
-      + (interimRef.current?.trim().length ?? 0);
-    const manualChars = manualTranscriptRef.current.trim().length;
     const prevMainQuestion = cardRef.current?.mainQuestion ?? fastCardRef.current?.mainQuestion ?? null;
+    const payloadSource = [
+      payloadStats.manualContextChars > 0 ? 'manual' : null,
+      payloadStats.liveTranscriptChars > 0 ? (transcriptionProvider ?? 'live') : null,
+      payloadStats.interimChars > 0 ? 'interim' : null,
+    ].filter(Boolean).join('+') || 'empty';
+    console.debug(
+      `[sales-assistant/analyze-payload] ` +
+      `manual=${payloadStats.manualContextChars} live=${payloadStats.liveTranscriptChars} ` +
+      `interim=${payloadStats.interimChars} total=${payloadStats.finalPayloadChars} ` +
+      `mode=${deskMode} source=${payloadSource}`,
+    );
     console.debug(
       `[sales-assistant/click] fastReq=${myFastId} fullReq=${myFullId} ` +
-      `manualChars=${manualChars} liveChars=${liveChars} ` +
+      `manualChars=${payloadStats.manualContextChars} liveChars=${payloadStats.liveTranscriptChars + payloadStats.interimChars} ` +
       `transcriptCharsToApi=${transcriptForApi.length} total=${transcriptText.length} ` +
       `prevMainQuestion="${(prevMainQuestion ?? '').slice(0, 60)}"`,
     );
@@ -2137,19 +2152,6 @@ export default function SalesAssistant() {
           {permError}
         </div>
       )}
-      {/* Sprint 59 P0.2 — non-blocking live audio quality warning.
-          Triggered ONLY on `weak` / `silent` / `clipping` (NOT `good`).
-          Stays informational — doesn't stop the session. */}
-      {isLiveMeetingLayout && audioQualityClass && audioQualityClass !== 'good' && (
-        <div className="mb-6 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          <div>
-            {audioQualityClass === 'weak' && 'Низкий уровень голоса — транскрипция может быть неточной. Подойдите ближе к микрофону или включите внешний мик.'}
-            {audioQualityClass === 'silent' && 'AI не слышит звук. Проверьте, что микрофон не замьючен и активен в системе.'}
-            {audioQualityClass === 'clipping' && 'Звук пересвечивает (clipping) — слова могут искажаться. Отодвиньтесь чуть дальше или уменьшите усиление микрофона.'}
-          </div>
-        </div>
-      )}
       {isLiveMeetingLayout && finalizeError && meetingState === 'finalize_failed' && (
         <div className="mb-6 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -2487,7 +2489,7 @@ export default function SalesAssistant() {
                     <StatusBadge tone="info">Текст вставлен вручную</StatusBadge>
                     {isLiveMeetingLayout && (
                       <span className="text-[11px] text-muted">
-                        Учитывается в подсказке, но не считается репликой.
+                        Контекст учитывается в подсказке, но не считается репликой.
                       </span>
                     )}
                   </div>
