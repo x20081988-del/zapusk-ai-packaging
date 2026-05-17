@@ -73,7 +73,7 @@ const SHARED_OBJECTIONS: Record<string, string> = {
 export const QUALIFICATION_SCRIPTS: Record<QualificationScriptKey, QualificationScript> = {
   dlfy_vamlyam: {
     key: 'dlfy_vamlyam',
-    label: 'DLFY · ВамЛям',
+    label: 'DLFY — ВамЛям',
     shortPitch: [
       'DLFY — приложение-аналитик для биржевой торговли акциями публичных компаний и стартапов.',
       'Анализирует историю компании, рыночные данные и тренды, даёт рекомендацию: когда покупать, когда продавать, стоит ли вообще.',
@@ -97,7 +97,7 @@ export const QUALIFICATION_SCRIPTS: Record<QualificationScriptKey, Qualification
   },
   dlfy_base: {
     key: 'dlfy_base',
-    label: 'DLFY · наша база',
+    label: 'DLFY — наша база',
     shortPitch: [
       'Тёплый лид: смотрел проекты через Zapusk, был на эфирах, рассматривает инвестиции в проекты.',
       'DLFY — приложение-аналитик для торговли акциями: анализирует тренды и компанию, выдаёт рекомендации.',
@@ -142,7 +142,7 @@ export const QUALIFICATION_SCRIPTS: Record<QualificationScriptKey, Qualification
   },
   zapusk_base: {
     key: 'zapusk_base',
-    label: 'Zapusk · прозвон базы',
+    label: 'Zapusk — база',
     shortPitch: [
       'Контекст лида: смотрел проекты через Zapusk, возможно был на эфирах.',
       'Открытие: «Вы через нашу платформу когда-то смотрели бизнесы для инвестиций / были на эфирах. Сильно ошибусь, если предположу что вы время от времени рассматриваете инвестиции в проекты?»',
@@ -163,7 +163,7 @@ export const QUALIFICATION_SCRIPTS: Record<QualificationScriptKey, Qualification
   },
   zapusk_after_vamlyam: {
     key: 'zapusk_after_vamlyam',
-    label: 'Zapusk · после ВамЛям',
+    label: 'Zapusk — после ВамЛям',
     shortPitch: [
       'Контекст: с лидом ранее общался менеджер ВамЛям, заинтересовал инвестициями в ГлавСнаб.',
       'Открытие: «С вами ранее связывался наш менеджер и сказал что смог вас заинтересовать инвестициями в ГлавСнаб».',
@@ -207,7 +207,7 @@ export const QUALIFICATION_SCRIPTS: Record<QualificationScriptKey, Qualification
   },
   generic: {
     key: 'generic',
-    label: 'Другой проект / вручную',
+    label: 'Универсальный сценарий',
     shortPitch: 'Используй контекст, который менеджер вставил вручную. Если контекста мало — сначала уточни у инвестора, по какому проекту звонок и что он помнит из предыдущего общения.',
     qualifyingQuestions: [
       'Какую сумму рассматриваете для инвестирования?',

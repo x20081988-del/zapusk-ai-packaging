@@ -173,14 +173,17 @@ type QualificationScriptKey =
   | 'funnel_return'
   | 'generic';
 
+// Sprint 53 Task D — clean titles per spec (em-dash separator, «Универсальный
+// сценарий» вместо «Другой проект / вручную»). Это fallback каталог: основной
+// источник — backend (admin-driven via /api/sales-assistant/qualification-scripts).
 const QUALIFICATION_SCRIPTS: { key: QualificationScriptKey; label: string; hint: string }[] = [
-  { key: 'dlfy_vamlyam',         label: 'DLFY · ВамЛям',           hint: 'Лиды с Авито / ВамЛям. Холодные, нужна сразу ценность.' },
-  { key: 'dlfy_base',            label: 'DLFY · наша база',        hint: 'Тёплая база Zapusk: были на эфирах, смотрели проекты.' },
+  { key: 'dlfy_vamlyam',         label: 'DLFY — ВамЛям',           hint: 'Лиды с Авито / ВамЛям. Холодные, нужна сразу ценность.' },
+  { key: 'dlfy_base',            label: 'DLFY — наша база',        hint: 'Тёплая база Zapusk: были на эфирах, смотрели проекты.' },
   { key: 'glavsnab',             label: 'ГлавСнаб',                hint: 'Маркетплейс стройматериалов: дивиденды, 12 мес минимум.' },
-  { key: 'zapusk_base',          label: 'Zapusk · прозвон базы',   hint: 'База Zapusk без конкретного проекта — подбор по платформе.' },
-  { key: 'zapusk_after_vamlyam', label: 'Zapusk · после ВамЛям',   hint: 'Лид уже общался с менеджером ВамЛям — нужно знать контекст.' },
+  { key: 'zapusk_base',          label: 'Zapusk — база',           hint: 'База Zapusk без конкретного проекта — подбор по платформе.' },
+  { key: 'zapusk_after_vamlyam', label: 'Zapusk — после ВамЛям',   hint: 'Лид уже общался с менеджером ВамЛям — нужно знать контекст.' },
   { key: 'funnel_return',        label: 'Возврат в воронку',       hint: 'Мёртвый лид: ранее не сложилось, продавать платформу не проект.' },
-  { key: 'generic',              label: 'Другой проект / вручную', hint: 'Используем тот контекст, который вы вставили вручную.' },
+  { key: 'generic',              label: 'Универсальный сценарий',  hint: 'Используем тот контекст, который вы вставили вручную.' },
 ];
 
 // Sprint 51 — typed assistant session lifecycle. ВСЕ режимы (meeting +
