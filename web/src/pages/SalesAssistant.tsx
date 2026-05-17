@@ -1279,7 +1279,17 @@ export default function SalesAssistant() {
   function stop() {
     shouldListenRef.current = false;
     liveSessionIdRef.current++;
-    setLiveSessionActive(false);
+    // Hotfix — preserve liveSessionStarted=true if the founder already
+    // captured a live transcript. Without this, clicking «Остановить»
+    // after a real conversation flips CTA back to «Подготовиться ко
+    // встрече», which is wrong: the meeting happened, the founder still
+    // needs «Получить подсказку» to refresh advice on what was said.
+    // Only fully reset if no live transcript was captured at all.
+    const liveTranscriptExists =
+      transcriptLinesRef.current.some((t) => t.final && t.text.trim().length > 0);
+    if (!liveTranscriptExists) {
+      setLiveSessionActive(false);
+    }
     liveStartedAtRef.current = null;
     setListening(false);
     speechStatusRef.current = 'stopped';
@@ -1352,13 +1362,23 @@ export default function SalesAssistant() {
   // a trivially-pasted "test" enabling the button.
   const hasFinalTranscript = transcript.some((t) => t.final) || manualTranscript.trim().length >= 10;
   // Sprint 50 hotfix — prep mode: manual context present, but the live
-  // meeting has not started and has not produced any final transcript yet.
-  // Once listening starts, the main CTA must switch to live advice even
-  // before the first phrase arrives.
-  const isMeetingActivelyListening = liveSessionStarted || meetingState === 'listening' || listening;
-  const hasLiveTranscript = transcript.some((t) => t.final && t.text.trim().length > 0);
+  // meeting has not been started yet. The moment the user clicks
+  // «Начать прослушивание» (or any path that sets liveSessionStarted /
+  // meetingState='listening' / listening=true), prep mode flips off and
+  // the main CTA becomes «Получить подсказку» — even if the founder is
+  // still silent and no transcript chars have arrived yet.
+  //
+  // isLiveSessionActive is the SINGLE truth source: any of three signals
+  // means "the live meeting has started". Don't gate on hasLiveTranscript:
+  // a silent first 10 seconds must still show «Получить подсказку», not
+  // «Подготовиться ко встрече», otherwise the founder can't get an
+  // opening question until they speak first — exactly backwards.
+  const isLiveSessionActive =
+    liveSessionStarted ||
+    meetingState === 'listening' ||
+    listening;
   const hasMeaningfulPrepContext = manualTranscript.trim().length >= 20;
-  const inPrepMode = hasMeaningfulPrepContext && !isMeetingActivelyListening && !hasLiveTranscript;
+  const inPrepMode = hasMeaningfulPrepContext && !isLiveSessionActive;
   const visibleProjects = useMemo(
     () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
     [role, projects],
@@ -1401,7 +1421,7 @@ export default function SalesAssistant() {
     : role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER'
       ? (card?.provider === 'openai' ? 'OpenAI' : card?.provider ?? 'AI')
       : 'AI слушает встречу';
-  const isLiveMeetingLayout = isMeetingActivelyListening;
+  const isLiveMeetingLayout = isLiveSessionActive;
   const showPreparationBlocks = !isLiveMeetingLayout;
   const actionButtonClass = 'w-full sm:w-auto min-w-0 sm:min-w-[132px] lg:min-w-[168px] whitespace-nowrap';
 
