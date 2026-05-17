@@ -156,6 +156,10 @@ const analyzeSchema = z.object({
   projectId: z.string().optional().nullable(),
   mode: z.enum(['meeting', 'qualification']).optional().nullable(),
   scriptKey: z.enum(QUALIFICATION_SCRIPT_KEYS).optional().nullable(),
+  // Sprint 52 P0.4 — multi-project context. Дополнительные проекты,
+  // которые AI должен учитывать. Максимум 5 — больше шумит prompt и
+  // размывает focus.
+  projectIds: z.array(z.string()).max(5).optional().nullable(),
 });
 
 // Sprint 50 P0.2 — analyze rate-limit. AI cost guardrails already cap the
@@ -193,6 +197,8 @@ salesAssistantRoutes.post('/analyze', withRateLimit('ai_inference'), async (req,
       // если фронт ничего не прислал. scriptKey игнорируется в meeting режиме.
       mode: parsed.data.mode ?? 'meeting',
       scriptKey: parsed.data.scriptKey ?? null,
+      // Sprint 52 P0.4 — multi-project context (опционально).
+      projectIds: parsed.data.projectIds ?? null,
     });
     const retrievalEventId = await recordRetrievalObservability(req, parsed.data.projectId ?? null, card.knowledgeRetrievalMeta);
     // Sprint 43 P0.3 — пишем AssistantAdviceEvent и возвращаем id фронту,
@@ -271,6 +277,8 @@ salesAssistantRoutes.post('/analyze-fast', withRateLimit('ai_inference'), async 
       // Sprint 51 — see /analyze comment.
       mode: parsed.data.mode ?? 'meeting',
       scriptKey: parsed.data.scriptKey ?? null,
+      // Sprint 52 P0.4 — multi-project context (опционально).
+      projectIds: parsed.data.projectIds ?? null,
     });
     // Sprint 43 — для fast НЕ пишем AssistantAdviceEvent (см. schema comment),
     // только retrieval observability.

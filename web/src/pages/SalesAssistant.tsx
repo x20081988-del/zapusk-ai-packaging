@@ -321,6 +321,11 @@ export default function SalesAssistant() {
   const [projects, setProjects] = useState<Project[]>([]);
   const role = getAuth()?.role ?? 'client';
   const [projectId, setProjectId] = useState<string>('');
+  // Sprint 52 P0.4 — multi-project context awareness. relatedProjectIds —
+  // дополнительные проекты, упомянутые в звонке (сравнение / альтернативы /
+  // подбор). Передаются в analyze + complete как массив. Default — пусто,
+  // single-project flow не меняется.
+  const [relatedProjectIds, setRelatedProjectIds] = useState<string[]>([]);
   const [listening, setListening] = useState(false);
   const [permError, setPermError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<Array<{ ts: number; final: boolean; text: string }>>([]);
@@ -876,6 +881,11 @@ export default function SalesAssistant() {
             // Sprint 51 — desk mode + script catalog key.
             mode: deskMode,
             scriptKey: deskMode === 'qualification' ? scriptKey : null,
+            // Sprint 52 P0.4 — multi-project: если выбраны related projects,
+            // отправляем как массив. Backend сам fallback'нется на projectId.
+            projectIds: relatedProjectIds.length > 0
+              ? [projectId, ...relatedProjectIds].filter(Boolean)
+              : undefined,
           },
           { signal: fastCtrl.signal },
         );
@@ -954,6 +964,11 @@ export default function SalesAssistant() {
             // Sprint 51 — desk mode + script catalog key.
             mode: deskMode,
             scriptKey: deskMode === 'qualification' ? scriptKey : null,
+            // Sprint 52 P0.4 — multi-project: если выбраны related projects,
+            // отправляем как массив. Backend сам fallback'нется на projectId.
+            projectIds: relatedProjectIds.length > 0
+              ? [projectId, ...relatedProjectIds].filter(Boolean)
+              : undefined,
           },
           { signal: fullCtrl.signal },
         );
@@ -1245,6 +1260,10 @@ export default function SalesAssistant() {
         // присвоит им salesSessionId, чтобы outcome'ы можно было аккуратно
         // атрибуцировать в дашбордах.
         adviceEventIds,
+        // Sprint 52 P0.4 — multi-project. Передаём массив [primary, ...related].
+        projectIds: relatedProjectIds.length > 0
+          ? [projectId, ...relatedProjectIds].filter(Boolean)
+          : undefined,
       }, finalizeIdempotencyKeyRef.current);
       // Только после успеха останавливаем listening и переходим в finalized.
       setFinishResult(result);
@@ -1329,6 +1348,8 @@ export default function SalesAssistant() {
     // Sprint 43 — сброс advice tracking при новом meeting'е.
     setAdviceEventIds([]);
     setAdviceEventLast(null);
+    // Sprint 52 P0.4 — сброс related-projects при новом звонке.
+    setRelatedProjectIds([]);
   }
 
   function stop() {
@@ -1894,7 +1915,12 @@ export default function SalesAssistant() {
         </div>
         <Select
           value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
+          onChange={(e) => {
+            setProjectId(e.target.value);
+            // Если основной проект изменился — очищаем related, чтобы
+            // не было дубля или конфликтов.
+            setRelatedProjectIds((prev) => prev.filter((id) => id !== e.target.value));
+          }}
           options={[
             { value: '', label: labels.projectEmptyOption },
             ...visibleProjects.map((p) => ({ value: p.id, label: p.name })),
@@ -1904,6 +1930,51 @@ export default function SalesAssistant() {
           <p className="text-[11px] text-muted mt-2">
             {labels.projectEmptyHint}
           </p>
+        )}
+        {/* Sprint 52 P0.4 — multi-project related selector. Менеджер /
+            фаундер может отметить альтернативные проекты, упоминаемые в
+            разговоре (для сравнения / подбора). Foundation под будущий
+            auto-detect через mention detection в transcript. */}
+        {visibleProjects.length > 1 && (
+          <div className="mt-3 pt-3 border-t border-hairline">
+            <div className="text-[11px] font-semibold text-secondary mb-1.5">
+              Related: упомянуты в разговоре
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {visibleProjects
+                .filter((p) => p.id !== projectId)
+                .map((p) => {
+                  const checked = relatedProjectIds.includes(p.id);
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => {
+                        setRelatedProjectIds((prev) =>
+                          prev.includes(p.id)
+                            ? prev.filter((x) => x !== p.id)
+                            : [...prev, p.id].slice(0, 4),
+                        );
+                      }}
+                      className={clsx(
+                        'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-[11px] transition-colors',
+                        checked
+                          ? 'border-ai/50 bg-ai/15 text-primary'
+                          : 'border-line text-secondary hover:border-secondary hover:text-primary',
+                      )}
+                    >
+                      <span className={clsx('w-1.5 h-1.5 rounded-full', checked ? 'bg-ai' : 'bg-muted')} />
+                      {p.name}
+                    </button>
+                  );
+                })}
+            </div>
+            {relatedProjectIds.length >= 4 && (
+              <div className="text-[10px] text-muted mt-1">
+                Максимум 4 related-проекта (больше шумит подсказку).
+              </div>
+            )}
+          </div>
         )}
       </Card>
       )}

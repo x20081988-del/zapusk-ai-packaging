@@ -137,6 +137,10 @@ export interface AnalyzeInput {
   // режиме 'meeting'. Если 'qualification' но scriptKey не передан —
   // используем 'generic' (опираемся на projectContext / прошлые подсказки).
   scriptKey?: QualificationScriptKey | null;
+  // Sprint 52 P0.4 — multi-project context. Опционально: список ID
+  // проектов, которые AI должен учитывать. Если пусто/null — поведение
+  // идентично существующему single-project (projectId).
+  projectIds?: string[] | null;
 }
 
 // Sprint 38 — KB-источники, использованные в AI-подсказке. Возвращаем их
@@ -468,7 +472,12 @@ async function qualificationContextLines(input: AnalyzeInput): Promise<string[]>
 }
 
 export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCard> {
-  const projectContext = await loadProjectContext(input.projectId ?? undefined);
+  // Sprint 52 P0.4 — multi-project: если фронт прислал projectIds[],
+  // используем их; иначе fallback на одиночный projectId.
+  const projectIdsForContext = input.projectIds && input.projectIds.length > 0
+    ? input.projectIds
+    : (input.projectId ? [input.projectId] : []);
+  const projectContext = await loadProjectsContext(projectIdsForContext);
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const adviceHistory = formatAdviceHistory(input.adviceHistory);
@@ -709,7 +718,12 @@ const SALES_FAST_RESPONSE_SCHEMA = {
 } as const;
 
 export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAssistantCard> {
-  const projectContext = await loadProjectContext(input.projectId ?? undefined);
+  // Sprint 52 P0.4 — multi-project: если фронт прислал projectIds[],
+  // используем их; иначе fallback на одиночный projectId.
+  const projectIdsForContext = input.projectIds && input.projectIds.length > 0
+    ? input.projectIds
+    : (input.projectId ? [input.projectId] : []);
+  const projectContext = await loadProjectsContext(projectIdsForContext);
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const projectDetailsSignal = detectProjectDetailsRequest(input);
@@ -840,6 +854,27 @@ async function loadProjectContext(projectId?: string): Promise<string> {
     `Бизнес: ${project.brief?.businessSummary ?? '—'}`,
     `Монетизация: ${project.brief?.monetization ?? '—'}`,
     `Доход инвестора: ${(napkin as { investorReturn?: string }).investorReturn ?? '—'}`,
+  ].join('\n');
+}
+
+// Sprint 52 P0.4 — multi-project context. Если в звонке упоминается
+// несколько проектов (фаундер сравнивает предложения / менеджер питчит
+// несколько альтернатив) — отдаём AI контекст по каждому, отделённый
+// явным маркером. Безопасный потолок: 5 проектов (больше — теряется
+// фокус, plus prompt-budget). Если массив пустой/один — поведение
+// идентично loadProjectContext.
+async function loadProjectsContext(projectIds: string[]): Promise<string> {
+  const ids = projectIds.filter(Boolean).slice(0, 5);
+  if (ids.length === 0) return loadProjectContext(undefined);
+  if (ids.length === 1) return loadProjectContext(ids[0]);
+  const blocks = await Promise.all(ids.map(async (id, idx) => {
+    const ctx = await loadProjectContext(id);
+    return `=== Проект ${idx + 1} ===\n${ctx}`;
+  }));
+  return [
+    `В разговоре упоминаются ${ids.length} проекта. AI должен ориентироваться по контексту реплики, какой из них активный.`,
+    '',
+    ...blocks,
   ].join('\n');
 }
 
