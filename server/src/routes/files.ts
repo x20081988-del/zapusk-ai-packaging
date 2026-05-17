@@ -11,6 +11,10 @@ import { recordAudit } from '../lib/audit.js';
 import { env } from '../env.js';
 import { getActorRole, isAdminLike, requireNotInvestor } from '../lib/ownership.js';
 import { multerFileFilter, uploadRejectionMessage } from '../lib/uploadValidation.js';
+// Sprint 61 — Project Knowledge Layer. После сохранения файла на диск
+// автоматически шлём его в project-scoped KB (fire-and-forget), чтобы
+// AI Assistant мог retrieve содержимое pitch-deck / финмодели.
+import { scheduleProjectFileIngest } from '../services/projectKnowledgeIngest.js';
 
 export const filesRoutes = Router();
 filesRoutes.use(authMiddleware);
@@ -85,9 +89,23 @@ filesRoutes.post('/:projectId/upload', multerUploadWithGuard, async (req, res) =
       },
     });
     created.push(row);
+    // Sprint 61 — async fire-and-forget: парсим файл и регистрируем
+    // KnowledgeSource(scope='project'). Если падает — лог, не блокирует ответ.
+    // Environment по workspaceStatus вызывающего: demo workspace → demo KB,
+    // production → production KB (см. retrieveKnowledgeForTranscript filter).
+    scheduleProjectFileIngest(row.id, req.params.projectId, {
+      environment: workspaceToKnowledgeEnv((req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null),
+      createdById: user.id,
+    });
   }
   res.status(201).json({ files: created });
 });
+
+function workspaceToKnowledgeEnv(status: string | null): 'production' | 'demo' | 'synthetic' {
+  if (status === 'demo') return 'demo';
+  if (status === 'synthetic') return 'synthetic';
+  return 'production';
+}
 
 const linkSchema = z.object({
   category: z.string().default('reference'),
