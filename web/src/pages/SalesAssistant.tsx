@@ -1597,17 +1597,21 @@ export default function SalesAssistant() {
               захвата аудио) добавляет opacity-50 + cursor-not-allowed; на
               активный таб opacity НЕ накладываем, чтобы он не сливался с
               неактивным. */}
+          {/* Sprint 52 P0.5 — mobile-fit. На мобильном (<sm) табы растягиваются
+              в w-full с flex-1 (две равные кнопки), на десктопе остаются
+              inline-flex с auto-width. Это убирает горизонтальное
+              переполнение на iPhone 390px. */}
           <div
             role="tablist"
             aria-label="Режим AI-ассистента"
-            className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs"
+            className="flex sm:inline-flex w-full sm:w-auto items-center bg-surface border border-line rounded-md p-0.5 text-[11px] sm:text-xs"
           >
             <button
               type="button"
               role="tab"
               aria-pressed={deskMode === 'meeting'}
               className={clsx(
-                'px-3 h-8 rounded font-semibold transition-colors whitespace-nowrap',
+                'flex-1 sm:flex-none px-2 sm:px-3 h-8 rounded font-semibold transition-colors text-center',
                 deskMode === 'meeting'
                   ? 'bg-grad-ai text-canvas shadow-ai-glow'
                   : 'text-secondary hover:text-primary',
@@ -1617,14 +1621,15 @@ export default function SalesAssistant() {
               disabled={isMicCapturing}
               title={isMicCapturing ? 'Остановите захват, чтобы переключить режим' : 'Полноценная встреча с инвестором'}
             >
-              Проведение встречи
+              <span className="hidden sm:inline">Проведение встречи</span>
+              <span className="sm:hidden">Встреча</span>
             </button>
             <button
               type="button"
               role="tab"
               aria-pressed={deskMode === 'qualification'}
               className={clsx(
-                'px-3 h-8 rounded font-semibold transition-colors whitespace-nowrap',
+                'flex-1 sm:flex-none px-2 sm:px-3 h-8 rounded font-semibold transition-colors text-center',
                 deskMode === 'qualification'
                   ? 'bg-grad-ai text-canvas shadow-ai-glow'
                   : 'text-secondary hover:text-primary',
@@ -1634,7 +1639,8 @@ export default function SalesAssistant() {
               disabled={isMicCapturing}
               title={isMicCapturing ? 'Остановите захват, чтобы переключить режим' : 'Первичный звонок инвестору, цель — Zoom с экспертом'}
             >
-              Квалификация инвестора
+              <span className="hidden sm:inline">Квалификация инвестора</span>
+              <span className="sm:hidden">Квалификация</span>
             </button>
           </div>
           {deskMode === 'qualification' && (
@@ -2200,6 +2206,64 @@ export default function SalesAssistant() {
           </div>
         )}
       </Modal>
+
+      {/* Sprint 52 P0.5 — sticky bottom action bar для мобильного.
+          Дублирует основные CTA так, чтобы менеджеру на телефоне не нужно
+          было скроллить вверх между подсказками. Прячется на sm+ (sm:hidden):
+          на десктопе кнопки уже доступны в шапке.
+
+          Z-index 30 — над контентом, но под Modal (Modal обычно z-50+).
+          Safe-area-inset-bottom — учитывает home-bar iPhone. */}
+      <div
+        className="sm:hidden fixed inset-x-0 bottom-0 z-30 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] bg-canvas/95 backdrop-blur border-t border-hairline shadow-[0_-4px_12px_rgba(0,0,0,0.25)]"
+      >
+        <div className="grid grid-cols-2 gap-2">
+          {isLiveMeetingLayout ? (
+            <Button
+              variant="danger"
+              iconLeft={<Square size={14} />}
+              onClick={stop}
+              className="w-full whitespace-nowrap"
+            >
+              {labels.stop}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              iconLeft={<Mic size={14} />}
+              onClick={start}
+              className="w-full whitespace-nowrap"
+            >
+              {labels.startShort}
+            </Button>
+          )}
+          {inPrepMode ? (
+            <Button
+              variant="ai"
+              iconLeft={<Sparkles size={14} />}
+              onClick={() => runPrepare()}
+              disabled={!hasMeaningfulPrepContext}
+              loading={isPreparing}
+              className="w-full whitespace-nowrap shadow-ai-glow"
+            >
+              {labels.prepShort}
+            </Button>
+          ) : (
+            <Button
+              variant="ai"
+              iconLeft={<RefreshCw size={14} />}
+              onClick={() => runAnalyze()}
+              disabled={!hasFinalTranscript}
+              loading={isFastLoading}
+              className="w-full whitespace-nowrap"
+            >
+              Подсказка
+            </Button>
+          )}
+        </div>
+      </div>
+      {/* Spacer чтобы содержимое не пряталось под sticky bar'ом на мобильном. */}
+      <div className="sm:hidden h-20" aria-hidden />
     </AppLayout>
   );
 }
