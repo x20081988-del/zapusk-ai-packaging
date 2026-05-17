@@ -20,6 +20,7 @@ import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
 import { completeMeeting, updateMeetingOutcome, uploadMeetingAudio, type CompleteResult, type SalesSession } from '../lib/salesSessions';
 import { startCallAudioRecorder, type CallAudioRecorder } from '../lib/callAudioRecorder';
+import { startAudioQualityMeter, type AudioQualityMeter, type AudioQualityClass } from '../lib/audioQualityMeter';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
@@ -579,6 +580,11 @@ export default function SalesAssistant() {
   // finalizeAudioBlobRef до фактической отправки в finishMeeting().
   const audioRecorderRef = useRef<CallAudioRecorder | null>(null);
   const finalizeAudioBlobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
+  // Sprint 59 P0.2 — live audio quality meter handle + UI class.
+  // null while not capturing. UI class drives a non-blocking warning
+  // banner when quality is `weak`/`silent`/`clipping`.
+  const audioMeterRef = useRef<AudioQualityMeter | null>(null);
+  const [audioQualityClass, setAudioQualityClass] = useState<AudioQualityClass | null>(null);
   type TranscriptionProvider = 'realtime' | 'web-speech';
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider | null>(null);
   const [realtimeModel, setRealtimeModel] = useState<string | null>(null);
@@ -1475,6 +1481,18 @@ export default function SalesAssistant() {
         } else {
           console.debug('[sales-assistant/recorder] not supported in this browser');
         }
+        // Sprint 59 P0.2 — live audio quality meter on the SAME stream.
+        // Best-effort: null on unsupported browsers (very old Safari etc.)
+        // → no warning surfaced, no perf hit.
+        const meter = startAudioQualityMeter(session.mediaStream);
+        if (meter) {
+          audioMeterRef.current = meter;
+          setAudioQualityClass('good');
+          meter.onClassChange((next, prev) => {
+            console.debug('[audio/quality-class-change]', { prev, next });
+            setAudioQualityClass(next);
+          });
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';
@@ -1691,6 +1709,19 @@ export default function SalesAssistant() {
     // realtime/mic. Recorder'у нужен живой stream чтобы сбросить trailing
     // буфер; иначе хвост ~5 сек теряется. Async, fire-and-forget:
     // finalizeAudioBlobRef будет готов к моменту finishMeeting().
+    // Sprint 59 P0.2 — stop quality meter + log aggregate. Lets ops
+    // diff «class transitions across session» against transcript
+    // quality. E.g., 8 weakStretches + 2 clippingStretches on a 2-min
+    // call → strong signal mic was the issue, not OpenAI.
+    if (audioMeterRef.current) {
+      const meter = audioMeterRef.current;
+      audioMeterRef.current = null;
+      try {
+        console.debug('[audio/quality-aggregate]', meter.getAggregate());
+      } catch { /* ignore */ }
+      meter.stop();
+      setAudioQualityClass(null);
+    }
     if (audioRecorderRef.current) {
       const recorder = audioRecorderRef.current;
       audioRecorderRef.current = null;
@@ -2096,6 +2127,19 @@ export default function SalesAssistant() {
         <div className="mb-6 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           {permError}
+        </div>
+      )}
+      {/* Sprint 59 P0.2 — non-blocking live audio quality warning.
+          Triggered ONLY on `weak` / `silent` / `clipping` (NOT `good`).
+          Stays informational — doesn't stop the session. */}
+      {isLiveMeetingLayout && audioQualityClass && audioQualityClass !== 'good' && (
+        <div className="mb-6 flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <div>
+            {audioQualityClass === 'weak' && 'Низкий уровень голоса — транскрипция может быть неточной. Подойдите ближе к микрофону или включите внешний мик.'}
+            {audioQualityClass === 'silent' && 'AI не слышит звук. Проверьте, что микрофон не замьючен и активен в системе.'}
+            {audioQualityClass === 'clipping' && 'Звук пересвечивает (clipping) — слова могут искажаться. Отодвиньтесь чуть дальше или уменьшите усиление микрофона.'}
+          </div>
         </div>
       )}
       {isLiveMeetingLayout && finalizeError && meetingState === 'finalize_failed' && (

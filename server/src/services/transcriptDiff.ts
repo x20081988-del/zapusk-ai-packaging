@@ -39,6 +39,23 @@ export interface TranscriptDiff {
   phrasePreservationRate: number; // share of draft SENTENCES that have a >=0.4 Jaccard match in clean
   draftTokenCount: number;
   cleanTokenCount: number;
+  // Sprint 59 P0.6 — RealtimeQualityScore: composite 0..100 score that
+  // summarizes how trustworthy realtime draft was vs offline clean.
+  // 100 = realtime == clean (effectively lossless).
+  // 50  = significant rewrites OR meaningful loss.
+  // 0   = realtime essentially unrelated to clean (worst case).
+  //
+  // Formula (weighted):
+  //   score = 100 * (
+  //     0.4 * similarity
+  //     + 0.3 * phrasePreservationRate
+  //     + 0.3 * tokenSurvivalRate
+  //     - 0.1 * (hallucinationCandidates.length > 0 ? 1 : 0)
+  //   )
+  // Clamped to [0, 100]. The penalty term ensures even one detected
+  // hallucination knocks the score down by 10 points (signal, not noise).
+  realtimeQualityScore: number;
+  realtimeQualityClass: 'excellent' | 'good' | 'mediocre' | 'poor';
 }
 
 // Лёгкая токенизация на русский язык: разбиваем по , . ! ? ; … и фильтруем
@@ -143,5 +160,32 @@ export function compareDraftVsClean(draft: string, clean: string): TranscriptDif
     phrasePreservationRate,
     draftTokenCount: draftAllTokens.size,
     cleanTokenCount: cleanAllTokens.size,
+    realtimeQualityScore: computeRealtimeQualityScore(
+      similarity, tokenSurvivalRate, phrasePreservationRate, hallucinationCandidates.length,
+    ),
+    realtimeQualityClass: classifyQualityScore(computeRealtimeQualityScore(
+      similarity, tokenSurvivalRate, phrasePreservationRate, hallucinationCandidates.length,
+    )),
   };
+}
+
+function computeRealtimeQualityScore(
+  similarity: number,
+  tokenSurvivalRate: number,
+  phrasePreservationRate: number,
+  hallucinationCount: number,
+): number {
+  const raw =
+    0.4 * similarity +
+    0.3 * phrasePreservationRate +
+    0.3 * tokenSurvivalRate -
+    0.1 * (hallucinationCount > 0 ? 1 : 0);
+  return Math.max(0, Math.min(100, Math.round(raw * 100)));
+}
+
+function classifyQualityScore(score: number): 'excellent' | 'good' | 'mediocre' | 'poor' {
+  if (score >= 90) return 'excellent';
+  if (score >= 75) return 'good';
+  if (score >= 50) return 'mediocre';
+  return 'poor';
 }

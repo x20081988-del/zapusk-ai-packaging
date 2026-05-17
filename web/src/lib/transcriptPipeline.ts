@@ -75,6 +75,14 @@ export interface LifecycleInput {
 }
 
 export function recordLifecycle(entry: LifecycleInput): void {
+  // Sprint 59 P0.4 — capture inter-event timing on raw_received events.
+  // Side-effect free for non-raw stages.
+  recordEventTiming(entry.stage);
+  // Sprint 59 P0.5 — merge candidate detection on `appended` (segment
+  // actually landed in UI). Lossless: only logs, never mutates state.
+  if (entry.stage === 'appended' && entry.status === 'ok') {
+    maybeLogMergeCandidate(entry.text);
+  }
   const safe: LifecycleEntry = {
     ts: Date.now(),
     segmentId: entry.segmentId,
@@ -135,6 +143,139 @@ export function _resetLifecycleForTests(): void {
   _ring = [];
   _bySegment.clear();
   _segmentCounter = 0;
+  _lastRawReceivedTs = 0;
+  _interEventGaps = [];
+}
+
+// Sprint 59 P0.4 — Realtime event timing audit.
+//
+// Captures the time between consecutive `raw_received` events. A spike
+// in gap = VAD silence threshold finalized a phrase mid-thought (or the
+// user actually paused). A sustained short gap = rapid finalization,
+// model might be chopping. Used by /transcript-diff endpoint and the
+// replay tool to spot timing-driven regressions.
+//
+// We keep only the last 100 gaps (matches roughly one long call).
+let _lastRawReceivedTs = 0;
+let _interEventGaps: number[] = [];
+const TIMING_RING = 100;
+
+export interface TimingSnapshot {
+  count: number;
+  minGapMs: number;
+  maxGapMs: number;
+  avgGapMs: number;
+  p50GapMs: number;
+  p95GapMs: number;
+  // Rapid bursts = >5 segments in 5 sec window. Catches over-aggressive VAD.
+  rapidBurstCount: number;
+}
+
+export function recordEventTiming(stage: LifecycleStage): void {
+  if (stage !== 'raw_received') return;
+  const now = Date.now();
+  if (_lastRawReceivedTs > 0) {
+    const gap = now - _lastRawReceivedTs;
+    _interEventGaps.push(gap);
+    if (_interEventGaps.length > TIMING_RING) {
+      _interEventGaps = _interEventGaps.slice(-TIMING_RING);
+    }
+  }
+  _lastRawReceivedTs = now;
+}
+
+// Sprint 59 P0.5 — Segment merge CANDIDATE detection (lossless).
+//
+// VAD sometimes splits one sentence into multiple segments at natural
+// pauses. Example:
+//   "Здравствуйте"     (segment 1, 0:00–0:01)
+//   pause 600ms
+//   "как слышно"       (segment 2, 0:01.6–0:02.5)
+//
+// Downstream AI gets two short fragments instead of one phrase. We don't
+// actually MERGE — that would mutate the lossless transcript pipeline.
+// Instead we LOG candidates so ops can quantify «how often VAD chops».
+// Future Sprint may add an opt-in merge layer that emits a sibling
+// "merged transcript" view without touching raw segments.
+//
+// Heuristic:
+//   • prev segment is short (≤30 chars)
+//   • prev ended within MERGE_GAP_THRESHOLD_MS (default 1200ms, the VAD
+//     silence_duration_ms — anything below = chopped at the threshold)
+//   • new segment is also short (≤30 chars)
+//
+// Both-short is the key signal: long → short is normal speech rhythm,
+// short → short within VAD threshold strongly hints at over-aggressive
+// segmentation.
+
+const MERGE_GAP_THRESHOLD_MS = 1_500;
+const MERGE_SHORT_SEGMENT_CHARS = 30;
+
+let _mergeCandidateCount = 0;
+let _lastFinalSegment: { text: string; ts: number } | null = null;
+
+export function maybeLogMergeCandidate(text: string): void {
+  const now = Date.now();
+  const trimmed = text.trim();
+  if (
+    _lastFinalSegment
+    && _lastFinalSegment.text.length <= MERGE_SHORT_SEGMENT_CHARS
+    && trimmed.length <= MERGE_SHORT_SEGMENT_CHARS
+    && (now - _lastFinalSegment.ts) <= MERGE_GAP_THRESHOLD_MS
+  ) {
+    _mergeCandidateCount++;
+    try {
+      console.debug('[audio/merge-candidate]', {
+        prev: _lastFinalSegment.text.slice(0, 30),
+        next: trimmed.slice(0, 30),
+        gapMs: now - _lastFinalSegment.ts,
+        totalCandidates: _mergeCandidateCount,
+      });
+    } catch { /* ignore */ }
+  }
+  _lastFinalSegment = { text: trimmed, ts: now };
+}
+
+export function getMergeCandidateCount(): number {
+  return _mergeCandidateCount;
+}
+
+export function _resetMergeForTests(): void {
+  _mergeCandidateCount = 0;
+  _lastFinalSegment = null;
+}
+
+export function getEventTimingSnapshot(): TimingSnapshot {
+  const gaps = [..._interEventGaps].sort((a, b) => a - b);
+  const n = gaps.length;
+  if (n === 0) {
+    return { count: 0, minGapMs: 0, maxGapMs: 0, avgGapMs: 0, p50GapMs: 0, p95GapMs: 0, rapidBurstCount: 0 };
+  }
+  const sum = gaps.reduce((a, b) => a + b, 0);
+  const p50 = gaps[Math.floor(n * 0.5)];
+  const p95 = gaps[Math.min(n - 1, Math.floor(n * 0.95))];
+  // Rapid bursts: count windows of 5 sec with ≥5 events.
+  let rapidBurstCount = 0;
+  // Reconstruct timestamps from cumulative — _interEventGaps is gaps, not stamps.
+  // For approximate detection: count consecutive gaps < 1000ms in chains of ≥4.
+  let chain = 0;
+  for (const g of _interEventGaps) {
+    if (g < 1_000) {
+      chain++;
+      if (chain === 4) rapidBurstCount++;
+    } else {
+      chain = 0;
+    }
+  }
+  return {
+    count: n,
+    minGapMs: gaps[0],
+    maxGapMs: gaps[n - 1],
+    avgGapMs: Math.round(sum / n),
+    p50GapMs: p50,
+    p95GapMs: p95,
+    rapidBurstCount,
+  };
 }
 
 // Sprint 58 P0.3 — Interim vs Final diff. Detects when the model's

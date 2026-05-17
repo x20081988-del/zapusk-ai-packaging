@@ -17,6 +17,15 @@ server/uploads
 server/prisma/*.db
 server/prisma/*.db-journal
 server/prisma/migrations/dev.db
+# Sprint 59 P0.7 — audio fixture library. PII-sensitive + large. Only
+# INDEX.md is tracked; .wav and ground-truth transcripts stay local.
+server/test-fixtures/audio/**/*.wav
+server/test-fixtures/audio/**/*.mp3
+server/test-fixtures/audio/**/*.webm
+server/test-fixtures/audio/**/*.m4a
+server/test-fixtures/audio/**/*.ground.txt
+server/test-fixtures/audio/**/*.meta.json
+server/test-fixtures/audio/manifest.json
 
 # web
 web/dist

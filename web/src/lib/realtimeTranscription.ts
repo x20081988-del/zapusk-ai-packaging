@@ -154,22 +154,90 @@ export async function startRealtimeTranscription(
   };
 
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    // Sprint 59 P0.1 + P0.3 — Audio capture configuration audit.
+    //
+    // Default constraints (Sprint 49+):
+    //   • echoCancellation: true  — speakers→mic feedback removal
+    //   • noiseSuppression: true  — background noise filter
+    //   • autoGainControl: true   — auto-volume normalization
+    //
+    // Risks (documented for Sprint 59 P0.3 audit):
+    //   • AGC can flatten emphasis cues + amplify silence noise
+    //   • Noise suppression can eat quiet syllables / soft investors
+    //   • Echo cancellation can drop consonants when playback present
+    //
+    // Sprint 59 escape hatch: if user sets localStorage
+    //   'zapusk.transcription.rawAudio' = '1'
+    // we request a RAW stream (no AGC/NS/EC). For QA-style runs on
+    // pristine input where we want to measure baseline.
+    let constraints: MediaTrackConstraints;
+    let rawAudioMode = false;
+    try {
+      if (typeof localStorage !== 'undefined'
+        && localStorage.getItem('zapusk.transcription.rawAudio') === '1') {
+        rawAudioMode = true;
+        constraints = {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        };
+      } else {
+        constraints = {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        };
+      }
+    } catch {
+      constraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    }
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+    const audioTrack = mediaStream.getAudioTracks()[0];
+    if (!audioTrack) throw new RealtimeUnavailableError('no_audio_track', 0);
+
+    // Sprint 59 P0.1 — log EXACTLY what the browser actually negotiated.
+    // Constraints we passed are the REQUEST; getSettings() is what the
+    // device delivered. They can differ on Bluetooth headsets / external
+    // mics. Without this we can't debug «my voice came in too quiet».
+    const settings = audioTrack.getSettings();
+    const capabilities = typeof audioTrack.getCapabilities === 'function'
+      ? audioTrack.getCapabilities()
+      : null;
+    try {
+      console.debug('[audio/input-config]', {
+        traceId: session.traceId,
+        rawAudioMode,
+        requested: constraints,
+        actual: {
+          deviceId: settings.deviceId,
+          deviceLabel: audioTrack.label,
+          sampleRate: settings.sampleRate,
+          sampleSize: settings.sampleSize,
+          channelCount: settings.channelCount,
+          echoCancellation: settings.echoCancellation,
+          noiseSuppression: settings.noiseSuppression,
+          autoGainControl: settings.autoGainControl,
+          // `latency` is in MediaTrackSettings on Chrome (audio output
+          // delay in seconds) but not in TS lib types — index via cast.
+          latency: (settings as { latency?: number }).latency,
+        },
+        capabilities: capabilities ? {
+          sampleRate: capabilities.sampleRate,
+          channelCount: capabilities.channelCount,
+        } : null,
+        browser: navigator.userAgent.slice(0, 120),
+      });
+    } catch { /* ignore */ }
     realtimeLog('microphone-ready', {
       traceId: session.traceId,
       audioTracks: mediaStream.getAudioTracks().length,
+      deviceLabel: audioTrack.label.slice(0, 60),
+      sampleRate: settings.sampleRate,
+      channelCount: settings.channelCount,
     });
 
     pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
-    const audioTrack = mediaStream.getAudioTracks()[0];
-    if (!audioTrack) throw new RealtimeUnavailableError('no_audio_track', 0);
     pc.addTrack(audioTrack, mediaStream);
 
     // Аккумулируем delta'ы текущего сегмента, чтобы UI получал растущий
@@ -200,6 +268,18 @@ export async function startRealtimeTranscription(
       try {
         const msg = JSON.parse(event.data) as RealtimeEvent;
         if (msg.type && !TRANSCRIPT_EVENT_TYPES.has(msg.type)) {
+          // Sprint 59 P0.8 — structured session-event log. Tag everything
+          // non-transcript from OpenAI so we can spot session.created /
+          // session.updated / .closed / .error event timing without
+          // noise from transcript deltas. Don't blow up on missing
+          // session.created field; OpenAI doesn't always send it for
+          // transcription-only sessions.
+          try {
+            console.debug('[audio/session-event]', {
+              traceId: session.traceId,
+              type: msg.type,
+            });
+          } catch { /* ignore */ }
           realtimeLog('event', { traceId: session.traceId, type: msg.type });
         }
         if (msg.type === 'conversation.item.input_audio_transcription.delta') {
