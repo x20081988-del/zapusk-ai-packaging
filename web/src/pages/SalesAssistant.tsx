@@ -2108,7 +2108,7 @@ export default function SalesAssistant() {
                 value={manualDraft}
                 onChange={(e) => setManualDraft(e.target.value)}
                 placeholder={labels.ctxPlaceholder}
-                className="w-full h-[55vh] bg-canvas border border-hairline rounded-md p-3 text-[13.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
+                className="w-full h-[40vh] sm:h-[55vh] bg-canvas border border-hairline rounded-md p-3 text-[13.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
               />
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] text-muted">{manualDraft.length.toLocaleString('ru-RU')} символов</span>
@@ -2164,7 +2164,7 @@ export default function SalesAssistant() {
               )}
               <div
                 ref={transcriptRef}
-                className="bg-canvas border border-hairline rounded-md p-4 h-[60vh] overflow-y-auto space-y-2"
+                className="bg-canvas border border-hairline rounded-md p-4 h-[45vh] sm:h-[60vh] overflow-y-auto space-y-2"
               >
                 {transcript.length === 0 && !interim && (!manualTranscript || isLiveMeetingLayout) && (
                   <p className="text-sm text-muted text-center py-8">
