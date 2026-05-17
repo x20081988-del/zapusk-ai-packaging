@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { env } from '../env.js';
 import type { TranscriptionResult } from './deepgramClient.js';
+import { normalizeTranscript } from '../lib/transcriptNormalize.js';
 
 // Sprint 49 — server-side OpenAI gpt-4o-transcribe (request-based, не Realtime).
 // Используется для загруженных аудиофайлов: pre-recorded transcription у OpenAI
@@ -60,8 +61,13 @@ export async function transcribeAudioOpenAI(
       return null;
     }
     const json = (await res.json()) as { text?: string };
-    const text = (json.text ?? '').trim();
-    if (!text) return null;
+    const rawText = (json.text ?? '').trim();
+    if (!rawText) return null;
+    // Sprint 53 Voice QA — нормализуем известные brand mis-recognitions
+    // («ГласНаб» → «Главснаб» и т.п.) до того как transcript попадает
+    // в conversationAnalysis или persistSession. Это закрывает gap, что
+    // OpenAI prompt-словарь — bias, не enforce.
+    const text = normalizeTranscript(rawText);
     return {
       text,
       provider: 'openai',

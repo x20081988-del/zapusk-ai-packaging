@@ -1,4 +1,5 @@
 import { api } from './api';
+import { normalizeTranscript } from './transcriptNormalize';
 
 // Sprint 49 — OpenAI Realtime live transcription через WebRTC.
 //
@@ -168,7 +169,11 @@ export async function startRealtimeTranscription(
         if (msg.type === 'conversation.item.input_audio_transcription.completed') {
           interimBuffer = '';
           if (typeof msg.transcript === 'string' && msg.transcript.trim().length) {
-            callbacks.onFinal(msg.transcript.trim());
+            // Sprint 53 Voice QA — нормализуем известные мис-распознавания
+            // брендов («ГласНаб» → «Главснаб» и т.п.) до того как сегмент
+            // попадает в UI / в analyze-payload. Без этого AI и Память
+            // встреч хранят искажённое имя проекта.
+            callbacks.onFinal(normalizeTranscript(msg.transcript.trim()));
           }
           // После завершения сегмента очищаем interim в UI.
           callbacks.onInterim('');
