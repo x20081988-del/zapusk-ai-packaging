@@ -2292,14 +2292,22 @@ export default function SalesAssistant() {
         </div>
       </div>
 
-      {/* «Завершить встречу» → AI summary modal с готовой карточкой сделки */}
-      <Modal open={finishResult !== null} onClose={closeFinishModal} title="AI сохранил контекст встречи" width="max-w-3xl">
+      {/* Sprint 53 Task F — заголовок и копи модала зависят от deskMode.
+          В qualification всё про «звонок», в meeting — про «встречу». */}
+      <Modal
+        open={finishResult !== null}
+        onClose={closeFinishModal}
+        title={deskMode === 'qualification' ? 'AI сохранил контекст звонка' : 'AI сохранил контекст встречи'}
+        width="max-w-3xl"
+      >
         {finishResult && (
           <div className="p-5 space-y-4">
             <div className="flex items-start gap-3 p-3 rounded-md bg-success/10 border border-success/30">
               <CheckCircle2 size={16} className="text-success mt-0.5 shrink-0" />
               <div className="text-sm text-primary">
-                Встреча сохранена в Память встреч. Готовы карточка сделки, следующий шаг и продолжение общения — можно отправлять инвестору.
+                {deskMode === 'qualification'
+                  ? 'Звонок сохранён в Память встреч. AI учтёт его при следующих контактах с этим инвестором — что зацепило, какие возражения, какой следующий шаг.'
+                  : 'Встреча сохранена в Память встреч. Готовы карточка сделки, следующий шаг и продолжение общения — можно отправлять инвестору.'}
               </div>
             </div>
             <MeetingCard session={finishResult.session} />
@@ -2392,11 +2400,39 @@ function OutcomeForm({ sessionId, deskMode }: { sessionId: string; deskMode: Ass
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Sprint 53 Task F — копи под deskMode. В qualification «успех» = Zoom-слот;
+  // в meeting «успех» = шаг к сделке. Подсказки помогают менеджеру сразу
+  // классифицировать без догадок.
+  const sessionWord = deskMode === 'qualification' ? 'звонка' : 'встречи';
   const labels: Record<OutcomeChoice, { dot: string; tone: 'success' | 'danger' | 'warning' | 'info'; label: string; help: string }> = {
-    success:  { dot: 'bg-success',  tone: 'success', label: 'Успех',     help: deskMode === 'qualification' ? 'Zoom-слот зафиксирован' : 'Шаг к сделке закрыт' },
-    failed:   { dot: 'bg-danger',   tone: 'danger',  label: 'Не пошло',  help: 'Слив / отказ / молчание' },
-    followup: { dot: 'bg-info',     tone: 'info',    label: 'Follow-up', help: 'Договорились о повторе' },
-    unknown:  { dot: 'bg-muted',    tone: 'warning', label: 'Не размечено', help: 'Решу позже' },
+    success: {
+      dot: 'bg-success',
+      tone: 'success',
+      label: 'Успех',
+      help: deskMode === 'qualification'
+        ? 'Zoom-слот с экспертом зафиксирован'
+        : 'Шаг к сделке закрыт — следующее касание понятно',
+    },
+    failed: {
+      dot: 'bg-danger',
+      tone: 'danger',
+      label: 'Не пошло',
+      help: deskMode === 'qualification'
+        ? 'Слив, отказ, не дозвонились, «не интересно»'
+        : 'Отказ, остановка коммуникации',
+    },
+    followup: {
+      dot: 'bg-info',
+      tone: 'info',
+      label: 'Follow-up',
+      help: 'Договорились о повторном касании / нужно подумать',
+    },
+    unknown: {
+      dot: 'bg-muted',
+      tone: 'warning',
+      label: 'Не размечено',
+      help: 'Решу позже — открою из карточки',
+    },
   };
 
   async function save() {
@@ -2418,9 +2454,11 @@ function OutcomeForm({ sessionId, deskMode }: { sessionId: string; deskMode: Ass
   return (
     <div className="rounded-md border border-line bg-elevated p-4 space-y-3">
       <div>
-        <div className="text-sm font-semibold text-primary mb-1">Результат</div>
+        <div className="text-sm font-semibold text-primary mb-1">
+          {deskMode === 'qualification' ? 'Итог звонка' : 'Итог встречи'}
+        </div>
         <div className="text-[11px] text-muted">
-          AI учтёт ваш ответ при следующих звонках. Можно изменить позже из карточки встречи.
+          AI учтёт ваш ответ при следующих контактах с этим инвестором. Можно изменить позже из карточки {sessionWord}.
         </div>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -2445,19 +2483,28 @@ function OutcomeForm({ sessionId, deskMode }: { sessionId: string; deskMode: Ass
           </button>
         ))}
       </div>
-      <textarea
-        value={notes}
-        onChange={(e) => { setNotes(e.target.value); setSaved(false); }}
-        placeholder="Что сработало / что нет? Свободный текст для тренинга AI."
-        className="w-full bg-canvas border border-hairline rounded-md p-2 text-[12.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
-        rows={3}
-        disabled={saving}
-      />
+      <div>
+        <label className="text-[11px] text-secondary font-semibold mb-1 block">
+          Что сработало / что нет
+        </label>
+        <textarea
+          value={notes}
+          onChange={(e) => { setNotes(e.target.value); setSaved(false); }}
+          placeholder={deskMode === 'qualification'
+            ? 'Например: «зашёл pitch DLFY x5-x9», «возражение скиньте — отработал через домашку», «инвестор отвалился на чеке».'
+            : 'Например: «открытие про команду сработало», «потерял контроль на вопросе по выходу», «получил буду-думать на условия».'}
+          className="w-full bg-canvas border border-hairline rounded-md p-2 text-[12.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
+          rows={3}
+          disabled={saving}
+        />
+      </div>
       <div className="flex items-center justify-between gap-2 text-[11px]">
         <div className="text-muted">
           {saved && <span className="text-success">Сохранено</span>}
           {error && <span className="text-danger">{error}</span>}
-          {!saved && !error && <span>Не обязательно сейчас — можно отметить из «Встречи».</span>}
+          {!saved && !error && (
+            <span>Не обязательно сейчас — можно отметить позже из карточки {sessionWord}.</span>
+          )}
         </div>
         <Button variant="ai" size="sm" onClick={save} loading={saving} disabled={saved}>
           {saved ? 'Сохранено' : 'Зафиксировать результат'}
