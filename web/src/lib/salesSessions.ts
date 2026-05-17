@@ -56,6 +56,8 @@ export interface CompleteResult {
   session: SalesSession;
 }
 
+export type SessionOutcome = 'success' | 'failed' | 'followup' | 'unknown';
+
 export interface CompleteInput {
   projectId?: string | null;
   leadId?: string | null;
@@ -68,6 +70,13 @@ export interface CompleteInput {
   // Sprint 43 P0.4 — id всех full-analyze advice events этой встречи; backend
   // привяжет их к создаваемому salesSessionId для outcome attribution.
   adviceEventIds?: string[];
+  // Sprint 52 P0.4 — multi-project context. Если в звонке упоминались
+  // несколько проектов — передаём их id'ы здесь. Backend сохранит в
+  // NegotiationMemory.projectIds.
+  projectIds?: string[];
+  // Sprint 52 P0.3 — outcome dataset (опционально на финализации).
+  outcome?: SessionOutcome;
+  managerOutcomeNotes?: string | null;
 }
 
 // Sprint 50 P0.1 — каждый «Завершить встречу» получает свой idempotency
@@ -75,6 +84,18 @@ export interface CompleteInput {
 // же key → backend отдаёт сохранённый ответ, дубль не создаётся.
 export function completeMeeting(input: CompleteInput, idempotencyKey?: string) {
   return api.post<CompleteResult>('/api/sales-sessions/complete', input, { idempotencyKey });
+}
+
+// Sprint 52 P0.3 — обновить outcome + manager notes после факта.
+// Используется в финализационном modal'е или в карточке встречи.
+export function updateMeetingOutcome(
+  id: string,
+  patch: { outcome?: SessionOutcome; managerOutcomeNotes?: string | null },
+) {
+  return api.patch<{ session: { id: string; outcome: string | null; managerOutcomeNotes: string | null } }>(
+    `/api/sales-sessions/${id}/outcome`,
+    patch,
+  );
 }
 
 export function listMeetings(filters: { projectId?: string; leadId?: string } = {}) {

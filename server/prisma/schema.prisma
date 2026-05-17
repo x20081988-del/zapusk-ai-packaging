@@ -404,6 +404,17 @@ model SalesSession {
   aiModel         String?
   fellBackToMock  Boolean   @default(false)
 
+  // Sprint 52 P0.3 — outcome dataset для обучения. После завершения встречи
+  // менеджер/AI размечают исход: «success» (сделка/слот зафиксирован),
+  // «failed» (отказ), «followup» (продолжаем), «unknown» (ещё не понятно).
+  // Опциональные managerOutcomeNotes — что сработало / что не сработало,
+  // свободный текст для будущего fine-tuning датасета.
+  outcome             String?   // success / failed / followup / unknown
+  managerOutcomeNotes String?
+
+  // Sprint 52 P0.2 — back-relation на memory entries этой сессии.
+  memories            NegotiationMemory[]
+
   // Sprint 30: soft-delete.
   archivedAt      DateTime?
   createdAt       DateTime  @default(now())
@@ -412,6 +423,44 @@ model SalesSession {
   @@index([projectId])
   @@index([leadId])
   @@index([createdById])
+  @@index([outcome])
+}
+
+// Sprint 52 P0.2 — Negotiation Memory layer. Каждая завершённая встреча/звонок
+// добавляется сюда как самостоятельная единица «памяти переговоров»: что
+// сказал инвестор, какие возражения встретились, что зацепило, какие
+// инсайты про спикера. Foundation под будущий retrieval (memories по
+// инвестору / проекту / тегу). Никаких embeddings — простой relational
+// store + keyword retrieval helper.
+//
+// projectIds / objections / tags / speakerInsights хранятся как JSON
+// строки (SQLite не имеет native JSON / array). Helpers сериализуют/
+// десериализуют их на уровне сервиса.
+model NegotiationMemory {
+  id              String   @id @default(cuid())
+  salesSessionId  String?
+  salesSession    SalesSession? @relation(fields: [salesSessionId], references: [id], onDelete: SetNull)
+  // primaryProjectId — основной проект встречи (если был); projectIds —
+  // JSON массив всех упомянутых project IDs (см. P0.4 multi-project).
+  primaryProjectId String?
+  projectIds      String   @default("[]")    // JSON массив string[]
+  investorName    String?
+  investorPhone   String?
+  transcript      String   // полный (или truncated до safe-cap) transcript
+  summary         String?
+  outcome         String?  // mirrors SalesSession.outcome
+  objections      String   @default("[]")   // JSON массив string[]
+  tags            String   @default("[]")   // JSON массив string[]
+  speakerInsights String?  // freeform Russian: «любит дивиденды», «боится illiquidity»
+  managerNotes    String?
+  createdById     String?
+  createdAt       DateTime @default(now())
+
+  @@index([investorName])
+  @@index([primaryProjectId])
+  @@index([createdById])
+  @@index([createdAt])
+  @@index([outcome])
 }
 
 // AI Conversation Intelligence — внешние записи разговоров (Zoom / Telegram /

@@ -5,6 +5,8 @@ import { aiClient } from '../ai/client.js';
 // карточку сделки. Использует тот же AI gateway, что и live sales assistant,
 // но с отдельным system prompt'ом и JSON schema.
 
+export type SessionOutcome = 'success' | 'failed' | 'followup' | 'unknown';
+
 export interface CompleteSessionInput {
   projectId?: string | null;
   leadId?: string | null;
@@ -18,6 +20,15 @@ export interface CompleteSessionInput {
   // и используется и для persistSession (атрибуция), и для listSessions
   // (founder видит свои orphan-встречи).
   createdById?: string | null;
+  // Sprint 52 P0.4 — multi-project context. primaryProjectId — projectId
+  // (legacy), projectIds — все упомянутые в звонке (для NegotiationMemory).
+  // Если не передан — fallback на [projectId].
+  projectIds?: string[];
+  // Sprint 52 P0.3 — outcome dataset. Если менеджер не разметил исход на
+  // финализации — записываем 'unknown' и можно потом обновить через
+  // PATCH /api/sales-sessions/:id/outcome.
+  outcome?: SessionOutcome;
+  managerOutcomeNotes?: string | null;
 }
 
 export type InvestorType = 'dividend' | 'growth' | 'preipo' | 'strategic' | 'unknown';
@@ -254,8 +265,31 @@ export async function persistSession(
       aiProvider: summary.provider,
       aiModel: summary.model,
       fellBackToMock: summary.fellBackToMock,
+      // Sprint 52 P0.3 — outcome dataset. Default 'unknown' если не передан.
+      outcome: input.outcome ?? 'unknown',
+      managerOutcomeNotes: input.managerOutcomeNotes ?? null,
     },
   });
+}
+
+// Sprint 52 P0.3 — update outcome/notes для уже сохранённой встречи.
+// Позволяет менеджеру разметить результат позже, не теряя transcript+summary.
+// Возвращает обновлённую запись либо null если не найдена.
+export async function updateSessionOutcome(
+  id: string,
+  patch: { outcome?: SessionOutcome | null; managerOutcomeNotes?: string | null },
+): Promise<{ id: string; outcome: string | null; managerOutcomeNotes: string | null } | null> {
+  const existing = await prisma.salesSession.findUnique({ where: { id } });
+  if (!existing || existing.archivedAt) return null;
+  const updated = await prisma.salesSession.update({
+    where: { id },
+    data: {
+      ...(patch.outcome !== undefined ? { outcome: patch.outcome } : {}),
+      ...(patch.managerOutcomeNotes !== undefined ? { managerOutcomeNotes: patch.managerOutcomeNotes } : {}),
+    },
+    select: { id: true, outcome: true, managerOutcomeNotes: true },
+  });
+  return updated;
 }
 
 export async function listSessions(filters: {

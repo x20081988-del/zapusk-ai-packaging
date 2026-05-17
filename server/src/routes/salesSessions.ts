@@ -13,8 +13,11 @@ import {
   persistSession,
   listSessions,
   getSession,
+  updateSessionOutcome,
   type CompleteSessionInput,
+  type SessionOutcome,
 } from '../services/salesSessionService.js';
+import { createNegotiationMemory } from '../services/negotiationMemoryService.js';
 
 export const salesSessionsRoutes = Router();
 salesSessionsRoutes.use(authMiddleware);
@@ -34,6 +37,13 @@ const completeSchema = z.object({
   // которые произошли в рамках этой встречи. После создания SalesSession мы
   // backfill'им их salesSessionId. Это и есть link для outcome-attribution.
   adviceEventIds: z.array(z.string()).max(50).optional(),
+  // Sprint 52 P0.4 — multi-project context. Опционально: все упомянутые
+  // проекты в этом разговоре. Передаётся для NegotiationMemory.projectIds.
+  projectIds: z.array(z.string()).max(10).optional(),
+  // Sprint 52 P0.3 — outcome dataset. Опционально на /complete; чаще будет
+  // обновляться через PATCH /:id/outcome после звонка.
+  outcome: z.enum(['success', 'failed', 'followup', 'unknown']).optional(),
+  managerOutcomeNotes: z.string().max(4000).optional().nullable(),
 });
 
 // POST /api/sales-sessions/complete — analyze + persist in one call.
@@ -109,6 +119,33 @@ salesSessionsRoutes.post('/complete', withIdempotency(), async (req, res) => {
       })
       .catch((err) => console.warn('[sales-sessions/auto-capture] failed', err));
 
+    // Sprint 52 P0.2 — auto-save Negotiation Memory. Fire-and-forget, не
+    // блокирует ответ финализации (если упадёт — встреча всё равно сохранена).
+    // Каждая завершённая встреча/звонок добавляется в memory layer для
+    // будущего retrieval и training dataset'ов.
+    const projectIds = parsed.data.projectIds && parsed.data.projectIds.length > 0
+      ? parsed.data.projectIds
+      : (input.projectId ? [input.projectId] : []);
+    createNegotiationMemory({
+      salesSessionId: session.id,
+      primaryProjectId: input.projectId ?? null,
+      projectIds,
+      investorName: input.investorName ?? null,
+      investorPhone: input.investorPhone ?? null,
+      transcript: input.transcript,
+      summary: summary.summary,
+      outcome: input.outcome ?? 'unknown',
+      objections: summary.objections,
+      tags: [],
+      speakerInsights: null,
+      managerNotes: input.managerOutcomeNotes ?? null,
+      createdById: user.id,
+    })
+      .then((memory) => {
+        console.log(`[sales-sessions/memory] created id=${memory.id} outcome=${memory.outcome ?? '-'}`);
+      })
+      .catch((err) => console.warn('[sales-sessions/memory] create failed', err));
+
     res.status(201).json({ summary, session });
   } catch (err) {
     // Sprint 49 hotfix 15 — guardrail propagation. Finalize that hits the
@@ -163,6 +200,39 @@ salesSessionsRoutes.get('/:id', async (req, res) => {
   });
 
   res.json({ session });
+});
+
+// Sprint 52 P0.3 — outcome dataset. Менеджер размечает результат звонка
+// после факта: success / failed / followup / unknown + optional manager notes.
+// Используется как training dataset для следующих переговоров (см. spec P0.3).
+const outcomePatchSchema = z.object({
+  outcome: z.enum(['success', 'failed', 'followup', 'unknown']).optional(),
+  managerOutcomeNotes: z.string().max(4000).optional().nullable(),
+});
+
+salesSessionsRoutes.patch('/:id/outcome', async (req, res) => {
+  const parsed = outcomePatchSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
+  if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
+  // Same ownership rule as GET — autor or admin/manager.
+  const allowed = await actorCanReadSalesSession(req, {
+    projectId: existing.projectId,
+    createdById: existing.createdById,
+  });
+  if (!allowed) return res.status(404).json({ error: 'not_found' });
+  const updated = await updateSessionOutcome(req.params.id, {
+    outcome: (parsed.data.outcome ?? undefined) as SessionOutcome | undefined,
+    managerOutcomeNotes: parsed.data.managerOutcomeNotes ?? null,
+  });
+  if (!updated) return res.status(404).json({ error: 'not_found' });
+  await recordAudit(req, {
+    action: 'sales_session.outcome_update',
+    targetType: 'SalesSession',
+    targetId: updated.id,
+    payload: { outcome: updated.outcome, hasNotes: Boolean(updated.managerOutcomeNotes) },
+  });
+  res.json({ session: updated });
 });
 
 // Sprint 30 — soft-delete + audit. demoGuard на app level продолжает блокировать

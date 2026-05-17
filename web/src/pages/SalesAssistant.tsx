@@ -18,7 +18,7 @@ import { MeetingCard } from '../components/ui/MeetingCard';
 import { api, type Project } from '../lib/api';
 import { getAuth } from '../lib/auth';
 import { isLegacyDemoProject } from '../lib/demoMaterials';
-import { completeMeeting, type CompleteResult } from '../lib/salesSessions';
+import { completeMeeting, updateMeetingOutcome, type CompleteResult } from '../lib/salesSessions';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
@@ -2197,6 +2197,10 @@ export default function SalesAssistant() {
               </div>
             </div>
             <MeetingCard session={finishResult.session} />
+            {/* Sprint 52 P0.3 — outcome dataset. Менеджер сразу размечает
+                результат (либо позже из карточки). Foundation для
+                training dataset: successful vs failed vs follow-up. */}
+            <OutcomeForm sessionId={finishResult.session.id} deskMode={deskMode} />
             <div className="flex justify-end gap-2 pt-2 border-t border-hairline">
               <Button variant="ghost" onClick={closeFinishModal}>Закрыть</Button>
               <Link to="/meetings">
@@ -2265,6 +2269,95 @@ export default function SalesAssistant() {
       {/* Spacer чтобы содержимое не пряталось под sticky bar'ом на мобильном. */}
       <div className="sm:hidden h-20" aria-hidden />
     </AppLayout>
+  );
+}
+
+// Sprint 52 P0.3 — outcome dataset form. Появляется в успешном
+// финализационном modal'е сразу после сохранения встречи. Менеджер может
+// разметить результат тут же (без открытия отдельной карточки):
+//   • success / failed / followup / unknown
+//   • optional manager notes — что сработало / что нет.
+// Foundation под training dataset (см. P0.3 spec).
+function OutcomeForm({ sessionId, deskMode }: { sessionId: string; deskMode: AssistantDeskMode }) {
+  type OutcomeChoice = 'success' | 'failed' | 'followup' | 'unknown';
+  const [outcome, setOutcomeState] = useState<OutcomeChoice>('unknown');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const labels: Record<OutcomeChoice, { dot: string; tone: 'success' | 'danger' | 'warning' | 'info'; label: string; help: string }> = {
+    success:  { dot: 'bg-success',  tone: 'success', label: 'Успех',     help: deskMode === 'qualification' ? 'Zoom-слот зафиксирован' : 'Шаг к сделке закрыт' },
+    failed:   { dot: 'bg-danger',   tone: 'danger',  label: 'Не пошло',  help: 'Слив / отказ / молчание' },
+    followup: { dot: 'bg-info',     tone: 'info',    label: 'Follow-up', help: 'Договорились о повторе' },
+    unknown:  { dot: 'bg-muted',    tone: 'warning', label: 'Не размечено', help: 'Решу позже' },
+  };
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateMeetingOutcome(sessionId, {
+        outcome,
+        managerOutcomeNotes: notes.trim() || null,
+      });
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить результат');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-line bg-elevated p-4 space-y-3">
+      <div>
+        <div className="text-sm font-semibold text-primary mb-1">Результат</div>
+        <div className="text-[11px] text-muted">
+          AI учтёт ваш ответ при следующих звонках. Можно изменить позже из карточки встречи.
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {(Object.entries(labels) as [OutcomeChoice, typeof labels[OutcomeChoice]][]).map(([key, meta]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => { setOutcomeState(key); setSaved(false); }}
+            disabled={saving}
+            className={clsx(
+              'rounded-md border px-2 py-2 text-left text-xs transition-colors',
+              outcome === key
+                ? 'border-ai/50 bg-ai/10 shadow-ai-glow'
+                : 'border-line bg-canvas hover:border-secondary',
+            )}
+          >
+            <div className="flex items-center gap-1.5 font-semibold text-primary">
+              <span className={clsx('w-1.5 h-1.5 rounded-full', meta.dot)} />
+              {meta.label}
+            </div>
+            <div className="text-[10.5px] text-muted mt-0.5 leading-tight">{meta.help}</div>
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={notes}
+        onChange={(e) => { setNotes(e.target.value); setSaved(false); }}
+        placeholder="Что сработало / что нет? Свободный текст для тренинга AI."
+        className="w-full bg-canvas border border-hairline rounded-md p-2 text-[12.5px] text-primary leading-relaxed resize-none focus:outline-none focus:border-zapusk/40"
+        rows={3}
+        disabled={saving}
+      />
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <div className="text-muted">
+          {saved && <span className="text-success">Сохранено</span>}
+          {error && <span className="text-danger">{error}</span>}
+          {!saved && !error && <span>Не обязательно сейчас — можно отметить из «Встречи».</span>}
+        </div>
+        <Button variant="ai" size="sm" onClick={save} loading={saving} disabled={saved}>
+          {saved ? 'Сохранено' : 'Зафиксировать результат'}
+        </Button>
+      </div>
+    </div>
   );
 }
 
