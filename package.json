@@ -17,6 +17,7 @@
     "db:seed": "npm --prefix server run db:seed",
     "db:reset": "npm --prefix server run db:reset",
     "smoke:transcript": "node scripts/transcript-aggregation-smoke.mjs",
+    "smoke:project-knowledge": "npx --prefix server tsx scripts/project-knowledge-smoke.ts",
     "regression:realcalls": "node scripts/real-call-regression.mjs",
     "replay": "node scripts/pipeline-replay.mjs"
   },

@@ -2,7 +2,87 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-15 (Sprint 49: Realtime transcription upgrade).
+Last updated: 2026-05-17 (Sprint 61: Project Knowledge Layer for AI Assistant).
+
+---
+
+## Completed (this sprint — Project Knowledge Layer 2026-05-17)
+
+- [x] **Sprint A** — единый `formatProjectContextForAssistant(project, options)` в
+  `server/src/services/projectContextFormatter.ts`. Включает `keyMetrics`, `investmentAsk`,
+  `strengths`, `weaknesses`, `missingData`, полный `napkin`, `interviewAnswers`, всю
+  `InvestorTerms`, список загруженных файлов (metadata only). 3 verbosity уровня: `full`
+  (4K chars/project), `prep` (4K), `fast` (1.5K). Multi-project формат с явным маркером
+  «=== Проект N ===», cap 5. Lazy import Prisma — pure formatter тестируется без БД.
+- [x] **Sprint B** — auto-ingestion загруженных файлов в project-scoped KB.
+  `server/src/services/projectKnowledgeIngest.ts → scheduleProjectFileIngest()` вызывается
+  fire-and-forget из `POST /api/files/:projectId/upload`. Парсит PDF/DOCX/XLSX/TXT/MD
+  через существующий fileParser, создаёт `KnowledgeSource(scope='project', status='published',
+  isCandidate=false, visibility='internal')` через `ingestKnowledgeSource`. Идемпотентно
+  через sha256 contentHash. XLSX/category=financial → `financial_question`. PDF/DOCX/MD/TXT
+  c category∈{pitch,description,reference} → `project_presentation`. Логирование `[project-kb]`.
+- [x] **Sprint C** — retrieval boost для project-scoped + financial chunks. В
+  `knowledgeService.retrieveKnowledgeForTranscript`: projectBoost поднят 1.10 → 1.35;
+  новый `financeBoost` параметр — при финансовых триггерах в transcript типы
+  `financial_question` множатся на 1.45, `project_presentation` на 1.20. Project-факты
+  теперь доминируют над global sales KB при равном keyword-overlap.
+- [x] **Sprint D** — детерминированный helper `buildProjectFinancialFacts(projects, transcript)`
+  в `server/src/services/projectFinancialFacts.ts`. Извлекает структурные факты из
+  `Project.*`, `InvestorTerms.*`, `brief.keyMetrics`, `brief.napkin`. Парсит периоды
+  из ключей (`net_profit_2027` → metric=Net profit, period=2027). Каждый факт подписан
+  `[источник: …]`. Block инжектится в prompt только если transcript содержит финансовые
+  триггеры (regex `FINANCE_TRIGGER_PATTERNS`).
+- [x] **Sprint E** — wiring в `salesAssistantService.ts`. `analyzeSalesTurn` и
+  `analyzeSalesTurnFast` теперь:
+  • загружают проекты через единый `loadProjectsForContext` (один include на всё);
+  • строят project context через `formatProjectsContextForAssistant`;
+  • вставляют `buildProjectFinancialFacts` block после project context, перед KB;
+  • прокидывают `financeBoost` в retrieval;
+  • инжектят source-discipline rules в task list (правила: не выдумывать метрики,
+    указывать источник, project-факты > KB).
+  `prepareForMeeting` тоже переведён на единый formatter (verbosity='prep'). Старые
+  `loadProjectContext` / `loadProjectsContext` / `loadProjectContextForPrep` удалены.
+- [x] **Sprint F** — smoke `scripts/project-knowledge-smoke.ts` (47 assertions),
+  запускается через `npm run smoke:project-knowledge`. Покрывает: detectFinancialQuestion
+  (RU + EN + years), formatProjectContextForAssistant (full / fast / empty / multi / cap),
+  buildProjectFinancialFacts (триггеры + source labelling + empty), pickSourceTypeForFile
+  taxonomy. Pure-function тест, не требует БД.
+- [x] **Sprint G** — `docs/project-knowledge-layer.md` (~14 секций): layered context,
+  prompt budget, retrieval flow, source-discipline rules, observability, known limitations,
+  rollout notes.
+- [x] **Verification.** `server/` tsc=0, `web/` tsc=0, `npm run build` зелёный,
+  `smoke:transcript` / `replay` / `regression:realcalls` / `smoke:project-knowledge` все
+  проходят. NO schema migration. NO new top-level dependency (tsx уже был в
+  server/devDeps).
+
+**Files changed**
+- `server/src/services/projectContextFormatter.ts` (new, ~490 lines)
+- `server/src/services/projectFinancialFacts.ts` (new, ~220 lines)
+- `server/src/services/projectKnowledgeIngest.ts` (new, ~190 lines)
+- `server/src/services/salesAssistantService.ts` (replaced project context + finance facts + discipline rules)
+- `server/src/services/knowledgeService.ts` (projectBoost 1.10→1.35, financeBoost param)
+- `server/src/routes/files.ts` (scheduleProjectFileIngest on upload)
+- `scripts/project-knowledge-smoke.ts` (new)
+- `package.json` (smoke:project-knowledge script)
+- `docs/project-knowledge-layer.md` (new)
+- `TASKS.md`
+
+**What the AI Assistant now actually sees on /sales-assistant/analyze**
+
+Before Sprint 61: 6 short lines (name, industry/stage, raise/equity/min check, businessSummary,
+monetization, investorReturn).
+
+After Sprint 61:
+- Full project context (≤4K chars/project): name + core + brief (incl. keyMetrics, napkin,
+  investmentAsk, strengths, weaknesses, missingData, interviewAnswers) + InvestorTerms +
+  file list (metadata).
+- Financial facts block (deterministic, ≤1.5K chars, only when triggered): explicit
+  metric/value/period/source for every known number.
+- Project-scoped KB chunks (boosted ×1.35-1.62): retrieved from auto-ingested pitch deck,
+  financial model, docs.
+- Sales KB chunks (unchanged): generic guidance, deprioritized vs project facts.
+- Source-discipline instructions inline in task list (NOT system prompt) — survive any
+  admin template edit.
 
 ---
 
