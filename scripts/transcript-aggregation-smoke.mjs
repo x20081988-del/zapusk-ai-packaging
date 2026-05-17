@@ -27,10 +27,14 @@ const SUSPICIOUS_AI_PROMPT_PHRASES = [
   /^Чек или доля\??$/i,
   /^Ну, если вы настаиваете[.…]{0,3}$/i,
 ];
+const KNOWN_ADVICE_LEAKAGE_PHRASES = [
+  /мы\s+всегда\s+помним[\s\S]{0,100}учитывать\s+стади[юи]\s+проекта[\s\S]{0,100}какой\s+чек\s+нужен\s+от\s+инвестора/i,
+];
 const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000;
 const HALLUCINATION_MAX_CHARS = 40;
 
 function looksLikeAiHallucination(text, prev, now) {
+  if (KNOWN_ADVICE_LEAKAGE_PHRASES.some((re) => re.test(text))) return true;
   if (text.length > HALLUCINATION_MAX_CHARS) return false;
   if (!SUSPICIOUS_AI_PROMPT_PHRASES.some((re) => re.test(text))) return false;
   const last = prev[prev.length - 1];
@@ -243,6 +247,22 @@ const halluResults = [
       { text: 'У меня вопрос на счет распределения долей в этой сделке.', advanceMs: 12_000 },
     ],
     { includes: ['распределения долей'] },
+  ),
+  // Case 7: known production advice leakage phrase — must be dropped even
+  // though it is long and not isolated by the short-phrase guard.
+  runHallucinationCase(
+    'Drops known advice leakage phrase from desktop realtime',
+    [
+      { text: 'Пицца.', advanceMs: 2_000 },
+      { text: 'Раз, два, три, четыре, пять.', advanceMs: 2_000 },
+      { text: 'Итак, я начинаю встречу и жду, когда пойдет транскрипция.', advanceMs: 2_000 },
+      { text: 'Итак, я начинаю встречу и жду, когда пойдет транскрибация.', advanceMs: 2_000 },
+      { text: 'Мы всегда помним о том, что нужно учитывать стадию проекта, когда мы говорим о том, какой чек нужен от инвестора.', advanceMs: 10_000 },
+    ],
+    {
+      includes: ['Пицца', 'Раз, два, три', 'пойдет транскрипция', 'пойдет транскрибация'],
+      excludes: ['Мы всегда помним', 'какой чек нужен от инвестора'],
+    },
   ),
 ];
 

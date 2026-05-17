@@ -105,10 +105,17 @@ const SUSPICIOUS_AI_PROMPT_PHRASES = [
   // Realtime/Whisper emits «…» as a real character, not three dots.
   /^Ну, если вы настаиваете[.…]{0,3}$/i,
 ];
+const KNOWN_ADVICE_LEAKAGE_PHRASES = [
+  // Sprint hotfix — production desktop realtime once emitted this exact
+  // sales-coach/advice sentence while the user was silent. It is never
+  // valid transcript content: it belongs to advice/prompt vocabulary.
+  /мы\s+всегда\s+помним[\s\S]{0,100}учитывать\s+стади[юи]\s+проекта[\s\S]{0,100}какой\s+чек\s+нужен\s+от\s+инвестора/i,
+];
 const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000; // segment is "isolated" if no prior segment in 8 sec
 const HALLUCINATION_MAX_CHARS = 40;
 
 function looksLikeAiHallucination(text: string, prev: TranscriptSegment[]): boolean {
+  if (KNOWN_ADVICE_LEAKAGE_PHRASES.some((re) => re.test(text))) return true;
   if (text.length > HALLUCINATION_MAX_CHARS) return false;
   const matchesPattern = SUSPICIOUS_AI_PROMPT_PHRASES.some((re) => re.test(text));
   if (!matchesPattern) return false;
@@ -1811,6 +1818,7 @@ export default function SalesAssistant() {
     listening;
   const hasMeaningfulPrepContext = manualTranscript.trim().length >= 20;
   const inPrepMode = hasMeaningfulPrepContext && !isLiveSessionActive;
+  const analyzeAuthExpired = Boolean(aiError && /Сессия истекла/i.test(aiError));
   const visibleProjects = useMemo(
     () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
     [role, projects],
@@ -2402,7 +2410,7 @@ export default function SalesAssistant() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-6">
         {/* TRANSCRIPT */}
         <Card padded>
-          <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
             <CardHeader
               title="Живая транскрипция"
               subtitle={deskMode === 'qualification' ? 'Слева растёт диалог звонка в реальном времени' : 'Слева растёт диалог встречи в реальном времени'}
@@ -2411,13 +2419,13 @@ export default function SalesAssistant() {
                 Telegram transcripts and run advice without ever turning the
                 mic on. Combined with live transcript when both present. */}
             {showPreparationBlocks && !isEditingTranscript && (
-              <div className="flex flex-col items-end gap-1.5">
+              <div className="flex w-full sm:w-auto flex-col items-stretch sm:items-end gap-1.5">
                 <Button
                   variant={manualTranscript ? 'secondary' : 'ai'}
                   size="sm"
                   iconLeft={<BookOpen size={13} />}
                   className={clsx(
-                    'whitespace-normal text-center leading-tight',
+                    'w-full sm:w-auto whitespace-normal text-center leading-tight',
                     !manualTranscript && 'shadow-ai-glow',
                   )}
                   onClick={() => {
@@ -2425,10 +2433,11 @@ export default function SalesAssistant() {
                     setIsEditingTranscript(true);
                   }}
                 >
-                  {manualTranscript ? 'Дальше вставить текст' : labels.pasteCtxLong}
+                  <span className="sm:hidden">{manualTranscript ? 'Добавить текст' : 'Контекст'}</span>
+                  <span className="hidden sm:inline">{manualTranscript ? 'Дальше вставить текст' : labels.pasteCtxLong}</span>
                 </Button>
                 {!manualTranscript && (
-                  <span className="max-w-[220px] text-right text-[11px] leading-snug text-muted">
+                  <span className="max-w-[240px] text-left sm:text-right text-[11px] leading-snug text-muted">
                     {labels.ctxHelpPreCall}
                   </span>
                 )}
@@ -2532,6 +2541,23 @@ export default function SalesAssistant() {
               План встречи (prep plan). Both views can coexist: prep plan stays
               available even after the mic starts; live advice shows up once
               the user clicks «Получить подсказку». */}
+          {aiError && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-warning/10 border border-warning/30 text-xs text-warning">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <div>
+                  {analyzeAuthExpired
+                    ? 'Сессия истекла. Войдите заново, чтобы получить подсказку.'
+                    : aiError}
+                </div>
+                {analyzeAuthExpired && (
+                  <Link to="/login" className="mt-1 inline-flex underline hover:text-primary">
+                    Открыть вход
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
           {(card || fastCard || meetingPlan || inPrepMode) && (
             <div className="inline-flex items-center bg-surface border border-line rounded-md p-0.5 text-xs">
               <button
@@ -2714,7 +2740,6 @@ export default function SalesAssistant() {
               variant="ai"
               iconLeft={<RefreshCw size={14} />}
               onClick={() => runAnalyze()}
-              disabled={!hasFinalTranscript}
               loading={isFastLoading}
               className="w-full whitespace-nowrap"
             >
