@@ -146,6 +146,38 @@ const QUALIFICATION_SCRIPT_KEYS = [
   'generic',
 ] as const;
 
+// Sprint 52 P0.7 — admin-driven qualification scripts. Endpoint доступен
+// всем не-investor ролям (фаундер/менеджер/админ), чтобы Qualification
+// Desk мог построить selector из DB. ТОЛЬКО metadata (key/name/description/
+// active) — body остаётся server-side IP (используется в analyzeSalesTurn,
+// не отдаётся фронту). Если DB пустая — frontend сам fallback'нется на
+// hardcoded catalog.
+salesAssistantRoutes.get('/qualification-scripts', async (_req, res) => {
+  const rows = await prisma.promptTemplate.findMany({
+    where: { category: 'qualification', active: true },
+    select: { key: true, name: true, description: true },
+    orderBy: { name: 'asc' },
+  });
+  // key='qualification.<scriptKey>' → для frontend селектора нам нужен
+  // короткий scriptKey, который потом отправится в analyze.
+  const scripts = rows
+    .map((r) => {
+      const m = r.key.match(/^qualification\.(.+)$/);
+      const scriptKey = m ? m[1] : null;
+      if (!scriptKey || !QUALIFICATION_SCRIPT_KEYS.includes(scriptKey as typeof QUALIFICATION_SCRIPT_KEYS[number])) {
+        return null;
+      }
+      return {
+        scriptKey,
+        templateKey: r.key,
+        name: r.name,
+        description: r.description ?? null,
+      };
+    })
+    .filter((x): x is { scriptKey: string; templateKey: string; name: string; description: string | null } => x !== null);
+  res.json({ scripts });
+});
+
 const analyzeSchema = z.object({
   transcript: z.string().trim().min(1).max(32_000),
   recent: z.string().max(16_000).optional().nullable(),

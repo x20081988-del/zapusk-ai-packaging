@@ -367,6 +367,9 @@ export default function SalesAssistant() {
   // до Sprint 51. Qualification mode переключается явно через таб сверху.
   const [deskMode, setDeskMode] = useState<AssistantDeskMode>('meeting');
   const [scriptKey, setScriptKey] = useState<QualificationScriptKey>('dlfy_vamlyam');
+  // Sprint 52 P0.7 — admin-driven scripts. Загружаем list из backend; пока
+  // не загрузили / запрос упал — используем hardcoded QUALIFICATION_SCRIPTS.
+  const [qualificationCatalog, setQualificationCatalog] = useState(QUALIFICATION_SCRIPTS);
   const [adviceHistory, setAdviceHistory] = useState<AdviceHistoryItem[]>([]);
   const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
   // Sprint 34A: lastAnalyzeAt / aiError для UX обратной связи.
@@ -469,6 +472,31 @@ export default function SalesAssistant() {
     api.get<{ projects: Project[] }>('/api/projects').then((r) => {
       setProjects(r.projects);
     });
+  }, []);
+
+  // Sprint 52 P0.7 — admin-driven qualification scripts. Подгружаем список
+  // из backend (PromptTemplate с category='qualification', активные).
+  // Если запрос упал или вернул пусто — остаёмся на hardcoded catalog
+  // (QUALIFICATION_SCRIPTS), чтобы UX не сломался.
+  useEffect(() => {
+    type ApiScript = { scriptKey: string; templateKey: string; name: string; description: string | null };
+    api.get<{ scripts: ApiScript[] }>('/api/sales-assistant/qualification-scripts')
+      .then((r) => {
+        if (!Array.isArray(r.scripts) || r.scripts.length === 0) return;
+        // Filter to valid keys и mapим в catalog shape.
+        const valid = r.scripts.filter((s): s is ApiScript =>
+          QUALIFICATION_SCRIPTS.some((h) => h.key === s.scriptKey),
+        );
+        if (valid.length === 0) return;
+        setQualificationCatalog(valid.map((s) => ({
+          key: s.scriptKey as QualificationScriptKey,
+          label: s.name,
+          hint: s.description ?? '',
+        })));
+      })
+      .catch((err) => {
+        console.warn('[sales-assistant] qualification-scripts fetch failed, using hardcoded fallback:', err);
+      });
   }, []);
 
   useEffect(() => {
@@ -1677,9 +1705,9 @@ export default function SalesAssistant() {
                 onChange={(e) => setScriptKey(e.target.value as QualificationScriptKey)}
                 disabled={isMicCapturing}
                 className="bg-elevated border border-line text-primary rounded-md px-2 h-8 text-xs disabled:opacity-50"
-                title={QUALIFICATION_SCRIPTS.find((s) => s.key === scriptKey)?.hint ?? ''}
+                title={qualificationCatalog.find((s) => s.key === scriptKey)?.hint ?? ''}
               >
-                {QUALIFICATION_SCRIPTS.map((s) => (
+                {qualificationCatalog.map((s) => (
                   <option key={s.key} value={s.key}>{s.label}</option>
                 ))}
               </select>
