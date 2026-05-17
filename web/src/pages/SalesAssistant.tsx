@@ -340,6 +340,7 @@ export default function SalesAssistant() {
   //                                  finalize_failed (retry possible)
   type MeetingState = 'idle' | 'listening' | 'stopped' | 'finalizing' | 'finalized' | 'finalize_failed';
   const [meetingState, setMeetingState] = useState<MeetingState>('idle');
+  const [liveSessionStarted, setLiveSessionStarted] = useState(false);
   // Reentrancy guard: повторные клики «Завершить встречу» не запускают
   // второй запрос пока первый летит. Защита от race + от двойного клика.
   const finishingRef = useRef(false);
@@ -366,6 +367,9 @@ export default function SalesAssistant() {
   const restartTimerRef = useRef<number | null>(null);
   const shouldListenRef = useRef(false);
   const recognitionActiveRef = useRef(false);
+  const liveSessionStartedRef = useRef(false);
+  const liveStartedAtRef = useRef<number | null>(null);
+  const liveSessionIdRef = useRef(0);
   // Sprint 49 — OpenAI Realtime live transcription через WebRTC. Если сессия
   // успешно открывается, srRef остаётся пустым и Web Speech не используется.
   // Если realtime упал (нет ключа / 5xx / WebRTC заблокирован) — фронт
@@ -398,6 +402,11 @@ export default function SalesAssistant() {
   const fastCardRef = useRef<FastCardShape | null>(null);
   const adviceHistoryRef = useRef<AdviceHistoryItem[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+
+  function setLiveSessionActive(active: boolean) {
+    liveSessionStartedRef.current = active;
+    setLiveSessionStarted(active);
+  }
 
   // Initial project list. Sprint 50 hotfix — default is now "Без проекта"
   // (empty string) instead of auto-picking the first project. Auto-pick made
@@ -964,8 +973,11 @@ export default function SalesAssistant() {
   function startRecognition() {
     if (recognitionActiveRef.current || srRef.current) return;
     const SR = getSR();
+    const recognitionSessionId = liveSessionIdRef.current;
     if (!SR) {
       shouldListenRef.current = false;
+      setLiveSessionActive(false);
+      liveStartedAtRef.current = null;
       setListening(false);
       setPermError('Голосовой ввод не поддерживается в этом браузере. Откройте в Chrome / Edge / Safari.');
       speechStatusRef.current = 'mic_error';
@@ -987,13 +999,21 @@ export default function SalesAssistant() {
           if (res.isFinal) final.push({ ts: Date.now(), final: true, text: t });
           else interimText += (interimText ? ' ' : '') + t;
         }
+        if (
+          !shouldListenRef.current ||
+          !liveSessionStartedRef.current ||
+          recognitionSessionId !== liveSessionIdRef.current
+        ) return;
         if (final.length) setTranscript((prev) => [...prev, ...final]);
         setInterim(interimText);
       };
       sr.onerror = (e) => {
+        if (recognitionSessionId !== liveSessionIdRef.current) return;
         const code = (e as { error?: string }).error ?? '';
         if (code === 'not-allowed' || code === 'service-not-allowed') {
           shouldListenRef.current = false;
+          setLiveSessionActive(false);
+          liveStartedAtRef.current = null;
           setListening(false);
           recognitionActiveRef.current = false;
           if (srRef.current === sr) srRef.current = null;
@@ -1005,6 +1025,8 @@ export default function SalesAssistant() {
         }
         if (code === 'audio-capture') {
           shouldListenRef.current = false;
+          setLiveSessionActive(false);
+          liveStartedAtRef.current = null;
           setListening(false);
           recognitionActiveRef.current = false;
           if (srRef.current === sr) srRef.current = null;
@@ -1021,6 +1043,7 @@ export default function SalesAssistant() {
         }
       };
       sr.onend = () => {
+        if (recognitionSessionId !== liveSessionIdRef.current) return;
         recognitionActiveRef.current = false;
         if (srRef.current === sr) srRef.current = null;
         if (shouldListenRef.current) {
@@ -1045,6 +1068,8 @@ export default function SalesAssistant() {
       setPermError(null);
     } catch (err) {
       shouldListenRef.current = false;
+      setLiveSessionActive(false);
+      liveStartedAtRef.current = null;
       setListening(false);
       srRef.current = null;
       recognitionActiveRef.current = false;
@@ -1057,6 +1082,12 @@ export default function SalesAssistant() {
   async function start() {
     shouldListenRef.current = true;
     setPermError(null);
+    const currentLiveSessionId = liveSessionIdRef.current + 1;
+    liveSessionIdRef.current = currentLiveSessionId;
+    setLiveSessionActive(true);
+    liveStartedAtRef.current = Date.now();
+    setInterim('');
+    interimRef.current = '';
     setMeetingState('listening');
     setFinalizeError(null);
     if (!startedAtRef.current) startedAtRef.current = new Date().toISOString();
@@ -1066,8 +1097,20 @@ export default function SalesAssistant() {
     // не остаётся без транскрипции при сбое.
     try {
       const session = await startRealtimeTranscription({
-        onInterim: (text) => setInterim(text),
+        onInterim: (text) => {
+          if (
+            !shouldListenRef.current ||
+            !liveSessionStartedRef.current ||
+            currentLiveSessionId !== liveSessionIdRef.current
+          ) return;
+          setInterim(text);
+        },
         onFinal: (text) => {
+          if (
+            !shouldListenRef.current ||
+            !liveSessionStartedRef.current ||
+            currentLiveSessionId !== liveSessionIdRef.current
+          ) return;
           setTranscript((prev) => [...prev, { ts: Date.now(), final: true, text }]);
           setInterim('');
         },
@@ -1222,6 +1265,9 @@ export default function SalesAssistant() {
     // Sprint 49 hotfix 10 — после закрытия модала возвращаемся в idle, чтобы
     // следующая встреча стартовала с чистого state machine.
     setMeetingState('idle');
+    liveSessionIdRef.current++;
+    setLiveSessionActive(false);
+    liveStartedAtRef.current = null;
     setFinalizeError(null);
     // Sprint 50 P0.1 — следующая встреча получит свежий idempotency-key.
     finalizeIdempotencyKeyRef.current = null;
@@ -1232,6 +1278,9 @@ export default function SalesAssistant() {
 
   function stop() {
     shouldListenRef.current = false;
+    liveSessionIdRef.current++;
+    setLiveSessionActive(false);
+    liveStartedAtRef.current = null;
     setListening(false);
     speechStatusRef.current = 'stopped';
     setSpeechStatus('stopped');
@@ -1271,6 +1320,9 @@ export default function SalesAssistant() {
     // финализация была finalize_failed, тоже сбрасываем — пользователь
     // решил начать с чистого листа.
     setMeetingState('idle');
+    liveSessionIdRef.current++;
+    setLiveSessionActive(false);
+    liveStartedAtRef.current = null;
     setFinalizeError(null);
     // Sprint 50 P0.1 — сброс idempotency key (новая встреча → новый key).
     finalizeIdempotencyKeyRef.current = null;
@@ -1303,7 +1355,7 @@ export default function SalesAssistant() {
   // meeting has not started and has not produced any final transcript yet.
   // Once listening starts, the main CTA must switch to live advice even
   // before the first phrase arrives.
-  const isMeetingActivelyListening = meetingState === 'listening' || listening;
+  const isMeetingActivelyListening = liveSessionStarted || meetingState === 'listening' || listening;
   const hasLiveTranscript = transcript.some((t) => t.final && t.text.trim().length > 0);
   const hasMeaningfulPrepContext = manualTranscript.trim().length >= 20;
   const inPrepMode = hasMeaningfulPrepContext && !isMeetingActivelyListening && !hasLiveTranscript;
@@ -1361,12 +1413,12 @@ export default function SalesAssistant() {
         <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-semibold text-primary">
-              {isLiveMeetingLayout ? 'Живая встреча' : 'Управление встречей'}
+              Живая встреча
             </div>
-            <div className="text-xs text-muted">
+            <div className="hidden sm:block text-xs text-muted">
               {isLiveMeetingLayout
-                ? 'Сфокусируйтесь на разговоре: транскрипция и подсказка ниже.'
-                : 'Сначала добавьте контекст и подготовьте план, затем запускайте встречу.'}
+                ? 'Транскрипция и подсказка ниже.'
+                : 'Подготовьте план или начните разговор.'}
             </div>
           </div>
           <div className="grid grid-cols-2 sm:flex sm:flex-wrap xl:flex-nowrap gap-2 w-full xl:w-auto">
@@ -1719,37 +1771,45 @@ export default function SalesAssistant() {
           ) : (
             <>
               {manualTranscript && (
-                <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <StatusBadge tone="success" dot>Контекст встречи добавлен</StatusBadge>
                     <StatusBadge tone="info">Текст вставлен вручную</StatusBadge>
+                    {isLiveMeetingLayout && (
+                      <span className="text-[11px] text-muted">
+                        Учитывается в подсказке, но не считается репликой.
+                      </span>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    className="text-[11px] text-muted hover:text-primary underline"
-                    onClick={() => {
-                      setManualDraft(manualTranscript);
-                      setIsEditingTranscript(true);
-                    }}
-                  >
-                    Редактировать
-                  </button>
+                  {showPreparationBlocks && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-muted hover:text-primary underline self-start sm:self-auto"
+                      onClick={() => {
+                        setManualDraft(manualTranscript);
+                        setIsEditingTranscript(true);
+                      }}
+                    >
+                      Редактировать
+                    </button>
+                  )}
                 </div>
               )}
               <div
                 ref={transcriptRef}
                 className="bg-canvas border border-hairline rounded-md p-4 h-[60vh] overflow-y-auto space-y-2"
               >
-                {transcript.length === 0 && !interim && !manualTranscript && (
+                {transcript.length === 0 && !interim && (!manualTranscript || isLiveMeetingLayout) && (
                   <p className="text-sm text-muted text-center py-8">
                     {isLiveMeetingLayout
                       ? 'Слушаю встречу. Первые фразы появятся здесь.'
                       : 'Добавьте контекст инвестора, проекта или предыдущего общения — ИИ подготовит структуру встречи и первые вопросы.'}
                   </p>
                 )}
-                {/* Manual block — renders first, distinct dimmer style so the
-                    live segments below stand out by contrast. */}
-                {manualTranscript && (
+                {/* Manual context is not a spoken live segment. Keep the body
+                    visible only in preparation mode; during a live meeting
+                    the badge above confirms that it is still used by AI. */}
+                {manualTranscript && showPreparationBlocks && (
                   <p className="text-[13.5px] text-secondary leading-relaxed whitespace-pre-wrap border-l-2 border-info/40 pl-3">
                     {manualTranscript}
                   </p>
