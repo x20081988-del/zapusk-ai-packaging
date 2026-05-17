@@ -18,6 +18,11 @@ import {
   type SessionOutcome,
 } from '../services/salesSessionService.js';
 import { createNegotiationMemory } from '../services/negotiationMemoryService.js';
+import { runCleanTranscription, persistCleanTranscript } from '../services/cleanTranscriptService.js';
+import multer from 'multer';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { storage } from '../services/storage.js';
 
 export const salesSessionsRoutes = Router();
 salesSessionsRoutes.use(authMiddleware);
@@ -233,6 +238,132 @@ salesSessionsRoutes.patch('/:id/outcome', async (req, res) => {
     payload: { outcome: updated.outcome, hasNotes: Boolean(updated.managerOutcomeNotes) },
   });
   res.json({ session: updated });
+});
+
+// Sprint 54 P0 — Hybrid transcription: upload the recorded audio that drove
+// realtime transcription, and let backend re-transcribe via gpt-4o-transcribe
+// (offline, more accurate) to replace the draft with a clean final.
+//
+// Pipeline:
+//   1. Frontend MediaRecorder produces a Blob during the live call.
+//   2. After completeMeeting succeeds, frontend POSTs the blob here.
+//   3. We persist the audio to /var/data/sales-audio/<sessionId>.<ext>.
+//   4. Run runCleanTranscription() — gpt-4o-transcribe + brand normalize.
+//   5. If success: update SalesSession.transcript with clean text + flags.
+//   6. If failure: only update transcriptQualityStatus='failed' (draft kept).
+//
+// Up to 50 MB per upload (typical 2-min call ≈ 1-2 MB webm).
+const SALES_AUDIO_DIR = 'sales-audio';
+const SALES_AUDIO_ALLOWED_MIMES = new Set([
+  'audio/webm',
+  'audio/webm;codecs=opus',
+  'audio/ogg',
+  'audio/ogg;codecs=opus',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+]);
+
+const salesAudioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    // MediaRecorder mimeType can be 'audio/webm;codecs=opus' which we accept.
+    const ok = SALES_AUDIO_ALLOWED_MIMES.has(file.mimetype) ||
+      file.mimetype.startsWith('audio/webm') ||
+      file.mimetype.startsWith('audio/ogg');
+    if (!ok) return cb(new Error('upload_rejected:mime_not_audio'));
+    cb(null, true);
+  },
+});
+
+function salesAudioUploadWithGuard(
+  req: Parameters<typeof getUser>[0],
+  res: { status: (code: number) => { json: (body: unknown) => void } },
+  next: () => void,
+): void {
+  salesAudioUpload.single('audio')(req as never, res as never, (err: unknown) => {
+    if (!err) return next();
+    if (err instanceof Error && err.message.startsWith('upload_rejected:')) {
+      const reason = err.message.split(':')[1];
+      res.status(400).json({ error: 'upload_rejected', reason });
+      return;
+    }
+    if (err instanceof Error && /file too large/i.test(err.message)) {
+      res.status(413).json({ error: 'file_too_large' });
+      return;
+    }
+    res.status(400).json({ error: 'upload_failed', message: err instanceof Error ? err.message : 'unknown' });
+  });
+}
+
+salesSessionsRoutes.post('/:id/audio', salesAudioUploadWithGuard, async (req, res) => {
+  const existing = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
+  if (!existing || existing.archivedAt) return res.status(404).json({ error: 'not_found' });
+  const allowed = await actorCanReadSalesSession(req, {
+    projectId: existing.projectId,
+    createdById: existing.createdById,
+  });
+  if (!allowed) return res.status(404).json({ error: 'not_found' });
+
+  const file = (req as unknown as { file?: Express.Multer.File }).file;
+  if (!file) return res.status(400).json({ error: 'no_file' });
+
+  // Persist audio to storage. Filename: <sessionId>.<ext> (ext from mime).
+  const ext = file.mimetype.startsWith('audio/webm') ? 'webm'
+    : file.mimetype.startsWith('audio/ogg')  ? 'ogg'
+    : file.mimetype.startsWith('audio/wav')  || file.mimetype.startsWith('audio/wave') || file.mimetype.startsWith('audio/x-wav') ? 'wav'
+    : file.mimetype.startsWith('audio/mp4')  ? 'm4a'
+    : 'mp3';
+  const rel = path.join(SALES_AUDIO_DIR, `${existing.id}-${randomUUID()}.${ext}`);
+  await storage.saveBuffer(rel, file.buffer);
+
+  // Optimistic update: mark as processing.
+  await prisma.salesSession.update({
+    where: { id: existing.id },
+    data: { audioStoragePath: rel },
+  });
+
+  // Run clean transcription. Synchronous on the request to keep MVP simple.
+  // For 2-min audio, gpt-4o-transcribe latency is typically 5-15 sec —
+  // acceptable for finalize flow. Future: queue + webhook if grows.
+  const result = await runCleanTranscription({
+    buffer: file.buffer,
+    mimeType: file.mimetype,
+    fileName: file.originalname || `${existing.id}.${ext}`,
+  });
+  await persistCleanTranscript(existing.id, result, rel);
+
+  await recordAudit(req, {
+    action: 'sales_session.audio_upload',
+    targetType: 'SalesSession',
+    targetId: existing.id,
+    payload: {
+      mime: file.mimetype,
+      sizeBytes: file.size,
+      status: result.status,
+      latencyMs: result.latencyMs,
+      provider: result.provider,
+      model: result.model,
+    },
+  });
+
+  console.log(
+    `[sales-sessions/audio] session=${existing.id} ` +
+    `status=${result.status} latencyMs=${result.latencyMs} ` +
+    `provider=${result.provider ?? '-'} model=${result.model ?? '-'} ` +
+    `audioBytes=${file.size}`,
+  );
+
+  res.status(200).json({
+    status: result.status,
+    audioStoragePath: rel,
+    provider: result.provider,
+    model: result.model,
+    latencyMs: result.latencyMs,
+  });
 });
 
 // Sprint 30 — soft-delete + audit. demoGuard на app level продолжает блокировать

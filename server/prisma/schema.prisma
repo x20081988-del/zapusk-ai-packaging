@@ -435,6 +435,21 @@ model SalesSession {
   outcome             String?   // success / failed / followup / unknown
   managerOutcomeNotes String?
 
+  // Sprint 54 P0 — Hybrid transcription model.
+  //   transcriptSource:
+  //     'realtime_draft'   — live WebRTC, может содержать галлюцинации
+  //     'offline_clean'    — повторная транскрипция записанной дорожки (gpt-4o-transcribe)
+  //     'uploaded_audio'   — пришёл готовый файл через /conversation-analysis
+  //     'manual'           — пользователь вставил руками
+  //   transcriptQualityStatus:
+  //     'draft' / 'clean' / 'failed' / 'not_available'
+  //   audioStoragePath — relative path в storage-root к записанной дорожке
+  //     (если recorder поднял её). Помогает re-transcribe / debug; не отдаётся
+  //     наружу без auth, защищён теми же storage-guards, что и project files.
+  transcriptSource         String?
+  transcriptQualityStatus  String?
+  audioStoragePath         String?
+
   // Sprint 52 P0.2 — back-relation на memory entries этой сессии.
   memories            NegotiationMemory[]
 

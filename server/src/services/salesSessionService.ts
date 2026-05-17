@@ -268,6 +268,11 @@ export async function persistSession(
       // Sprint 52 P0.3 — outcome dataset. Default 'unknown' если не передан.
       outcome: input.outcome ?? 'unknown',
       managerOutcomeNotes: input.managerOutcomeNotes ?? null,
+      // Sprint 54 P0 — hybrid transcription. Каждая встреча стартует с
+      // драфтом из realtime. Если frontend позже загрузит audio через
+      // POST /:id/audio, эти поля будут переопределены в clean.
+      transcriptSource: 'realtime_draft',
+      transcriptQualityStatus: 'draft',
     },
   });
 }
