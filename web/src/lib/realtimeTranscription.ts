@@ -79,11 +79,26 @@ async function fetchSession(): Promise<RealtimeSessionInfo> {
 }
 
 function realtimeLog(event: string, details: Record<string, unknown> = {}) {
-  // Temporary transport diagnostics. Never log clientSecret, SDP, prompt,
-  // transcript or audio. These logs exist so production can distinguish
-  // session bootstrap success from SDP/WebRTC failure.
+  // Sprint 57 P0.3 — structured diagnostic tags. Replaced free-form
+  // '[realtime-transcription]' prefix with `[transcription/realtime]` so
+  // grep-by-tag across logs is reliable.
+  //
+  // Categories used (filter via grep -E in production logs):
+  //   transcription/realtime          — transport + session lifecycle
+  //   transcription/segment-finalized — successful final segment emitted
+  //   transcription/segment-dropped   — empty / invalid completed event
+  //   transcription/server-error      — OpenAI-side error event
+  //
+  // Sister categories live in SalesAssistant.tsx (UI side):
+  //   transcription/segment-appended  — final segment landed in UI state
+  //   transcription/segment-dedup     — duplicate detected, dropped
+  //   transcription/hallucination-guard — guard-pattern match, dropped
+  //   transcription/stale-drop        — wrong-session event dropped
+  //
+  // Never log clientSecret, SDP, prompt, transcript or audio. 60-char
+  // text previews max.
   try {
-    console.debug('[realtime-transcription]', event, details);
+    console.debug('[transcription/realtime]', event, details);
   } catch {
     // ignore console failures in unusual embedded browsers
   }
@@ -195,18 +210,26 @@ export async function startRealtimeTranscription(
             // попадает в UI / в analyze-payload. Без этого AI и Память
             // встреч хранят искажённое имя проекта.
             const normalized = normalizeTranscript(rawTranscript);
-            // P0 hotfix — log every final segment with safe excerpt. NEVER
-            // log full transcript (privacy + bundle size). 60-char preview
-            // is enough to identify hallucination patterns vs real speech.
-            realtimeLog('final-segment', {
-              traceId: session.traceId,
-              idx: finalSegmentCount,
-              chars: normalized.length,
-              preview: normalized.slice(0, 60),
-            });
+            // Sprint 57 P0.3 — structured tag. NEVER log full transcript
+            // (privacy + bundle size). 60-char preview is enough to
+            // identify hallucination patterns vs real speech.
+            try {
+              console.debug('[transcription/segment-finalized]', {
+                traceId: session.traceId,
+                idx: finalSegmentCount,
+                chars: normalized.length,
+                preview: normalized.slice(0, 60),
+              });
+            } catch { /* ignore */ }
             callbacks.onFinal(normalized);
           } else {
-            realtimeLog('final-segment-empty', { traceId: session.traceId, idx: finalSegmentCount });
+            try {
+              console.debug('[transcription/segment-dropped]', {
+                traceId: session.traceId,
+                idx: finalSegmentCount,
+                reason: 'empty_completed_event',
+              });
+            } catch { /* ignore */ }
           }
           // После завершения сегмента очищаем interim в UI.
           callbacks.onInterim('');

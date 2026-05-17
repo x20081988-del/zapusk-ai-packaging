@@ -149,15 +149,42 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
     };
   } = { transcription: transcriptionConfig };
   if (turnDetectionSupported) {
+    // Sprint 57 P0.2 — Realtime VAD config audit + rationale.
+    //
+    //   type: 'server_vad'
+    //     OpenAI-side voice-activity detection. Client just streams audio;
+    //     server decides when to finalize a segment. Alternative
+    //     'semantic_vad' is more aggressive about completing utterances by
+    //     meaning — counterproductive for verbatim transcription (would
+    //     re-introduce semantic completion). Stay with server_vad.
+    //
+    //   threshold: 0.5
+    //     Default; sensitivity 0..1 of how strongly audio must look like
+    //     speech to count. 0.5 is OpenAI's recommended balance. Lower →
+    //     more false-positive starts (noise treated as speech). Higher →
+    //     drops quiet investors. Keep at 0.5.
+    //
+    //   prefix_padding_ms: 300
+    //     Audio kept BEFORE detected speech start. 300ms catches the
+    //     first phoneme that VAD detection itself missed. Higher would
+    //     pull in too much pre-call noise.
+    //
+    //   silence_duration_ms: 1200
+    //     Sprint 50 raised from default 500→1200ms after Russian
+    //     dictation segments kept getting chopped mid-sentence. Russian
+    //     speech has natural between-clause pauses around 800–1200ms;
+    //     anything below 1000ms chops utterances. Above 1500ms risks
+    //     merging separate utterances from different speakers. 1200ms
+    //     stays the sweet spot for B2B investor calls (single speaker per
+    //     channel, conversational pace).
+    //
+    //   No `temperature` — OpenAI Realtime transcription does NOT accept
+    //   a temperature parameter (it's a chat-completion concept). The
+    //   transcription model is sampling-deterministic by default.
     audioInput.turn_detection = {
       type: 'server_vad',
       threshold: 0.5,
       prefix_padding_ms: 300,
-      // Sprint 50 hotfix — bumped 700→1200ms. Natural between-sentence
-      // pauses in Russian dictation often hit 800-1200ms; 700 was too
-      // aggressive and chopped utterances mid-thought ("то чтобы." as
-      // its own segment). Interim deltas stream continuously regardless;
-      // only the final-segment boundary moves.
       silence_duration_ms: 1200,
     };
   }

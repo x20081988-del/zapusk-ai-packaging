@@ -12,11 +12,10 @@ import { IS_PRODUCTION, seedLog as log } from './seedGuards.js';
 // обновляются только по isDemo=true. Reset-режим (полный wipe) живёт в
 // scripts/devReset.ts и отказывает в production через assertNotProduction().
 
-// Sprint 56 P0 — known old realtime_transcription bodies that we will
-// auto-migrate to the new verbatim prompt. Match must be EXACT (after
-// trim) to avoid overwriting admin edits. Add new entries here if past
-// seed iterations shipped different bodies; current production was seeded
-// from Sprint 49 hotfix 3.
+// Sprint 56 / 57 P0 — known old realtime_transcription bodies that we
+// auto-migrate to the latest verbatim prompt. Match must be EXACT (after
+// trim) to avoid overwriting admin edits. Each entry corresponds to a
+// previously-shipped seed body.
 const OLD_REALTIME_BODIES = new Set<string>([
   // Sprint 49 hotfix 3 / Sprint 50 hotfix — vocabulary-heavy prompt that
   // biased gpt-4o-transcribe toward salesy paraphrasing.
@@ -26,6 +25,18 @@ const OLD_REALTIME_BODIES = new Set<string>([
 ZAPUSK AI, Zapusk, Запуск; DLFY, Delphi, Делфи; Главснаб, Glavsnab; Чио Чио, ChioChio; IRR, ROI, KPI, LTV, CAC, ARPU, MRR, ARR, P&L, NDA, MoM, YoY, B2B, B2C; SPIN, СПИН (ситуация, проблема, усиление, решение); pre-seed, seed, series A, серия А/Б, due diligence, term sheet; инвестор, чек, доля, capex, opex, окупаемость, доходность; упаковка проекта, финмодель, питч-дек, лендинг, one-pager, ванпейджер; акселератор, фонд, бизнес-ангел.
 
 Не переводи бренды на русский (Zapusk ≠ «запуск», DLFY ≠ «делфи»). Не вставляй «[неразборчиво]» — лучше многоточие. Только транскрипция, без комментариев.`,
+  // Sprint 56 — intermediate verbatim prompt (no dictionary, but no
+  // explicit filler-word preservation). Sprint 57 strengthens the prompt
+  // with ага/угу/эээ + stutter preservation — necessary for AI hesitation
+  // signal downstream.
+  `Точная дословная транскрипция русской речи.
+Передавай ровно то, что произнесли — не парафразируй, не сокращай, не добавляй слов, которых не было в речи.
+
+Никогда не «достраивай» фразу по смыслу и не угадывай продолжение. Если речь неразборчива — поставь многоточие или пропусти кусок. Лучше пробел, чем выдуманный текст.
+
+Английские термины и латинские бренды (Zapusk, DLFY) оставляй на латинице. Кириллические бренды (Главснаб) — кириллицей.
+
+Никаких комментариев, никакого мета-текста, никаких объяснений. Только дословная транскрипция произнесённого.`,
 ]);
 
 async function main() {
@@ -70,21 +81,19 @@ async function main() {
         }
       }
 
-      // Sprint 56 P0 — one-shot conditional body migration for
-      // realtime_transcription. Old seed (Sprint 49+) shipped a sales-
-      // vocabulary dictionary that biased gpt-4o-transcribe toward
-      // salesy output («Здравствуйте» → «Друзья»). We replace the body
-      // ONLY if it still EXACTLY matches the old seed (i.e. admin has
-      // never edited). Safe: a single byte difference (e.g. admin tweak)
+      // Sprint 56/57 P0 — one-shot conditional body migration for
+      // realtime_transcription. Previous seeds biased the model toward
+      // salesy output. Sprint 57 enforces strict verbatim + filler
+      // preservation (ага/угу/эээ). We replace the body ONLY if it
+      // exactly matches any previously-shipped seed (see OLD_REALTIME_BODIES
+      // above). Admin edits stay untouched: a single byte difference
       // = skip migration, admin keeps control.
       if (t.key === 'realtime_transcription' && existing.body && OLD_REALTIME_BODIES.has(existing.body.trim())) {
         await prisma.promptTemplate.update({
           where: { key: t.key },
           data: { body: t.body },
         });
-        console.log(`[seed] realtime_transcription body migrated to Sprint 56 verbatim prompt`);
-      } else if (existing) {
-        // (silent skip — usual case)
+        console.log(`[seed] realtime_transcription body migrated to Sprint 57 strict-verbatim prompt`);
       }
       continue;
     }

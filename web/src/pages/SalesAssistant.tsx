@@ -75,13 +75,25 @@ interface TranscriptSegment {
 // We DROP only if ALL three hold. Legitimate one-word replies («Да», «Нет»,
 // «Угу») are preserved because they're not on the curated list AND/OR
 // arrive in dense exchanges (preceded by recent segments).
-// Sprint 56 P0 — narrowed pattern list. Previous patterns
-// `/^Подскажите.{0,30}\?$/`, `/^Я правильно понимаю\??$/`,
-// `/^Что для вас важнее.{0,40}\?$/` had false-positive risk on real
-// speech (real callers say «Подскажите, пожалуйста?», «Я правильно
-// понимаю?» constantly). Now we keep only the 2 most-specific phrases
-// that historically appeared as pure hallucinations on silence and
-// have NO clean reading in normal investor calls.
+// Sprint 56/57 P0.6 — conservative hallucination filter.
+//
+// Per Sprint 57 spec: «better keep questionable text than remove real speech».
+// We prioritize false-NEGATIVES (occasionally keeping a hallucination)
+// over false-POSITIVES (dropping a real investor phrase).
+//
+// Adding a pattern requires:
+//   1. Phrase has been observed as a pure hallucination on prod (not
+//      just sounds-like-AI).
+//   2. Phrase has NO plausible clean reading in normal investor calls.
+//   3. Phrase is short (<40 chars) — long matches likely contain real
+//      content even if part is hallucinated.
+//
+// Removed in Sprint 56 (had false-positive risk on real speech):
+//   /^Подскажите.{0,30}\?$/        — real callers say «Подскажите, пожалуйста?»
+//   /^Я правильно понимаю\??$/      — common Russian conversational filler
+//   /^Что для вас важнее.{0,40}\?$/ — legitimate qualifying question
+//
+// Kept (both observed on prod, no clean reading):
 const SUSPICIOUS_AI_PROMPT_PHRASES = [
   /^Чек или доля\??$/i,
   // `[.…]{0,3}` matches literal dot OR Unicode ellipsis (U+2026 «…»).
@@ -108,24 +120,30 @@ function appendFinalSegment(
   source: 'realtime' | 'web-speech',
 ): TranscriptSegment[] {
   const trimmed = text.trim();
-  if (!trimmed) return prev;
+  if (!trimmed) {
+    console.debug('[transcription/segment-dropped]', { source, reason: 'empty' });
+    return prev;
+  }
   const last = prev[prev.length - 1];
   if (last && last.final && last.text.trim() === trimmed) {
-    console.debug(`[sales-assistant/transcript] DEDUP ${source} "${trimmed.slice(0, 60)}"`);
+    console.debug('[transcription/segment-dedup]', { source, preview: trimmed.slice(0, 60) });
     return prev;
   }
   if (looksLikeAiHallucination(trimmed, prev)) {
-    console.debug(
-      `[sales-assistant/transcript] HALLUCINATION-GUARD drop ${source} ` +
-      `"${trimmed}" — isolated short AI-prompt-pattern after silence`,
-    );
+    console.debug('[transcription/hallucination-guard]', {
+      source,
+      reason: 'isolated_short_ai_pattern_after_silence',
+      preview: trimmed.slice(0, 60),
+    });
     return prev;
   }
   const next = [...prev, { ts: Date.now(), final: true, text: trimmed }];
-  console.debug(
-    `[sales-assistant/transcript] APPEND ${source} #${next.length} ` +
-    `chars=${trimmed.length} "${trimmed.slice(0, 60)}"`,
-  );
+  console.debug('[transcription/segment-appended]', {
+    source,
+    idx: next.length,
+    chars: trimmed.length,
+    preview: trimmed.slice(0, 60),
+  });
   return next;
 }
 
@@ -1208,11 +1226,13 @@ export default function SalesAssistant() {
           !liveSessionStartedRef.current ||
           recognitionSessionId !== liveSessionIdRef.current
         ) {
-          console.debug(
-            `[sales-assistant/transcript] DROP web-speech sid=${recognitionSessionId} ` +
-            `currentSid=${liveSessionIdRef.current} ` +
-            `shouldListen=${shouldListenRef.current} active=${liveSessionStartedRef.current}`,
-          );
+          console.debug('[transcription/stale-drop]', {
+            source: 'web-speech',
+            sessionId: recognitionSessionId,
+            currentSessionId: liveSessionIdRef.current,
+            shouldListen: shouldListenRef.current,
+            active: liveSessionStartedRef.current,
+          });
           return;
         }
         if (final.length) {
@@ -1354,15 +1374,16 @@ export default function SalesAssistant() {
             !liveSessionStartedRef.current ||
             currentLiveSessionId !== liveSessionIdRef.current
           ) {
-            // P0 hotfix — log every dropped event with reason. Without this,
-            // a long call that "lost" 90% of segments looks identical to a
-            // call with a quiet investor. Now we can tell from console which
-            // is which.
-            console.debug(
-              `[sales-assistant/transcript] DROP realtime sid=${currentLiveSessionId} ` +
-              `currentSid=${liveSessionIdRef.current} ` +
-              `shouldListen=${shouldListenRef.current} active=${liveSessionStartedRef.current}`,
-            );
+            // Sprint 57 P0.3 — structured tag. Lets ops grep
+            // `transcription/stale-drop` to count dropped events per
+            // session vs total events fired.
+            console.debug('[transcription/stale-drop]', {
+              source: 'realtime',
+              sessionId: currentLiveSessionId,
+              currentSessionId: liveSessionIdRef.current,
+              shouldListen: shouldListenRef.current,
+              active: liveSessionStartedRef.current,
+            });
             return;
           }
           setTranscript((prev) => appendFinalSegment(prev, text, 'realtime'));

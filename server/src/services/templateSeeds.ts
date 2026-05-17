@@ -1155,32 +1155,41 @@ interface InvestorCalculatorProps {
     key: 'realtime_transcription',
     name: 'Realtime Transcription Prompt',
     category: 'transcription',
-    description: 'Минимальный verbatim-промпт для OpenAI Realtime live transcription и request-based transcribe загруженных файлов. Никакого словаря бизнес-терминов — это вынесено в post-process normalizer (transcriptNormalize.ts).',
-    // Sprint 56 P0 — переписан с нуля.
+    description: 'Strict verbatim prompt: транскрибируй дословно, сохраняй filler-слова (ага/угу/эээ), не парафразируй, не «улучшай» речь. Используется и в live realtime, и в offline gpt-4o-transcribe. Бренды нормализуются post-process в transcriptNormalize.ts.',
+    // Sprint 57 P0.1 — canonical verbatim prompt per spec.
     //
-    // Старый подход (Sprint 49+) подавал OpenAI большой словарь
-    // бизнес-/sales-/финансовой лексики как «приоритет распознавания».
-    // Результат на проде: gpt-4o-transcribe начал ПЕРЕФРАЗИРОВАТЬ
-    // речь в сторону этой лексики — «Здравствуйте» становится «Друзья»,
-    // куски длинных фраз теряются, появляются hallucinations типа
-    // «чек или доля?» (которое буквально было в словаре).
+    // Architecture: transcription layer = DUMB and LITERAL. AI analysis
+    // happens AFTER on a clean transcript, not during transcription.
     //
-    // Новый подход:
-    //   1. Промпт строго verbatim. Никаких «приоритетных» терминов.
-    //   2. Бренды (Главснаб / Zapusk / DLFY) корректируются в
-    //      post-process через web/server transcriptNormalize.ts —
-    //      это надёжнее, чем bias prompt.
-    //   3. Явные инструкции «не достраивай», «не паrafразируй»,
-    //      «не угадывай» — современные TTS-модели слушаются.
-    //   4. Тело < 600 char, помещается в OpenAI prompt limit (1024).
-    body: `Точная дословная транскрипция русской речи.
-Передавай ровно то, что произнесли — не парафразируй, не сокращай, не добавляй слов, которых не было в речи.
+    // Sprint 49+ shipped a heavy «business vocabulary» dictionary which
+    // biased gpt-4o-transcribe toward salesy paraphrasing («Здравствуйте»
+    // → «Друзья» on prod). Sprint 56 stripped the vocabulary; Sprint 57
+    // tightens further with explicit «keep ага/угу/эээ» + «keep stutters»
+    // instructions — so filler that downstream AI uses for hesitation/
+    // uncertainty signals survives.
+    //
+    // SAME body is used in BOTH paths (live realtime + offline upload)
+    // via the realtime_transcription template lookup. No prompt drift
+    // across pipelines.
+    body: `Транскрибируй дословно.
+Не улучшай речь.
+Не перефразируй.
+Не сокращай.
+Не исправляй грамматику.
+Не добавляй слова.
+Не завершай мысли за говорящего.
+Сохраняй:
+- ага
+- угу
+- эээ
+- паузы
+- заикания
+- повторы
+Если не уверен — пропусти слово, а не придумывай.
 
-Никогда не «достраивай» фразу по смыслу и не угадывай продолжение. Если речь неразборчива — поставь многоточие или пропусти кусок. Лучше пробел, чем выдуманный текст.
-
-Английские термины и латинские бренды (Zapusk, DLFY) оставляй на латинице. Кириллические бренды (Главснаб) — кириллицей.
-
-Никаких комментариев, никакого мета-текста, никаких объяснений. Только дословная транскрипция произнесённого.`,
+Бренды на латинице: Zapusk, DLFY.
+Бренды на кириллице: Главснаб.
+Только дословная транскрипция произнесённого, без комментариев и мета-текста.`,
   },
 ];
 

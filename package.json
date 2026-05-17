@@ -16,7 +16,8 @@
     "db:migrate": "npm --prefix server run db:migrate",
     "db:seed": "npm --prefix server run db:seed",
     "db:reset": "npm --prefix server run db:reset",
-    "smoke:transcript": "node scripts/transcript-aggregation-smoke.mjs"
+    "smoke:transcript": "node scripts/transcript-aggregation-smoke.mjs",
+    "regression:realcalls": "node scripts/real-call-regression.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.0.1"
