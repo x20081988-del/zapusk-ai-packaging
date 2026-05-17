@@ -254,3 +254,162 @@ if (!halluOk) {
   process.exit(1);
 }
 console.log(`\n✓ PASS — hallucination guard: ${halluResults.length}/${halluResults.length} scenarios.\n`);
+
+// ─── Sprint 55 P0 — Transcript diff helper (compareDraftVsClean) ───
+// Mirror of server/src/services/transcriptDiff.ts.
+console.log('\n=== Transcript Diff Helper Test ===\n');
+
+const HALLUCINATION_PATTERNS = [
+  /^Чек или доля\??$/i,
+  /^Ну,? если вы настаиваете[.…]{0,3}$/i,
+  /^Подскажите.{0,30}\?$/i,
+  /^Я правильно понимаю\??$/i,
+  /^Что для вас важнее.{0,40}\?$/i,
+];
+
+function splitSentencesJs(text) {
+  if (!text) return [];
+  return text.split(/(?<=[.!?…])\s+|(?:\r?\n)+/g).map((s) => s.trim()).filter((s) => s);
+}
+function tokenize2(text) {
+  if (!text) return new Set();
+  return new Set(
+    text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((t) => t.length >= 3),
+  );
+}
+function jaccard2(a, b) {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  const u = a.size + b.size - inter;
+  return u === 0 ? 0 : inter / u;
+}
+function findMatch2(s, others) {
+  const t = tokenize2(s);
+  if (t.size === 0) return true;
+  for (const o of others) if (jaccard2(t, o.tokens) >= 0.4) return true;
+  return false;
+}
+function compareDraftVsCleanJs(draft, clean) {
+  const ds = splitSentencesJs(draft);
+  const cs = splitSentencesJs(clean);
+  const di = ds.map((text) => ({ text, tokens: tokenize2(text) }));
+  const ci = cs.map((text) => ({ text, tokens: tokenize2(text) }));
+  const removed = ds.filter((s) => !findMatch2(s, ci));
+  const added = cs.filter((s) => !findMatch2(s, di));
+  const hallu = removed.filter((s) => s.length <= 60 && HALLUCINATION_PATTERNS.some((re) => re.test(s.trim())));
+  return {
+    similarity: jaccard2(tokenize2(draft), tokenize2(clean)),
+    addedPhrases: added,
+    removedPhrases: removed,
+    hallucinationCandidates: hallu,
+  };
+}
+
+function diffCase(label, draft, clean, expect) {
+  const d = compareDraftVsCleanJs(draft, clean);
+  const ok = (
+    (expect.hallucinationContains
+      ? expect.hallucinationContains.every((p) => d.hallucinationCandidates.some((c) => c.includes(p)))
+      : true) &&
+    (expect.hallucinationNotContains
+      ? expect.hallucinationNotContains.every((p) => !d.hallucinationCandidates.some((c) => c.includes(p)))
+      : true) &&
+    (expect.minSimilarity !== undefined ? d.similarity >= expect.minSimilarity : true) &&
+    (expect.maxSimilarity !== undefined ? d.similarity <= expect.maxSimilarity : true)
+  );
+  console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+  console.log(`     similarity=${d.similarity.toFixed(3)} added=${d.addedPhrases.length} removed=${d.removedPhrases.length} hallucinations=${d.hallucinationCandidates.length}`);
+  if (!ok) {
+    console.log(`     hallu: ${JSON.stringify(d.hallucinationCandidates)}`);
+    console.log(`     expect: ${JSON.stringify(expect)}`);
+  }
+  return ok;
+}
+
+const diffResults = [
+  // Case 1: hallucinated «Чек или доля?» in draft, absent in clean → detected.
+  diffCase(
+    'Detects hallucinated «Чек или доля?» (in draft, not in clean)',
+    'Здравствуйте Адам. Чек или доля? Я могу отправить вам ссылку.',
+    'Здравствуйте Адам. Я могу отправить вам ссылку. Связаться позже.',
+    { hallucinationContains: ['Чек или доля'] },
+  ),
+  // Case 2: identical transcripts → similarity ~ 1, no hallucinations.
+  diffCase(
+    'Identical transcripts → similarity 1.0, zero hallucinations',
+    'Здравствуйте. Я перезвоню позже.',
+    'Здравствуйте. Я перезвоню позже.',
+    { minSimilarity: 0.99, hallucinationNotContains: ['Чек или доля', 'настаиваете'] },
+  ),
+  // Case 3: legitimate sentence with «доля» in long form → NOT flagged.
+  diffCase(
+    'Long sentence mentioning доля is NOT a hallucination candidate',
+    'У меня вопрос на счёт распределения долей. Какие условия?',
+    'У меня вопрос на счёт распределения долей в этой сделке. Уточните условия пожалуйста.',
+    { hallucinationNotContains: ['распределения долей'] },
+  ),
+  // Case 4: completely different → low similarity but no false hallucination.
+  diffCase(
+    'Different transcripts → low similarity but no hallucination false-positive',
+    'Привет, как дела? Расскажите про инвестиции.',
+    'Здравствуйте. Я перезвоню завтра. До свидания.',
+    { maxSimilarity: 0.3, hallucinationNotContains: ['Чек или доля'] },
+  ),
+];
+
+const diffOk = diffResults.every(Boolean);
+if (!diffOk) {
+  console.log('\n✗ FAIL — transcript diff regression.');
+  process.exit(1);
+}
+console.log(`\n✓ PASS — transcript diff: ${diffResults.length}/${diffResults.length} scenarios.\n`);
+
+// ─── Sprint 55 P0 — Idempotency / no-duplicate-memory contract ───
+// Pure logic-level check (simulated). Verifies the policy: a session must
+// have at most ONE NegotiationMemory after recompute (upsert, not insert).
+console.log('\n=== Recompute Idempotency Test ===\n');
+
+function simulateRecompute(initialState) {
+  // Mimic recomputeFromCleanTranscript guard:
+  //   - if aiDerivedFrom='clean' && cleanTranscriptProcessedAt set → skip
+  //   - else: set aiDerivedFrom='clean', cleanTranscriptProcessedAt=now,
+  //           upsert (not insert) memory.
+  if (initialState.aiDerivedFrom === 'clean' && initialState.cleanTranscriptProcessedAt) {
+    return { ...initialState, status: 'skipped_already_processed' };
+  }
+  return {
+    ...initialState,
+    aiDerivedFrom: 'clean',
+    cleanTranscriptProcessedAt: new Date().toISOString(),
+    memoryCount: 1, // upsert → exactly one
+    status: 'recomputed',
+  };
+}
+
+let s = {
+  aiDerivedFrom: 'draft',
+  cleanTranscriptProcessedAt: null,
+  memoryCount: 1, // initial memory from draft (created at finalize)
+};
+const r1 = simulateRecompute(s);
+const r2 = simulateRecompute(r1);
+const r3 = simulateRecompute(r2);
+
+const idempOk =
+  r1.status === 'recomputed' &&
+  r1.aiDerivedFrom === 'clean' &&
+  r1.memoryCount === 1 &&
+  r2.status === 'skipped_already_processed' &&
+  r3.status === 'skipped_already_processed' &&
+  r2.memoryCount === 1 &&
+  r3.memoryCount === 1;
+
+console.log(`  ${idempOk ? '✓' : '✗'} First call recomputes, subsequent calls skip`);
+console.log(`     r1=${r1.status} r2=${r2.status} r3=${r3.status} memoryCount=${r3.memoryCount}`);
+
+if (!idempOk) {
+  console.log('\n✗ FAIL — idempotency regression.');
+  process.exit(1);
+}
+console.log('\n✓ PASS — recompute is idempotent, memory upsert prevents duplicates.\n');

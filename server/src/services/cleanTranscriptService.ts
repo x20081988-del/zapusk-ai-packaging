@@ -96,28 +96,40 @@ export async function runCleanTranscription(input: RunInput): Promise<CleanTrans
   }
 }
 
-// Записывает clean transcript в SalesSession. Заменяет content полей
-// transcript + sets source='offline_clean' + status='clean'. Старый draft
-// логируется в audit-history через transcriptSource=oldSource (если был).
+// Записывает clean transcript в SalesSession.
 //
-// Если оригинальная транскрипция была 'realtime_draft', её КОНТЕНТ
-// заменяется в `transcript`. Если хотим сохранить draft отдельно для
-// сравнения — можно в audit / future-column.
+// Sprint 55 P0 — provenance flow:
+//   1. Перед заменой `transcript` сохраняем оригинал в `draftTranscript`
+//      (только если draftTranscript ещё пуст — не перетираем уже
+//      сохранённый draft при ретрае).
+//   2. Replace transcript content + sets source='offline_clean' + status='clean'.
+//   3. NOTE: AI artifacts (summary, objections и пр.) пока остаются
+//      draft-derived. recomputeFromCleanTranscript() — отдельный шаг,
+//      вызывается caller'ом сразу после этого update'а.
 //
-// На failure (status≠'clean') — обновляем только статус, не трогаем
-// transcript content.
+// На failure — обновляем только статус, не трогаем transcript content.
 export async function persistCleanTranscript(
   sessionId: string,
   result: CleanTranscriptResult,
   audioStoragePath?: string | null,
 ): Promise<void> {
   if (result.status === 'clean' && result.text) {
+    // Sprint 55 P0 — preserve draft before clean replaces it. Только если
+    // draftTranscript ещё null (защита от перезаписи на повторных uploads).
+    const current = await prisma.salesSession.findUnique({
+      where: { id: sessionId },
+      select: { transcript: true, draftTranscript: true },
+    });
+    const preserveDraft = current && !current.draftTranscript && current.transcript
+      ? current.transcript
+      : null;
     await prisma.salesSession.update({
       where: { id: sessionId },
       data: {
         transcript: result.text,
         transcriptSource: 'offline_clean',
         transcriptQualityStatus: 'clean',
+        ...(preserveDraft ? { draftTranscript: preserveDraft } : {}),
         ...(audioStoragePath ? { audioStoragePath } : {}),
       },
     });

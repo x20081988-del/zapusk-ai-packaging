@@ -273,6 +273,10 @@ export async function persistSession(
       // POST /:id/audio, эти поля будут переопределены в clean.
       transcriptSource: 'realtime_draft',
       transcriptQualityStatus: 'draft',
+      // Sprint 55 P0 — provenance. Initial save: AI summary/objections
+      // были посчитаны на draft transcript. recomputeFromCleanTranscript()
+      // переопределит на 'clean' после успешного offline transcribe.
+      aiDerivedFrom: 'draft',
     },
   });
 }

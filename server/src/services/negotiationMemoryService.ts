@@ -47,6 +47,9 @@ interface CreateMemoryInput {
   speakerInsights?: string | null;
   managerNotes?: string | null;
   createdById?: string | null;
+  // Sprint 55 P0 — provenance. 'draft' для initial entry (из realtime),
+  // 'clean' для recompute после offline transcription.
+  sourceTranscriptQuality?: 'draft' | 'clean' | null;
 }
 
 // Cap transcript на ~16k символов, чтобы записи не разрастались. Анализ +
@@ -118,7 +121,56 @@ export async function createNegotiationMemory(input: CreateMemoryInput): Promise
       speakerInsights: input.speakerInsights ?? null,
       managerNotes: input.managerNotes ?? null,
       createdById: input.createdById ?? null,
+      // Sprint 55 P0 — provenance.
+      sourceTranscriptQuality: input.sourceTranscriptQuality ?? 'draft',
     },
+  });
+  return rowFromDb(created);
+}
+
+// Sprint 55 P0 — upsert по salesSessionId. После recompute из clean transcript
+// ОБНОВЛЯЕМ существующую memory (одна сессия — одна память), не создаём
+// дубликат. Если строки ещё нет (legacy / orphan) — создаём.
+//
+// Cap transcript аналогично create.
+export async function upsertMemoryForSession(
+  salesSessionId: string,
+  input: Omit<CreateMemoryInput, 'salesSessionId'>,
+): Promise<NegotiationMemoryRow> {
+  const transcript = input.transcript.length > TRANSCRIPT_CAP
+    ? input.transcript.slice(-TRANSCRIPT_CAP)
+    : input.transcript;
+  const data = {
+    primaryProjectId: input.primaryProjectId ?? null,
+    projectIds: JSON.stringify(input.projectIds ?? []),
+    investorName: input.investorName ?? null,
+    investorPhone: input.investorPhone ?? null,
+    transcript,
+    summary: input.summary ?? null,
+    outcome: input.outcome ?? null,
+    objections: JSON.stringify(input.objections ?? []),
+    tags: JSON.stringify(input.tags ?? []),
+    speakerInsights: input.speakerInsights ?? null,
+    managerNotes: input.managerNotes ?? null,
+    createdById: input.createdById ?? null,
+    sourceTranscriptQuality: input.sourceTranscriptQuality ?? 'clean',
+  };
+  // findFirst — у NegotiationMemory нет уникального индекса на
+  // salesSessionId (исторически могли быть orphan memories). Берём
+  // newest и обновляем. Если нет — создаём новую.
+  const existing = await prisma.negotiationMemory.findFirst({
+    where: { salesSessionId },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (existing) {
+    const updated = await prisma.negotiationMemory.update({
+      where: { id: existing.id },
+      data,
+    });
+    return rowFromDb(updated);
+  }
+  const created = await prisma.negotiationMemory.create({
+    data: { salesSessionId, ...data },
   });
   return rowFromDb(created);
 }

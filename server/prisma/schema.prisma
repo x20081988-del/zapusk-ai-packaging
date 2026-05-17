@@ -449,6 +449,17 @@ model SalesSession {
   transcriptSource         String?
   transcriptQualityStatus  String?
   audioStoragePath         String?
+  // Sprint 55 P0 — Recompute provenance.
+  //   draftTranscript — original realtime текст до replacement clean'ом.
+  //     Сохраняем для diff/QA, чтобы можно было увидеть что hallucinated.
+  //   aiDerivedFrom — на основе какой версии транскрипта построены summary,
+  //     objections и пр. полей этой строки. 'draft' изначально, 'clean'
+  //     после recompute. Null для legacy строк.
+  //   cleanTranscriptProcessedAt — timestamp успешного recompute (или null).
+  //     Используется как idempotency guard в recomputeFromCleanTranscript.
+  draftTranscript            String?
+  aiDerivedFrom              String?
+  cleanTranscriptProcessedAt DateTime?
 
   // Sprint 52 P0.2 — back-relation на memory entries этой сессии.
   memories            NegotiationMemory[]
@@ -492,6 +503,10 @@ model NegotiationMemory {
   speakerInsights String?  // freeform Russian: «любит дивиденды», «боится illiquidity»
   managerNotes    String?
   createdById     String?
+  // Sprint 55 P0 — provenance: какой версии транскрипта построена эта запись.
+  // Null для legacy (Sprint 52) строк. После Sprint 55: 'draft' на initial,
+  // 'clean' после recompute.
+  sourceTranscriptQuality String?
   createdAt       DateTime @default(now())
 
   @@index([investorName])

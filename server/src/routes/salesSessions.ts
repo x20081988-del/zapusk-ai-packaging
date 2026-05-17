@@ -19,6 +19,8 @@ import {
 } from '../services/salesSessionService.js';
 import { createNegotiationMemory } from '../services/negotiationMemoryService.js';
 import { runCleanTranscription, persistCleanTranscript } from '../services/cleanTranscriptService.js';
+import { recomputeFromCleanTranscript } from '../services/recomputeSalesArtifactsService.js';
+import { compareDraftVsClean } from '../services/transcriptDiff.js';
 import multer from 'multer';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -357,12 +359,83 @@ salesSessionsRoutes.post('/:id/audio', salesAudioUploadWithGuard, async (req, re
     `audioBytes=${file.size}`,
   );
 
+  // Sprint 55 P0 — trigger recompute right after clean transcript persisted.
+  // Synchronous-fire-and-forget: AI summary regen takes ~5-15 sec; we wait
+  // for it to keep the API contract simple (response includes recompute
+  // status). For 10+ min calls we may switch to a queue later.
+  let recomputeStatus: string = 'not_attempted';
+  let hallucinationsCount: number | undefined;
+  if (result.status === 'clean') {
+    const recompute = await recomputeFromCleanTranscript(existing.id);
+    recomputeStatus = recompute.status;
+    hallucinationsCount = recompute.hallucinationCandidatesCount;
+    await recordAudit(req, {
+      action: 'sales_session.recompute',
+      targetType: 'SalesSession',
+      targetId: existing.id,
+      payload: {
+        status: recompute.status,
+        durationMs: recompute.durationMs,
+        hallucinationCandidatesCount: recompute.hallucinationCandidatesCount,
+        similarity: recompute.similarity,
+        reason: recompute.reason,
+      },
+    });
+  }
+
   res.status(200).json({
     status: result.status,
     audioStoragePath: rel,
     provider: result.provider,
     model: result.model,
     latencyMs: result.latencyMs,
+    recompute: {
+      status: recomputeStatus,
+      hallucinationCandidatesCount: hallucinationsCount ?? null,
+    },
+  });
+});
+
+// Sprint 55 P0.8 — QA diff endpoint. Read-only debug view of how realtime
+// draft diverged from offline clean. Admin-only через actorCanReadSalesSession
+// (founder может видеть собственные сессии — это его рабочий инструмент QA,
+// admin/manager — все). Не отдаёт raw полные тексты «без зачем» — даёт
+// статистику + первые 5 candidate phrases для триажа.
+salesSessionsRoutes.get('/:id/transcript-diff', async (req, res) => {
+  const session = await prisma.salesSession.findUnique({ where: { id: req.params.id } });
+  if (!session || session.archivedAt) return res.status(404).json({ error: 'not_found' });
+  const allowed = await actorCanReadSalesSession(req, {
+    projectId: session.projectId,
+    createdById: session.createdById,
+  });
+  if (!allowed) return res.status(404).json({ error: 'not_found' });
+  if (!session.draftTranscript || !session.transcript) {
+    return res.status(200).json({
+      available: false,
+      reason: 'no_draft_or_clean',
+    });
+  }
+  const diff = compareDraftVsClean(session.draftTranscript, session.transcript);
+  // Trim each candidate to 200 chars to keep response bounded.
+  const trim = (s: string) => (s.length > 200 ? s.slice(0, 200) + '…' : s);
+  res.json({
+    available: true,
+    sessionId: session.id,
+    transcriptSource: session.transcriptSource,
+    transcriptQualityStatus: session.transcriptQualityStatus,
+    aiDerivedFrom: session.aiDerivedFrom,
+    cleanTranscriptProcessedAt: session.cleanTranscriptProcessedAt,
+    draftStats: diff.draftStats,
+    cleanStats: diff.cleanStats,
+    similarity: diff.similarity,
+    hallucinationCandidates: diff.hallucinationCandidates.slice(0, 10).map(trim),
+    addedPhrasesPreview: diff.addedPhrases.slice(0, 5).map(trim),
+    removedPhrasesPreview: diff.removedPhrases.slice(0, 5).map(trim),
+    totals: {
+      added: diff.addedPhrases.length,
+      removed: diff.removedPhrases.length,
+      hallucinations: diff.hallucinationCandidates.length,
+    },
   });
 });
 
