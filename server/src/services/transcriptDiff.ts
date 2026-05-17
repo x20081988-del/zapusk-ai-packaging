@@ -15,12 +15,12 @@
 //   • Foundation под future QA dashboard.
 //   • НЕ удаляет ничего: только маркирует.
 
+// Sprint 56 P0 — narrowed patterns. Keep only phrases that have no
+// clean reading in normal investor calls. See SalesAssistant.tsx for
+// full rationale.
 const SUSPICIOUS_AI_PROMPT_PHRASES = [
   /^Чек или доля\??$/i,
   /^Ну,? если вы настаиваете[.…]{0,3}$/i,
-  /^Подскажите.{0,30}\?$/i,
-  /^Я правильно понимаю\??$/i,
-  /^Что для вас важнее.{0,40}\?$/i,
 ];
 const HALLUCINATION_MAX_CHARS = 60;
 

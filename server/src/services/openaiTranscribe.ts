@@ -68,6 +68,13 @@ export async function transcribeAudioOpenAI(
     // в conversationAnalysis или persistSession. Это закрывает gap, что
     // OpenAI prompt-словарь — bias, не enforce.
     const text = normalizeTranscript(rawText);
+    // Sprint 56 P0 — diagnostics: see exactly which model + prompt config
+    // produced this transcript. Helps debug paraphrasing / hallucination
+    // reports without exposing raw text.
+    console.log(
+      `[openai-transcribe] ok model=${model} promptChars=${promptText?.length ?? 0} ` +
+      `rawChars=${rawText.length} normalizedChars=${text.length}`,
+    );
     return {
       text,
       provider: 'openai',

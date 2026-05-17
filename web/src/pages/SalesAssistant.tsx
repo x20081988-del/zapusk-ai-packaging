@@ -75,14 +75,18 @@ interface TranscriptSegment {
 // We DROP only if ALL three hold. Legitimate one-word replies («Да», «Нет»,
 // «Угу») are preserved because they're not on the curated list AND/OR
 // arrive in dense exchanges (preceded by recent segments).
+// Sprint 56 P0 — narrowed pattern list. Previous patterns
+// `/^Подскажите.{0,30}\?$/`, `/^Я правильно понимаю\??$/`,
+// `/^Что для вас важнее.{0,40}\?$/` had false-positive risk on real
+// speech (real callers say «Подскажите, пожалуйста?», «Я правильно
+// понимаю?» constantly). Now we keep only the 2 most-specific phrases
+// that historically appeared as pure hallucinations on silence and
+// have NO clean reading in normal investor calls.
 const SUSPICIOUS_AI_PROMPT_PHRASES = [
   /^Чек или доля\??$/i,
   // `[.…]{0,3}` matches literal dot OR Unicode ellipsis (U+2026 «…»).
   // Realtime/Whisper emits «…» as a real character, not three dots.
   /^Ну, если вы настаиваете[.…]{0,3}$/i,
-  /^Подскажите.{0,30}\?$/i,    // generic AI «Подскажите, …?» openers
-  /^Я правильно понимаю\??$/i,
-  /^Что для вас важнее.{0,40}\?$/i,
 ];
 const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000; // segment is "isolated" if no prior segment in 8 sec
 const HALLUCINATION_MAX_CHARS = 40;

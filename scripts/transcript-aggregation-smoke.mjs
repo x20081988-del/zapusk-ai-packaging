@@ -22,12 +22,10 @@
 
 // ─── Helpers under test (mirror of web/src/pages/SalesAssistant.tsx) ───
 // Hallucination guard config — keep in sync with web/src/pages/SalesAssistant.tsx
+// Sprint 56 P0 — narrowed patterns (sync with web + server modules).
 const SUSPICIOUS_AI_PROMPT_PHRASES = [
   /^Чек или доля\??$/i,
   /^Ну, если вы настаиваете[.…]{0,3}$/i,
-  /^Подскажите.{0,30}\?$/i,
-  /^Я правильно понимаю\??$/i,
-  /^Что для вас важнее.{0,40}\?$/i,
 ];
 const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000;
 const HALLUCINATION_MAX_CHARS = 40;
@@ -262,9 +260,6 @@ console.log('\n=== Transcript Diff Helper Test ===\n');
 const HALLUCINATION_PATTERNS = [
   /^Чек или доля\??$/i,
   /^Ну,? если вы настаиваете[.…]{0,3}$/i,
-  /^Подскажите.{0,30}\?$/i,
-  /^Я правильно понимаю\??$/i,
-  /^Что для вас важнее.{0,40}\?$/i,
 ];
 
 function splitSentencesJs(text) {
@@ -413,3 +408,59 @@ if (!idempOk) {
   process.exit(1);
 }
 console.log('\n✓ PASS — recompute is idempotent, memory upsert prevents duplicates.\n');
+
+// ─── Sprint 56 P0 — reported call phrases must survive aggregation ───
+// Real production call (user reported 2026-05-17): user spoke a clean
+// 5-phrase intro that arrived in the UI as «Друзья, как слышно?» — the
+// model paraphrased «Здравствуйте» into a salesy «Друзья» under the
+// influence of the OLD vocabulary-heavy prompt. After Sprint 56 the
+// prompt is verbatim-only; this test simulates a clean event stream of
+// the user's actual words and asserts they all survive intact.
+console.log('\n=== Sprint 56 reported phrases preservation ===\n');
+const SPRINT_56_EVENTS = [
+  { text: 'Здравствуйте, как слышно?' },
+  { text: 'Меня зовут Григорий.' },
+  { text: 'Подскажите, пожалуйста, вы интересовались ранее проектом Запуск, правильно понимаю?' },
+  { text: 'Мне передали, что вы им интересовались.' },
+];
+let sprint56Transcript = [];
+let sprint56Time = 1_000_000;
+for (const ev of SPRINT_56_EVENTS) {
+  sprint56Time += 2_500;
+  sprint56Transcript = appendFinalSegment(sprint56Transcript, ev.text, 'realtime', sprint56Time);
+}
+const sprint56FullText = sprint56Transcript.map((s) => s.text).join(' ').toLowerCase();
+const SPRINT_56_REQUIRED = [
+  'здравствуйте, как слышно',
+  'меня зовут григорий',
+  'вы интересовались ранее проектом запуск',
+  'правильно понимаю',
+  'мне передали, что вы им интересовались',
+];
+const SPRINT_56_FORBIDDEN_SUBSTITUTIONS = [
+  'друзья, как слышно', // OLD failure mode
+];
+const sprint56Missing = SPRINT_56_REQUIRED.filter((p) => !sprint56FullText.includes(p));
+const sprint56Polluted = SPRINT_56_FORBIDDEN_SUBSTITUTIONS.filter((p) => sprint56FullText.includes(p));
+const sprint56Ok = sprint56Missing.length === 0 && sprint56Polluted.length === 0;
+console.log(`  ${sprint56Ok ? '✓' : '✗'} 5 reported phrases all survive aggregation`);
+console.log(`     segments: ${sprint56Transcript.length}, full chars: ${sprint56FullText.length}`);
+if (sprint56Missing.length > 0) console.log(`     missing: ${JSON.stringify(sprint56Missing)}`);
+if (sprint56Polluted.length > 0) console.log(`     forbidden substitution present: ${JSON.stringify(sprint56Polluted)}`);
+
+// Also assert that REAL «Подскажите ...?» short questions are NO LONGER
+// dropped by the (now-narrowed) hallucination guard. Pre-Sprint-56
+// the `/^Подскажите.{0,30}\?$/i` pattern would drop these as false positive.
+console.log('\n  Confirming short «Подскажите …?» real questions survive guard:');
+let q1 = appendFinalSegment([], 'Подскажите, пожалуйста?', 'realtime', 1_000_000);
+let q2 = appendFinalSegment([], 'Я правильно понимаю?', 'realtime', 1_000_000);
+let q3 = appendFinalSegment([], 'Что для вас важнее?', 'realtime', 1_000_000);
+const guardOk = q1.length === 1 && q2.length === 1 && q3.length === 1;
+console.log(`  ${guardOk ? '✓' : '✗'} short questions «Подскажите?», «Я правильно понимаю?», «Что для вас важнее?» preserved`);
+console.log(`     q1=${q1.length} q2=${q2.length} q3=${q3.length}`);
+
+if (!sprint56Ok || !guardOk) {
+  console.log('\n✗ FAIL — Sprint 56 quality regression.');
+  process.exit(1);
+}
+console.log('\n✓ PASS — Sprint 56 quality regression suite.\n');
