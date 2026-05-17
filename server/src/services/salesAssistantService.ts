@@ -8,6 +8,7 @@ import {
   isQualificationScriptKey,
   type QualificationScriptKey,
 } from '../ai/qualificationPrompts.js';
+import { getRecentMemories } from './negotiationMemoryService.js';
 import {
   retrieveKnowledgeForTranscript,
   formatKnowledgeForPrompt,
@@ -141,6 +142,11 @@ export interface AnalyzeInput {
   // проектов, которые AI должен учитывать. Если пусто/null — поведение
   // идентично существующему single-project (projectId).
   projectIds?: string[] | null;
+  // Sprint 52 P0.6 — internal memory injection. Если фронт передаёт
+  // имя инвестора (заполнено на prep-карточке), backend может подмешать
+  // последние NegotiationMemory записи с этим инвестором / по проекту.
+  // Опционально, не ломает single-call flow.
+  investorName?: string | null;
 }
 
 // Sprint 38 — KB-источники, использованные в AI-подсказке. Возвращаем их
@@ -434,6 +440,45 @@ function applyDeskMode(system: string, input: AnalyzeInput): string {
   return `${system}\n\n${QUALIFICATION_SYSTEM_OVERLAY}`;
 }
 
+// Sprint 52 P0.6 — memory injection. Если есть инвестор/проект, ищем до 3
+// последних NegotiationMemory записей и компактно вшиваем в user-prompt
+// блоком «Память предыдущих контактов». Это lightweight retrieval —
+// SELECT + ORDER BY (без embeddings). На пустом memory layer'е возвращает [].
+//
+// Budget: ~ 600 chars max (summary + key objections). Если шире — обрезаем.
+const MEMORY_BLOCK_BUDGET = 600;
+async function buildMemoryBlock(input: AnalyzeInput): Promise<string[]> {
+  const investorName = input.investorName?.trim() || null;
+  const projectId = input.projectId ?? null;
+  if (!investorName && !projectId) return [];
+  try {
+    const memories = await getRecentMemories({ investorName, projectId, limit: 3 });
+    if (memories.length === 0) return [];
+    const lines: string[] = ['Память предыдущих контактов (используй для контекста, не цитируй дословно):'];
+    let budget = MEMORY_BLOCK_BUDGET;
+    for (const m of memories) {
+      const when = m.createdAt.toISOString().slice(0, 10);
+      const tone = m.outcome ? ` · итог=${m.outcome}` : '';
+      const summary = m.summary?.slice(0, 200) ?? '';
+      const objections = m.objections.slice(0, 3).join('; ');
+      const block = [
+        `• ${when}${tone}`,
+        summary && `  кратко: ${summary}`,
+        objections && `  возражения: ${objections}`,
+        m.speakerInsights && `  про инвестора: ${m.speakerInsights.slice(0, 160)}`,
+      ].filter(Boolean).join('\n');
+      if (block.length > budget) break;
+      lines.push(block);
+      budget -= block.length;
+    }
+    lines.push('');
+    return lines;
+  } catch (err) {
+    console.warn('[sales-assistant] memory retrieval failed (non-fatal):', err);
+    return [];
+  }
+}
+
 // Sprint 51 hotfix P0.4 — DB-first lookup для qualification скриптов.
 // Структура: `qualification.<scriptKey>` в PromptTemplate.body. Если шаблон
 // есть, активен и body длиннее 80 символов — используем его как контекстный
@@ -524,6 +569,8 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   }
 
   const qualLines = await qualificationContextLines(input);
+  // Sprint 52 P0.6 — memory injection (см. buildMemoryBlock).
+  const memoryLines = await buildMemoryBlock(input);
   const user = [
     deskMode === 'qualification'
       ? 'Режим работы: первичный звонок инвестору (qualification). Цель — назначить Zoom-встречу с экспертом + узнать чек/срок/критерии. См. system overlay.'
@@ -532,6 +579,7 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно. Если этап S уже закрыт — двигай в P/I/N.',
     '',
     ...qualLines,
+    ...memoryLines,
     'Контекст проекта:',
     projectContext,
     '',
@@ -759,6 +807,8 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   };
 
   const qualLines = await qualificationContextLines(input);
+  // Sprint 52 P0.6 — memory injection (см. buildMemoryBlock).
+  const memoryLines = await buildMemoryBlock(input);
   const user = [
     deskMode === 'qualification'
       ? 'РЕЖИМ: УЛЬТРА-БЫСТРАЯ ПОДСКАЗКА ДЛЯ ПЕРВИЧНОГО ЗВОНКА. Цель — Zoom-слот с экспертом + чек/срок/критерии.'
@@ -769,6 +819,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно.',
     '',
     ...qualLines,
+    ...memoryLines,
     'Контекст проекта:',
     projectContext,
     '',

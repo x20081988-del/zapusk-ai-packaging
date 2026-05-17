@@ -886,6 +886,8 @@ export default function SalesAssistant() {
             projectIds: relatedProjectIds.length > 0
               ? [projectId, ...relatedProjectIds].filter(Boolean)
               : undefined,
+            // Sprint 52 P0.6 — для memory retrieval (по investorName).
+            investorName: investorName.trim() || undefined,
           },
           { signal: fastCtrl.signal },
         );
@@ -969,6 +971,8 @@ export default function SalesAssistant() {
             projectIds: relatedProjectIds.length > 0
               ? [projectId, ...relatedProjectIds].filter(Boolean)
               : undefined,
+            // Sprint 52 P0.6 — для memory retrieval (по investorName).
+            investorName: investorName.trim() || undefined,
           },
           { signal: fullCtrl.signal },
         );
