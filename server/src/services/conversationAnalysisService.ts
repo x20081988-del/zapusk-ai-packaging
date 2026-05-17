@@ -417,8 +417,10 @@ function mockAnalysis(transcript: string, provider: 'openai' | 'anthropic' | 'mo
     probabilityScore: probability,
     recommendedMaterials: materials.length ? materials : ['Краткое резюме сделки'],
     managerAdvice: mistakes.length
-      ? 'Самая частая ошибка в этом разговоре — пропуск SPIN-этапов. Перед следующей встречей повторите Problem и Implication.'
-      : 'Разговор прошёл по структуре. Закрепите next step и не теряйте темп.',
+      // Sprint 53 — внутренняя терминология (SPIN / Problem / Implication) не
+      // светится в UI. Heuristic fallback теперь говорит человеческими словами.
+      ? 'Самая частая просадка — мы перепрыгиваем этапы разговора. На следующей встрече сначала уточните контекст и задачу инвестора, потом переходите к решению.'
+      : 'Разговор прошёл по структуре. Закрепите следующий шаг и не теряйте темп.',
     sentiment,
     aiScore,
     aiScoreBreakdown: breakdown,

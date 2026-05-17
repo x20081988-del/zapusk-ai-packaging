@@ -413,7 +413,7 @@ function buildMeetingsStage(ctx: Context): Stage {
       {
         id: 'sales_prep',
         title: 'AI-подготовка к встречам',
-        hint: 'Live co-pilot по SPIN + эмоциональный слой.',
+        hint: 'Live co-pilot переговоров: подсказки на лету, эмоциональный слой, отработка возражений.',
         by: 'AI',
         status: jobStatus(ctx, ['sales_assistant']),
       },

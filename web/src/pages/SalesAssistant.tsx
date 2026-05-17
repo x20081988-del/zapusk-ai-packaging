@@ -212,16 +212,19 @@ type AdviceHistoryItem = Pick<
   | 'nextStep'
 >;
 
-// Sprint 34Б.3 — русские лейблы вместо S/P/I/N. Внутренние enum-значения
-// остаются англоязычными (контракт с AI и БД), но интерфейс показывает русскую
-// букву + полное название этапа СПИН.
+// Sprint 53 — внутренняя методология (SPIN / self-sale) — moat Zapusk AI и
+// НЕ должна светиться в UI. Внутренние enum-значения S/P/I/N остаются как
+// контракт с backend и AI provider, но в UI всегда показываем человеческие
+// формулировки «Этап разговора · ...». Никаких С/П/У/Р, ни слова «SPIN».
 const STAGE_LABEL: Record<AssistantCard['spinStage'], string> = {
-  S: 'С — Ситуация',
-  P: 'П — Проблема',
-  I: 'У — Усиление',
-  N: 'Р — Решение',
+  S: 'Понимаем контекст',
+  P: 'Выявляем задачу',
+  I: 'Уточняем важность',
+  N: 'Переходим к решению',
 };
-// Sprint 34Б.3 — для лейбла тона в badge.
+// Sprint 53 — тон тоже формулируем человечно. «Контроль» оставляем (это
+// общеупотребительный термин в переговорах), «закрытие» — тоже понятно.
+// «Мягкий» — оставляем, нейтрально.
 const TONE_LABEL: Record<AssistantCard['tone'], string> = {
   SOFT: 'мягкий',
   CONTROL: 'контроль',
@@ -2241,7 +2244,7 @@ export default function SalesAssistant() {
               <p className="text-xs text-secondary max-w-sm mx-auto">
                 {inPrepMode
                   ? labels.ctxHelpPreCallLong
-                  : 'Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап СПИН, тон и предложит следующую реплику.'}
+                  : 'Скажите несколько фраз, затем нажмите «Получить подсказку» — ассистент определит этап разговора, тон и предложит следующую реплику.'}
               </p>
             </Card>
           )}
@@ -2507,10 +2510,11 @@ function AdviceCard({
 
   return (
     <Card padded accent={card?.tone === 'CLOSE' ? 'zapusk' : 'ai'}>
-      {/* HEADER: SPIN stage · Tone · Engagement · Control · Confidence */}
+      {/* HEADER: stage · Tone · Engagement · Control · Confidence
+          Sprint 53 — никакого «SPIN» в UI. Бейдж этапа: «Этап разговора · ...» */}
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <StatusBadge tone="ai" dot>{STAGE_LABEL[action.spinStage]}</StatusBadge>
+          <StatusBadge tone="ai" dot>Этап · {STAGE_LABEL[action.spinStage]}</StatusBadge>
           {card && <StatusBadge tone={TONE_TONE[card.tone]} dot>Тон · {TONE_LABEL[card.tone]}</StatusBadge>}
           {card && <StatusBadge tone={CONTROL_TONE[card.dealControlLevel]} dot>{CONTROL_LABEL[card.dealControlLevel]}</StatusBadge>}
           {card && <StatusBadge tone={ENGAGEMENT_TONE[card.engagementSignal]} dot>{ENGAGEMENT_LABEL[card.engagementSignal]}</StatusBadge>}
@@ -2574,11 +2578,13 @@ function AdviceCard({
           </div>
         )}
 
-        {/* SELF-SALE QUESTIONS — same bump for legibility. */}
+        {/* Sprint 53 — внутреннее имя поля (selfSaleQuestions) остаётся
+            в JSON-контракте с AI, но user-visible heading нейтральное:
+            «Вопросы для раскрытия интереса». Никакой методологии в UI. */}
         {action.selfSaleQuestions.length > 0 && (
           <div className="mt-4 rounded-lg border border-ai/40 bg-ai/12 px-4 py-3">
             <SectionLabel icon={<Sparkles size={13} className="text-ai-glow" />}>
-              Self-sale: пусть он сам себе продаст
+              Вопросы для раскрытия интереса
             </SectionLabel>
             <ul className="space-y-1.5">
               {action.selfSaleQuestions.map((q, i) => (
@@ -2734,14 +2740,16 @@ function AdviceCard({
           </span>
         </div>
         <SectionLabel icon={<Target size={12} className="text-muted" />}>
-          Карта этапов СПИН — какие этапы ещё открыты
+          Этапы разговора — что ещё нужно закрыть
         </SectionLabel>
         <div className="flex items-center gap-1.5">
           {(['S', 'P', 'I', 'N'] as const).map((stage) => {
             const isOpen = card.spinGaps.includes(stage);
             const isCurrent = card.spinStage === stage;
-            // Sprint 34Б.3 — русские буквы в карте этапов: С / П / У / Р.
-            const ruLetter = stage === 'S' ? 'С' : stage === 'P' ? 'П' : stage === 'I' ? 'У' : 'Р';
+            // Sprint 53 — короткие нейтральные ярлыки 1/2/3/4 вместо С/П/У/Р.
+            // Полное человеческое название отображается в title (tooltip).
+            const stageNum = stage === 'S' ? '1' : stage === 'P' ? '2' : stage === 'I' ? '3' : '4';
+            const stageHuman = STAGE_LABEL[stage];
             return (
               <div
                 key={stage}
@@ -2751,9 +2759,9 @@ function AdviceCard({
                     : isOpen
                       ? 'bg-warning/10 border-warning/30 text-warning'
                       : 'bg-surface border-line text-muted line-through'}`}
-                title={isCurrent ? 'Текущий этап' : isOpen ? 'Этап ещё открыт' : 'Этап закрыт'}
+                title={`${stageHuman}${isCurrent ? ' — текущий этап' : isOpen ? ' — ещё открыт' : ' — закрыт'}`}
               >
-                {ruLetter}
+                {stageNum}
               </div>
             );
           })}

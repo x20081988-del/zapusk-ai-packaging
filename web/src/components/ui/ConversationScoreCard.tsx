@@ -2,6 +2,16 @@ import { Card } from './Card';
 import { StatusBadge } from './StatusBadge';
 import { type ConversationAnalysisCard, SCORE_LABELS, SENTIMENT_TONE, SENTIMENT_LABEL } from '../../lib/conversationAnalysis';
 
+// Sprint 53 — внутренняя методология не светится в UI. Внутренние enum
+// S/P/I/N остаются как контракт с AI, но пользователь видит человеческое
+// «Этап · ...» без слова SPIN и без букв С/П/У/Р.
+const STAGE_HUMAN: Record<'S' | 'P' | 'I' | 'N', string> = {
+  S: 'Понимаем контекст',
+  P: 'Выявляем задачу',
+  I: 'Уточняем важность',
+  N: 'Переходим к решению',
+};
+
 // Звёздная оценка встречи — главный wow-блок страницы. Большая цифра + 6
 // breakdown-метрик с прогресс-барами + sentiment badge.
 export function ConversationScoreCard({ card }: { card: ConversationAnalysisCard }) {
@@ -18,7 +28,7 @@ export function ConversationScoreCard({ card }: { card: ConversationAnalysisCard
           <div className="text-sm text-muted mt-1">из 100</div>
           <div className="flex items-center gap-2 mt-3">
             <StatusBadge tone={SENTIMENT_TONE[card.sentiment]} dot>{SENTIMENT_LABEL[card.sentiment]}</StatusBadge>
-            <span className="text-[11px] text-muted">SPIN · {card.spinStage}</span>
+            <span className="text-[11px] text-muted">Этап · {STAGE_HUMAN[card.spinStage]}</span>
           </div>
           <div className="mt-2 text-[11px] text-muted font-num">
             Вероятность сделки · <span className="text-primary font-semibold">{card.probabilityScore}%</span>

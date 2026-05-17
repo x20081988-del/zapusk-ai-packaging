@@ -68,7 +68,7 @@ export const OUTPUT_TYPE_UI: Record<string, OutputTypeUiMeta> = {
   financial_model: { label: 'Financial Model', description: 'P&L, сценарии, IRR.', tone: 'success' },
   calculator: { label: 'Investor Calculator', description: 'Производная от финмодели.', tone: 'success' },
   faq: { label: 'FAQ для инвестора', description: 'Снятие возражений.', tone: 'ai' },
-  sales_assistant: { label: 'AI-ассистент продаж', description: 'Живой co-pilot по СПИН.', tone: 'ai' },
+  sales_assistant: { label: 'AI-ассистент продаж', description: 'Живой co-pilot для переговоров с инвестором.', tone: 'ai' },
   // Sprint 34Б.3 — русские лейблы для видимости в AI-поиске.
   ai_visibility_report: { label: 'Видимость в AI-поиске', description: 'Готовность к AI-поиску.', tone: 'ai' },
 };

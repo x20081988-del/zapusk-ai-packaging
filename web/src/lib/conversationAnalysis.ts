@@ -104,7 +104,7 @@ export const SENTIMENT_LABEL: Record<Sentiment, string> = {
 
 export const SCORE_LABELS: Array<{ key: keyof AnalysisScoreBreakdown; label: string }> = [
   { key: 'rapport', label: 'Контакт с инвестором' },
-  { key: 'spin', label: 'SPIN-структура' },
+  { key: 'spin', label: 'Структура разговора' },
   { key: 'nextStepFixation', label: 'Фиксация следующего шага' },
   { key: 'objectionHandling', label: 'Работа с возражениями' },
   { key: 'clarity', label: 'Чёткость цифр и оффера' },
