@@ -474,8 +474,13 @@ export const FINANCE_TRIGGER_PATTERNS: RegExp[] = [
   /(?<![\p{L}\p{N}])(расход[ыау]*|затрат[ыау]*|себестоимост[ьи]+|опекс|капекс)(?![\p{L}\p{N}])/giu,
   /(?<![\p{L}\p{N}])(окупаемост[ьи]+|payback|ebitda|EBITDA|noi)(?![\p{L}\p{N}])/giu,
   /(?<![\p{L}\p{N}])(оценк[аиеуой]+|valuation|кап(?:итализаци[яи])?|долю?|equity|доля)(?![\p{L}\p{N}])/giu,
-  /(?<![\p{L}\p{N}])(чек|раунд|round|инвестиции?|инвестировать|вложени[яей]+)(?![\p{L}\p{N}])/giu,
+  /(?<![\p{L}\p{N}])(чек|раунд|round|инвестици[яиией]*|инвестировать|вложени[яейя]*)(?![\p{L}\p{N}])/giu,
   /(?<![\p{L}\p{N}])(юнит[\s-]?эконом\w*|unit[\s-]?economic\w*|cac|ltv|arpu|mrr|arr|gmv|arpu|cpa)(?![\p{L}\p{N}])/giu,
+  // Sprint 61.P1 — money/funds patterns (benchmark gap: "Use of funds",
+  // "привлечённые деньги", "финмодель"). Без них detectFinancialQuestion
+  // пропускал семантически финансовые запросы → financeBoost не срабатывал.
+  /(?<![\p{L}\p{N}])(деньг[иам]+|финансы|финансир\w*|финмодел[ьи]+|финансов\w+)(?![\p{L}\p{N}])/giu,
+  /(?<![\p{L}\p{N}])(привлечё?нн\w+|use\s+of\s+funds|fund(?:ing|s)?|cash\s*flow)(?![\p{L}\p{N}])/giu,
   // Years 2024..2032
   /(?<![\p{L}\p{N}])20(2[4-9]|3[0-2])(?![\p{L}\p{N}])/gu,
   // EN

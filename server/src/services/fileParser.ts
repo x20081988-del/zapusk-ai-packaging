@@ -87,8 +87,15 @@ async function extractDocx(abs: string): Promise<string> {
 }
 
 async function extractXlsx(abs: string): Promise<string> {
+  // Sprint 61.P1 — Production bug fix. `XLSX.readFile` requires
+  // `XLSX.set_fs(fs)` setup which we never did → silently threw
+  // "readFile is not a function" → fileParser returned empty text
+  // → brief generation never saw XLSX content → KB ingestion of
+  // financial models always failed with `knowledge_source_text_too_short`.
+  // Switched to buffer-based `XLSX.read(buffer)` which has no fs deps.
   const XLSX = await import('xlsx');
-  const wb = XLSX.readFile(abs);
+  const buf = await fs.readFile(abs);
+  const wb = XLSX.read(buf, { type: 'buffer' });
   const lines: string[] = [];
   for (const sheetName of wb.SheetNames) {
     const sheet = wb.Sheets[sheetName];
