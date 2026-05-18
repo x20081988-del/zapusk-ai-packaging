@@ -31,6 +31,7 @@ import {
   type LoadedProject,
 } from '../server/src/services/projectContextFormatter.ts';
 import { buildProjectFinancialFacts } from '../server/src/services/projectFinancialFacts.ts';
+import { estimateTokens, profilePrompt } from '../server/src/services/promptBudget.ts';
 
 // Reach into projectKnowledgeIngest for sourceType picker without exporting
 // internals — we test it via a duplicated lookup table here to avoid forcing
@@ -253,6 +254,32 @@ section('7. pickSourceTypeForFile (taxonomy mapping)');
      pickSourceTypeForFile('description', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'doc.docx') === 'project_presentation');
   ok('image → other',
      pickSourceTypeForFile('image', 'image/png', 'logo.png') === 'other');
+}
+
+// ─── Test 8. Token estimator ────────────────────────────────────────────────
+section('8. Token estimator (Sprint 61.P1)');
+{
+  // ASCII: ~0.25 tok/char.
+  const asciiTokens = estimateTokens('hello world hello world hello world');
+  ok('ASCII ~0.25 tok/char', asciiTokens >= 7 && asciiTokens <= 12, `got ${asciiTokens} for 35 chars`);
+
+  // Cyrillic: ~0.5 tok/char.
+  const ru = 'Привет, как дела сегодня вечером в офисе компании';
+  const ruTokens = estimateTokens(ru);
+  ok('Cyrillic ~0.5 tok/char', ruTokens >= 18 && ruTokens <= 30, `got ${ruTokens} for ${ru.length} chars`);
+
+  // Empty.
+  ok('empty → 0', estimateTokens('') === 0);
+
+  // profilePrompt with warnings — нужно превысить HARD=12000. 30_000 cyrillic
+  // × 0.5 = 15_000 tokens.
+  const big = 'А'.repeat(30_000);
+  const report = profilePrompt([{ label: 'transcript', text: big }]);
+  ok('huge transcript triggers hard_budget warning', report.warnings.some((w) => w.startsWith('hard_budget_exceeded')));
+
+  // segment_oversize — 10_000 cyrillic = 5_000 tokens > MAX_SEGMENT(4000).
+  const oversized = profilePrompt([{ label: 'transcript', text: 'А'.repeat(10_000) }]);
+  ok('segment_oversize warning emitted', oversized.warnings.some((w) => w.startsWith('segment_oversize')));
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────
