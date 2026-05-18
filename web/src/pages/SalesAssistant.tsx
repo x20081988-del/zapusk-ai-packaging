@@ -23,9 +23,11 @@ import { startCallAudioRecorder, type CallAudioRecorder } from '../lib/callAudio
 import { startAudioQualityMeter, type AudioQualityMeter, type AudioQualityClass } from '../lib/audioQualityMeter';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
-import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
+import { startRealtimeTranscription, type RealtimeSession, type RealtimeConnectionPhase } from '../lib/realtimeTranscription';
+import { markFirstInterimRender, markFirstFinalRender } from '../lib/realtimeTiming';
 import { composeAnalyzeTranscript, getAnalyzeTranscriptStats } from '../lib/salesAssistantTranscript';
 import { newSegmentId, recordLifecycle } from '../lib/transcriptPipeline';
+import { RetrievalDebugPanel } from '../components/sales/RetrievalDebugPanel';
 import { evaluateHallucination } from '../lib/transcriptHallucinationFilter';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
@@ -476,6 +478,12 @@ export default function SalesAssistant() {
   const [manualDraft, setManualDraft] = useState('');
   const manualTranscriptRef = useRef('');
   const [card, setCard] = useState<AssistantCard | null>(null);
+  // Sprint 62 P2 — store last-analyzed transcript + projectId so the
+  // RetrievalDebugPanel can re-run search-debug-v2 with the same query
+  // for admin diagnostics. Cleared on every new click so debug always
+  // reflects the latest analyze invocation.
+  const [lastAnalyzedTranscript, setLastAnalyzedTranscript] = useState<string | null>(null);
+  const [lastAnalyzedFinanceBoost, setLastAnalyzedFinanceBoost] = useState<boolean>(false);
   // Sprint 50 hotfix — fast and full are now independent pipelines.
   //   • Each click bumps separate request ids (fastRequestIdRef, fullRequestIdRef)
   //     and gets separate AbortControllers (fastAbortRef, fullAbortRef).
@@ -585,6 +593,10 @@ export default function SalesAssistant() {
   type TranscriptionProvider = 'realtime' | 'web-speech';
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider | null>(null);
   const [realtimeModel, setRealtimeModel] = useState<string | null>(null);
+  // Sprint 62 P0 — visible connection-phase indicator. Fixes prod report
+  // «транскрипция стоит пустой долго». User now sees fine-grained progress
+  // through the silent WebRTC/ASR setup window (1-3s typical).
+  const [realtimePhase, setRealtimePhase] = useState<RealtimeConnectionPhase | null>(null);
   // Sprint 50 hotfix — fast and full are independent pipelines.
   //   • Each ref is bumped on every click of its own pipeline.
   //   • Each AbortController is kept so we can cancel that pipeline only.
@@ -1019,6 +1031,11 @@ export default function SalesAssistant() {
 
     // Capture inputs once at click time so neither pipeline reads stale state.
     const transcriptForApi = transcriptText.slice(-32_000);
+    // Sprint 62 P2 — remember the exact transcript that went to AI, so
+    // RetrievalDebugPanel (admin-only) can rerun search-debug-v2 with the
+    // same query string. Updated AFTER stale-check.
+    setLastAnalyzedTranscript(transcriptForApi);
+    setLastAnalyzedFinanceBoost(detectFinanceHint(transcriptForApi));
     const previousAdvice = cardRef.current;
     const previousSpinStage = cardRef.current?.spinStage ?? null;
     const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
@@ -1421,6 +1438,9 @@ export default function SalesAssistant() {
     // не доступен — переключаемся на резервный Web Speech API. Пользователь
     // не остаётся без транскрипции при сбое.
     try {
+      // Sprint 62 P0 — captured outside the callbacks so we can attach
+      // timing marks to the session after creation.
+      let capturedSession: RealtimeSession | null = null;
       const session = await startRealtimeTranscription({
         onInterim: (text) => {
           if (
@@ -1429,6 +1449,10 @@ export default function SalesAssistant() {
             currentLiveSessionId !== liveSessionIdRef.current
           ) return;
           setInterim(text);
+          // Sprint 62 P0 — first interim landing in React state is the
+          // moment user first sees text on screen. Idempotent inside
+          // markFirstInterimRender.
+          if (capturedSession) markFirstInterimRender(capturedSession.timing, text);
         },
         onFinal: (text, segmentId) => {
           const sessionTag = `live-${currentLiveSessionId}`;
@@ -1452,6 +1476,8 @@ export default function SalesAssistant() {
           }
           setTranscript((prev) => appendFinalSegment(prev, text, 'realtime', segmentId, sessionTag));
           setInterim('');
+          // Sprint 62 P0 — first appended final segment marker.
+          if (capturedSession) markFirstFinalRender(capturedSession.timing, text.length);
         },
         onError: (err) => {
           console.warn('[sales-assistant] realtime error, falling back to web-speech:', err.message);
@@ -1470,9 +1496,16 @@ export default function SalesAssistant() {
             setSpeechStatus('stopped');
             speechStatusRef.current = 'stopped';
           }
+          setRealtimePhase(null);
+        },
+        onPhase: (p) => {
+          // Sprint 62 P0 — surface connection phase to UI badge so user sees
+          // what's happening during the silent setup window.
+          setRealtimePhase(p);
         },
       });
       realtimeRef.current = session;
+      capturedSession = session;
       setTranscriptionProvider('realtime');
       setRealtimeModel(session.info.model);
       setListening(true);
@@ -1704,6 +1737,8 @@ export default function SalesAssistant() {
     }
     liveStartedAtRef.current = null;
     setListening(false);
+    // Sprint 62 P0 — clear connection-phase indicator on stop.
+    setRealtimePhase(null);
     speechStatusRef.current = 'stopped';
     setSpeechStatus('stopped');
     // Sprint 49 hotfix 10 — обновляем meeting state только если мы НЕ в
@@ -2199,6 +2234,13 @@ export default function SalesAssistant() {
               )}
               {speechStatus === 'stopped' && <StatusBadge tone="neutral" dot>остановлено</StatusBadge>}
               {speechStatus === 'mic_error' && <StatusBadge tone="danger" dot>ошибка микрофона</StatusBadge>}
+              {/* Sprint 62 P0 — surface fine-grained realtime connection
+                  phase so user sees what's happening during the silent
+                  WebRTC/ASR setup window. Hidden once first_audio_received
+                  fires (listening badge above takes over). */}
+              {realtimePhase && realtimePhase !== 'first_audio_received' && (
+                <StatusBadge tone="ai" dot>{realtimePhaseLabel(realtimePhase)}</StatusBadge>
+              )}
             </div>
             <div className="flex items-center gap-3 flex-wrap justify-end">
               <span className="text-[9px] uppercase tracking-[0.12em] text-muted font-semibold">AI-подсказка:</span>
@@ -2614,6 +2656,9 @@ export default function SalesAssistant() {
                 card={card}
                 fastCard={fastCard}
                 analyzePhase={analyzePhase}
+                lastAnalyzedTranscript={lastAnalyzedTranscript}
+                lastAnalyzedFinanceBoost={lastAnalyzedFinanceBoost}
+                projectId={projectId || null}
               />
               <div className="flex justify-end">
                 <Button
@@ -2973,10 +3018,19 @@ function AdviceCard({
   card,
   fastCard,
   analyzePhase,
+  // Sprint 62 P2 — passed through so RetrievalDebugPanel can rerun the
+  // same retrieval with admin overrides. Optional props; non-admin paths
+  // can omit them.
+  lastAnalyzedTranscript = null,
+  lastAnalyzedFinanceBoost = false,
+  projectId = null,
 }: {
   card: AssistantCard | null;
   fastCard: FastCardShape | null;
   analyzePhase: 'idle' | 'fast' | 'full' | 'error';
+  lastAnalyzedTranscript?: string | null;
+  lastAnalyzedFinanceBoost?: boolean;
+  projectId?: string | null;
 }) {
   // Sprint 50 hotfix — actionable fields ALWAYS prefer fastCard when present.
   // Previously (`card > fastCard` globally) the second click's fresh fast was
@@ -3032,6 +3086,16 @@ function AdviceCard({
           раскрытие snippets — только для admin/manager. Founder видит только
           titles + summary (sensitive content скрыт). */}
       <KnowledgeSourcesBlock sources={card?.usedKnowledgeSources ?? fastCard?.usedKnowledgeSources ?? []} />
+
+      {/* Sprint 62 P2 — admin-only retrieval debug panel. Component itself
+          returns null for non-admin roles. Lets ops re-run search-debug-v2
+          on the exact transcript that was sent to analyze + A/B compare
+          financeBoost on/off. */}
+      <RetrievalDebugPanel
+        lastAnalyzedTranscript={lastAnalyzedTranscript}
+        projectId={projectId || null}
+        financeBoostHint={lastAnalyzedFinanceBoost}
+      />
 
       {/* Sprint 34В — ГЛАВНАЯ ЗОНА ДЕЙСТВИЯ. Использует action (fastCard или card).
           Рендерится сразу после ultra-fast этапа — фаундер получает реплику
@@ -3399,6 +3463,30 @@ function KnowledgeSourcesBlock({ sources }: { sources: UsedKnowledgeSource[] }) 
       )}
     </div>
   );
+}
+
+// Sprint 62 P0 — friendly Russian labels for realtime connection phases.
+// User-visible badge shown during the silent setup window (1-3 sec). Without
+// this, prod users reported «транскрипция стоит пустой долго» because the
+// listening badge only flipped on after all setup completed.
+// Sprint 62 P2 — client-side parallel of server's detectFinancialQuestion for
+// the RetrievalDebugPanel hint. Kept loose because admin can override via
+// «auto / on / off» dropdown.
+function detectFinanceHint(transcript: string): boolean {
+  if (!transcript) return false;
+  return /(?:выручк|прибыл|маржа|оценк|оборот|чек|раунд|финмодел|финансов|деньги|инвестици|ebitda|payback|valuation|cac|ltv|mrr|arr|gmv|20[23]\d)/i.test(transcript);
+}
+
+function realtimePhaseLabel(p: RealtimeConnectionPhase): string {
+  switch (p) {
+    case 'requesting_session':    return 'Получаю сессию OpenAI…';
+    case 'requesting_mic':        return 'Жду доступ к микрофону…';
+    case 'mic_ready':             return 'Микрофон готов…';
+    case 'sdp_exchange':          return 'Подключаюсь к Realtime…';
+    case 'data_channel_open':     return 'Канал открыт, готовлюсь…';
+    case 'awaiting_first_audio':  return 'Слушаю, говорите…';
+    case 'first_audio_received':  return 'Получаю транскрипт…';
+  }
 }
 
 function plural(n: number, one: string, few: string, many: string): string {

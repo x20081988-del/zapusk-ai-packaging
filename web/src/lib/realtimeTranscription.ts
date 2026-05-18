@@ -5,6 +5,7 @@ import {
   recordLifecycle,
   compareInterimVsFinal,
 } from './transcriptPipeline';
+import { createRealtimeTimingTrace, type RealtimeTimingTrace } from './realtimeTiming';
 
 // Sprint 49 — OpenAI Realtime live transcription через WebRTC.
 //
@@ -36,6 +37,22 @@ export interface RealtimeSessionInfo {
   turnDetectionSupported?: boolean;
 }
 
+/**
+ * Sprint 62 P0 — Realtime connection phase. Surfaces the silent setup
+ * period to the UI so user sees what's happening between «Начать
+ * прослушивание» click and first transcript token. Reported issue:
+ * «транскрипция стоит пустой долго, потом резко появляется текст» —
+ * root cause was the silent WebRTC+ASR setup (1-3 sec) with no visual feedback.
+ */
+export type RealtimeConnectionPhase =
+  | 'requesting_session'
+  | 'requesting_mic'
+  | 'mic_ready'
+  | 'sdp_exchange'
+  | 'data_channel_open'
+  | 'awaiting_first_audio'
+  | 'first_audio_received';
+
 export interface RealtimeCallbacks {
   /** Partial / delta transcript для текущего сегмента. */
   onInterim: (text: string) => void;
@@ -50,6 +67,12 @@ export interface RealtimeCallbacks {
   onError: (err: Error) => void;
   /** Закрытие соединения (по stop() или со стороны OpenAI). */
   onClose?: (reason?: string) => void;
+  /**
+   * Sprint 62 P0 — Phase progression. Fires synchronously when the
+   * pipeline advances. Caller maps to a user-facing label. Idempotent
+   * per phase: never fires the same phase twice for one session.
+   */
+  onPhase?: (phase: RealtimeConnectionPhase) => void;
 }
 
 export interface RealtimeSession {
@@ -64,6 +87,12 @@ export interface RealtimeSession {
    * от race / fallback path).
    */
   mediaStream: MediaStream | null;
+  /**
+   * Sprint 62 P0 — Timing trace exposed so React side can mark UI-side
+   * milestones (firstInterimRender / firstFinalRender) and read snapshot
+   * for diagnostics.
+   */
+  timing: RealtimeTimingTrace;
 }
 
 export class RealtimeUnavailableError extends Error {
@@ -124,7 +153,21 @@ export async function startRealtimeTranscription(
     throw new RealtimeUnavailableError('getusermedia_unsupported', 0);
   }
 
+  // Sprint 62 P0 — start timing trace BEFORE any network call so we capture
+  // the full "press button → ready to listen" latency.
+  const timing = createRealtimeTimingTrace(`local-${Math.random().toString(36).slice(2, 10)}`);
+  timing.mark('sessionRequested');
+  // Sprint 62 P0 — phase callback is idempotent per session via a Set.
+  const seenPhases = new Set<RealtimeConnectionPhase>();
+  const phase = (p: RealtimeConnectionPhase): void => {
+    if (seenPhases.has(p)) return;
+    seenPhases.add(p);
+    try { callbacks.onPhase?.(p); } catch { /* never let UI throw break realtime */ }
+  };
+  phase('requesting_session');
+
   const session = await fetchSession();
+  timing.mark('sessionIssued', { traceId: session.traceId, model: session.model });
   realtimeLog('session-issued', {
     traceId: session.traceId,
     model: session.model,
@@ -150,6 +193,8 @@ export async function startRealtimeTranscription(
         try { track.stop(); } catch { /* ignore */ }
       }
     }
+    // Sprint 62 P0 — emit timing summary on session end.
+    timing.finalize('stopped');
     callbacks.onClose?.('stopped');
   };
 
@@ -191,9 +236,13 @@ export async function startRealtimeTranscription(
     } catch {
       constraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
     }
+    timing.mark('micRequested');
+    phase('requesting_mic');
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
     const audioTrack = mediaStream.getAudioTracks()[0];
     if (!audioTrack) throw new RealtimeUnavailableError('no_audio_track', 0);
+    timing.mark('micReady', { deviceLabel: audioTrack.label.slice(0, 60) });
+    phase('mic_ready');
 
     // Sprint 59 P0.1 — log EXACTLY what the browser actually negotiated.
     // Constraints we passed are the REQUEST; getSettings() is what the
@@ -251,7 +300,15 @@ export async function startRealtimeTranscription(
     let finalSegmentCount = 0;
     let deltaCount = 0;
     dc = pc.createDataChannel('oai-events');
-    dc.onopen = () => realtimeLog('data-channel-open', { traceId: session.traceId });
+    dc.onopen = () => {
+      timing.mark('dataChannelOpen');
+      phase('data_channel_open');
+      // Sprint 62 P0 — once data-channel is open the only thing left is
+      // OpenAI producing the first delta. Show explicit «слушаю, говорите»
+      // hint so user knows the system is ready to receive audio.
+      phase('awaiting_first_audio');
+      realtimeLog('data-channel-open', { traceId: session.traceId });
+    };
     dc.onclose = () => realtimeLog('data-channel-close', {
       traceId: session.traceId,
       readyState: dc?.readyState,
@@ -284,6 +341,12 @@ export async function startRealtimeTranscription(
         }
         if (msg.type === 'conversation.item.input_audio_transcription.delta') {
           if (typeof msg.delta === 'string' && msg.delta.length) {
+            // Sprint 62 P0 — first delta is the moment user-input audio first
+            // got transcribed by OpenAI. Critical latency boundary.
+            if (deltaCount === 0) {
+              timing.mark('firstDelta', { deltaChars: msg.delta.length });
+              phase('first_audio_received');
+            }
             interimBuffer += msg.delta;
             deltaCount++;
             callbacks.onInterim(interimBuffer);
@@ -297,6 +360,10 @@ export async function startRealtimeTranscription(
           const interimSnapshot = interimBuffer;
           interimBuffer = '';
           if (rawTranscript.length) {
+            // Sprint 62 P0 — first final segment milestone.
+            if (finalSegmentCount === 0) {
+              timing.mark('firstFinal', { chars: rawTranscript.length });
+            }
             finalSegmentCount++;
             // Sprint 58 P0.1/P0.2 — assign segmentId at the FIRST stage
             // (raw_received). All downstream stages reuse this same ID
@@ -397,6 +464,8 @@ export async function startRealtimeTranscription(
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
+    timing.mark('sdpExchangeStart');
+    phase('sdp_exchange');
     realtimeLog('sdp-exchange-start', {
       traceId: session.traceId,
       endpoint: '/v1/realtime/calls',
@@ -421,9 +490,10 @@ export async function startRealtimeTranscription(
     }
     const answer = { type: 'answer' as const, sdp: await sdpResponse.text() };
     await pc.setRemoteDescription(answer);
+    timing.mark('sdpExchangeDone');
     realtimeLog('sdp-exchange-complete', { traceId: session.traceId });
 
-    return { stop, info: session, mediaStream };
+    return { stop, info: session, mediaStream, timing };
   } catch (err) {
     stop();
     if (err instanceof RealtimeUnavailableError) throw err;
