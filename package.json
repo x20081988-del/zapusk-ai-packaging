@@ -20,6 +20,7 @@
     "smoke:project-knowledge": "npx --prefix server tsx scripts/project-knowledge-smoke.ts",
     "benchmark:retrieval": "npx --prefix server tsx server/src/scripts/retrievalBenchmark.ts",
     "stress:ingest": "npx --prefix server tsx server/src/scripts/ingestStress.ts",
+    "kb:backfill": "npx --prefix server tsx server/src/scripts/kbBackfill.ts",
     "regression:realcalls": "node scripts/real-call-regression.mjs",
     "replay": "node scripts/pipeline-replay.mjs"
   },
