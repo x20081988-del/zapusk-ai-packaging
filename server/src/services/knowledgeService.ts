@@ -309,6 +309,16 @@ export interface RetrievalOptions {
   // route передаёт сюда уже посчитанный bool, чтобы service не зависел от
   // formatter'а.
   financeBoost?: boolean;
+  // Sprint 61.P1 — A/B-testable scoring weights. Defaults preserve production
+  // behavior. Передаются benchmark'ом, чтобы измерять воздействие изменений
+  // hybrid-weight без правки production кода до решения.
+  scoringWeights?: {
+    bm25?: number;        // default 0.4
+    keyword?: number;     // default 0.2
+    projectBoost?: number; // default 1.35
+    financeQuestionMul?: number; // default 1.45
+    projectPresentationMul?: number; // default 1.20
+  };
 }
 
 // Sprint 41 P1 — детальная разбивка score'а для admin debug endpoint'а.
@@ -456,26 +466,21 @@ export async function retrieveKnowledgeForTranscript(
         reasons.push(`quality_${src.qualityScore}`);
       }
 
-      // Sprint 61 — Project-scope буст усилен с 1.10 до 1.35. Раньше project KB
-      // (загруженные документы проекта) терялась на фоне глобальной sales KB
-      // даже при равной keyword-релевантности. Теперь, при прочих равных,
-      // project-факты доминируют над generic sales-кейсами — это правильно
-      // для live-встречи (фаундер хочет ответ про СВОЙ проект, не общие советы).
-      const projectBoost = src.scope === 'project' ? 1.35 : 1.0;
+      // Sprint 61 — Project-scope буст. Sprint 61.P1: A/B-testable.
+      const projectBoostValue = options.scoringWeights?.projectBoost ?? 1.35;
+      const projectBoost = src.scope === 'project' ? projectBoostValue : 1.0;
       if (projectBoost > 1) reasons.push('project_source');
 
-      // Sprint 61 — Finance boost. Если transcript явно про деньги (выручка /
-      // прибыль / CAC / 2027 etc.), source'ы типа financial_question и
-      // project_presentation поднимаются дополнительно. Это компенсирует
-      // featureBoosts(sales_assistant.*), где financial_question имеет
-      // multiplier 0.95 (общий sales-сценарий не финансовый).
+      // Sprint 61 — Finance boost. Sprint 61.P1: multipliers tunable.
+      const financeMulFinanceQ = options.scoringWeights?.financeQuestionMul ?? 1.45;
+      const financeMulProjectP = options.scoringWeights?.projectPresentationMul ?? 1.20;
       let financeTypeBoost = 1.0;
       if (options.financeBoost) {
         if (src.sourceType === 'financial_question') {
-          financeTypeBoost = 1.45;
+          financeTypeBoost = financeMulFinanceQ;
           reasons.push('finance_question_boosted');
         } else if (src.sourceType === 'project_presentation') {
-          financeTypeBoost = 1.20;
+          financeTypeBoost = financeMulProjectP;
           reasons.push('project_presentation_boosted');
         }
       }
@@ -489,7 +494,10 @@ export async function retrieveKnowledgeForTranscript(
         if (age < THIRTY_DAYS) { freshnessBoost = 1.05; reasons.push('fresh_<30d'); }
       }
 
-      const baseHybrid = (bm25Norm * 0.4) + (keywordScore * 0.2);
+      // Sprint 61.P1 — A/B-testable hybrid weights. Defaults match production.
+      const bm25W = options.scoringWeights?.bm25 ?? 0.4;
+      const keywordW = options.scoringWeights?.keyword ?? 0.2;
+      const baseHybrid = (bm25Norm * bm25W) + (keywordScore * keywordW);
       const finalScore = baseHybrid * qualityBoost * projectBoost * typeBoost * freshnessBoost;
 
       return {

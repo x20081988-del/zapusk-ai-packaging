@@ -424,6 +424,10 @@ const searchDebugSchema = z.object({
   query: z.string().trim().min(3).max(8_000),
   projectId: z.string().optional().nullable(),
   topN: z.number().int().min(1).max(20).optional(),
+  // Sprint 61.P1 — позволяет A/B-сравнить retrieval с/без финансового буста.
+  // По умолчанию undefined = auto-detect через FINANCE_TRIGGER_PATTERNS.
+  financeBoost: z.boolean().optional().nullable(),
+  feature: z.enum(['sales_assistant.analyze', 'sales_assistant.analyze_fast', 'other']).optional().nullable(),
 });
 
 knowledgeRoutes.post(
@@ -488,6 +492,9 @@ knowledgeRoutes.post(
       role,
       topN: d.topN ?? 12,
       mode: 'debug', // эксклюзивно для debug — заполняем breakdown
+      feature: d.feature ?? undefined,
+      // Sprint 61.P1 — позволяет admin'у вручную toggle finance buust для A/B.
+      financeBoost: d.financeBoost ?? undefined,
     });
 
     await recordAudit(req, {
