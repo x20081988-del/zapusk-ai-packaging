@@ -35,6 +35,13 @@ import { estimateTokens, profilePrompt } from '../server/src/services/promptBudg
 import { evaluateHallucination } from '../web/src/lib/transcriptHallucinationFilter.ts';
 import { recoverUtf8Filename, looksLikeMojibake } from '../server/src/lib/filenameEncoding.ts';
 import { recoverDisplayFilename } from '../web/src/lib/filenameDisplay.ts';
+import {
+  composeAnalyzeTranscript,
+  getAnalyzeTranscriptStats,
+} from '../web/src/lib/salesAssistantTranscript.ts';
+import { extractFactsFromSection, extractFactsFromSheets } from '../server/src/services/numericFactsExtractor.ts';
+import { rankNumericFactsInMemory } from '../server/src/services/numericFactsRetrieval.ts';
+import { planChunksForXlsx, extractXlsxStructured } from '../server/src/services/xlsxStructured.ts';
 
 // Reach into projectKnowledgeIngest for sourceType picker without exporting
 // internals — we test it via a duplicated lookup table here to avoid forcing
@@ -392,6 +399,176 @@ section('10. Mojibake filename recovery');
   // Mixed Latin chars that aren't mojibake should not be falsely recovered.
   ok('café.pdf is preserved (legit Latin-1)',
     recoverUtf8Filename('café.pdf') === 'café.pdf');
+}
+
+// ─── Test 11. Interim transcript reaches AI (Sprint 62 P0) ─────────────────
+//
+// This is the answer to the critical product question:
+//   «Can AI already see transcript before user sees it visually?»
+//
+// composeAnalyzeTranscript MUST include interimTranscript in the payload. If
+// this regresses, AI will only see finalized segments — meaning hints
+// generated before a segment finalizes are blind. This was confirmed by code
+// trace (SalesAssistant.runAnalyze passes interimRef.current as
+// interimTranscript). The smoke locks the contract in.
+section('11. Interim transcript visibility to AI');
+{
+  // Case A: only interim, no final → AI sees interim alone.
+  const a = composeAnalyzeTranscript({
+    interimTranscript: 'Здравствуйте, расскажите про проект',
+  });
+  ok('interim-only flows to analyze payload', a.includes('Здравствуйте, расскажите'),
+    `got: "${a.slice(0, 80)}"`);
+
+  // Case B: final + interim → both included, interim at the tail.
+  const b = composeAnalyzeTranscript({
+    liveSegments: [{ final: true, text: 'Добрый день. Я Григорий из Zapusk.' }],
+    interimTranscript: 'А расскажите про доходность',
+  });
+  ok('final + interim both flow', b.includes('Григорий из Zapusk') && b.includes('А расскажите про доходность'));
+  ok('interim is at tail', b.endsWith('А расскажите про доходность'));
+
+  // Case C: manual + final + interim → composed in correct order.
+  const c = composeAnalyzeTranscript({
+    manualContext: 'Это разогрев из Zoom Notes до старта Realtime',
+    liveSegments: [{ final: true, text: 'Здравствуйте' }],
+    interimTranscript: 'хочу обсудить размер чека',
+  });
+  ok('manual + live + interim composed correctly',
+    c.startsWith('Это разогрев') && c.includes('Здравствуйте') && c.endsWith('хочу обсудить размер чека'));
+
+  // Case D: interim equal to tail of final → no duplication.
+  const d = composeAnalyzeTranscript({
+    liveSegments: [{ final: true, text: 'Я хочу обсудить чек' }],
+    interimTranscript: 'Я хочу обсудить чек',
+  });
+  ok('duplicate interim does not double',
+    (d.match(/Я хочу обсудить чек/g) ?? []).length === 1, `got: "${d}"`);
+
+  // Case E: stats reflect interim presence.
+  const stats = getAnalyzeTranscriptStats({
+    liveSegments: [{ final: true, text: 'final part' }],
+    interimTranscript: 'interim part',
+  });
+  ok('stats track interimChars', stats.interimChars === 'interim part'.length);
+  ok('stats track liveTranscriptChars (only finals)', stats.liveTranscriptChars === 'final part'.length);
+  ok('stats track total finalPayloadChars > 0', stats.finalPayloadChars > 0);
+
+  // Case F (regression guard): unfinalized segment must NOT count as live.
+  // composeAnalyzeTranscript filters by `segment.final === true`. If someone
+  // accidentally removes that filter, interim-style segments could leak
+  // into the «live» portion and break the «AI sees interim ONCE» contract.
+  const f = composeAnalyzeTranscript({
+    liveSegments: [
+      { final: true, text: 'committed phrase' },
+      { final: false, text: 'partial that should NOT count as final' },
+    ],
+    interimTranscript: 'streaming now',
+  });
+  ok('non-final liveSegments are filtered out',
+    !f.includes('partial that should NOT count as final'),
+    `got: "${f}"`);
+  ok('only the actual interim is appended at tail', f.endsWith('streaming now'));
+}
+
+// ─── Test 12. Numeric facts extractor (Sprint 62 P5) ───────────────────────
+section('12. Numeric facts extractor');
+{
+  // Wide P&L-style table — most common XLSX layout.
+  const wide = extractFactsFromSection({
+    sheetName: 'P&L Summary',
+    sheetIndex: 0,
+    headerRow: 'Показатель,2025,2026,2027',
+    dataCsv: 'Показатель,2025,2026,2027\nВыручка,280,380,520\nEBITDA,95,145,210\nЧистая прибыль,38,65,92',
+    charCount: 100,
+  });
+  ok('wide table yields 9 facts (3 metrics × 3 years)', wide.length === 9, `got ${wide.length}`);
+  const profit2027 = wide.find((f) => f.metricSlug === 'net_profit' && f.period === '2027');
+  ok('net_profit 2027 extracted', !!profit2027 && profit2027.value === 92,
+    `got ${profit2027 ? JSON.stringify(profit2027) : 'undefined'}`);
+  const ebitda2026 = wide.find((f) => f.metricSlug === 'ebitda' && f.period === '2026');
+  ok('ebitda 2026 extracted', !!ebitda2026 && ebitda2026.value === 145);
+  // Confidence boost for known metrics.
+  ok('known metric high confidence (>=80)', (profit2027?.confidence ?? 0) >= 80);
+
+  // Vertical key=value layout.
+  const kv = extractFactsFromSection({
+    sheetName: 'Valuation',
+    sheetIndex: 1,
+    headerRow: 'Параметр,value',
+    dataCsv: 'Параметр,value\nPre-money valuation млн,1000\nIRR 5 лет,25\nОкупаемость лет,4.5',
+    charCount: 80,
+  });
+  ok('kv table yields 3 facts', kv.length === 3, `got ${kv.length}`);
+  const valuation = kv.find((f) => f.metricSlug === 'valuation');
+  ok('valuation extracted', !!valuation && valuation.value === 1000);
+  const payback = kv.find((f) => f.metricSlug === 'payback');
+  ok('payback extracted', !!payback && payback.value === 4.5);
+
+  // Values with units (%, RUB) survive parsing.
+  const withUnits = extractFactsFromSection({
+    sheetName: 'Margins',
+    sheetIndex: 2,
+    headerRow: 'Метрика,2027',
+    dataCsv: 'Метрика,2027\nEBITDA margin,40.4%\nВыручка,520 млн',
+    charCount: 50,
+  });
+  const margin = withUnits.find((f) => f.metricSlug === 'ebitda_margin');
+  ok('% unit detected', margin?.unit === '%' && margin.value === 40.4, `got ${JSON.stringify(margin)}`);
+}
+
+// ─── Test 13. Numeric facts ranking against transcript (Sprint 62 P5) ──────
+section('13. Numeric facts retrieval ranking');
+{
+  const stored = [
+    { projectId: 'p1', metric: 'Чистая прибыль', metricSlug: 'net_profit', period: '2027', value: 92, unit: 'RUB', sectionLabel: 'Sheet: P&L', rowLabel: 'Чистая прибыль', confidence: 80 },
+    { projectId: 'p1', metric: 'Выручка', metricSlug: 'revenue', period: '2026', value: 380, unit: null, sectionLabel: 'Sheet: P&L', rowLabel: 'Выручка', confidence: 70 },
+    { projectId: 'p1', metric: 'EBITDA', metricSlug: 'ebitda', period: '2027', value: 210, unit: null, sectionLabel: 'Sheet: P&L', rowLabel: 'EBITDA', confidence: 80 },
+    { projectId: 'p1', metric: 'CAC', metricSlug: 'cac', period: null, value: 180000, unit: 'RUB', sectionLabel: 'Sheet: Unit Economics', rowLabel: 'CAC', confidence: 70 },
+    { projectId: 'p1', metric: 'Vacancy', metricSlug: 'vacancy', period: '2027', value: 4, unit: '%', sectionLabel: 'Sheet: Pipeline', rowLabel: 'Vacancy %', confidence: 60 },
+  ];
+  // Transcript with year + slug → fact for that year+slug wins.
+  const r1 = rankNumericFactsInMemory(stored, 'А какая чистая прибыль в 2027?', 5);
+  ok('net_profit 2027 ranks first when transcript mentions it',
+    r1[0]?.metricSlug === 'net_profit' && r1[0]?.period === '2027',
+    `top: ${JSON.stringify(r1[0])}`);
+
+  // Transcript with only year — facts with that year prioritized.
+  const r2 = rankNumericFactsInMemory(stored, 'покажи цифры за 2027', 5);
+  ok('all 2027 facts surface', r2.every((f) => f.period === '2027' || f.period === null) && r2.length >= 2);
+
+  // Transcript with only metric stem — facts with matching slug prioritized.
+  const r3 = rankNumericFactsInMemory(stored, 'сколько у вас CAC?', 5);
+  ok('CAC fact wins on metric stem', r3[0]?.metricSlug === 'cac');
+
+  // No hints → top-by-confidence overall.
+  const r4 = rankNumericFactsInMemory(stored, 'привет, как у вас дела сегодня', 3);
+  ok('no hint → top-3 by confidence', r4.length === 3 && r4[0].confidence >= r4[2].confidence);
+}
+
+// ─── Test 14. XLSX sheet-aware planning (Sprint 62 P4) ────────────────────
+section('14. XLSX sheet-aware chunk planning');
+{
+  // Build via xlsx module directly to feed extractXlsxStructured.
+  // We can't import server-side xlsx in this tsx script easily without
+  // running through extractXlsxStructured. So test planChunksForXlsx against
+  // a synthetic XlsxStructuredResult.
+  const result = {
+    sections: [
+      { sheetName: 'P&L', sheetIndex: 0, headerRow: 'Метрика,2025,2026', dataCsv: 'Метрика,2025,2026\nВыручка,280,380', charCount: 35 },
+      { sheetName: 'Long Sheet', sheetIndex: 1, headerRow: 'Год,Значение',
+        dataCsv: 'Год,Значение\n' + Array.from({ length: 50 }, (_, i) => `${2020 + i},${(i * 12345).toString()}`).join('\n'),
+        charCount: 1000 },
+    ],
+    totalChars: 1035,
+    sheetNames: ['P&L', 'Long Sheet'],
+  };
+  const plan = planChunksForXlsx(result);
+  ok('plan has at least 2 chunks (one per sheet, plus long-sheet splits)', plan.length >= 2);
+  ok('first chunk has sectionLabel = Sheet: P&L', plan[0].sectionLabel === 'Sheet: P&L');
+  ok('all chunks have non-null sectionLabel', plan.every((p) => Boolean(p.sectionLabel)));
+  ok('header survives in every chunk text',
+    plan.every((p) => p.text.includes('## Sheet:')));
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────

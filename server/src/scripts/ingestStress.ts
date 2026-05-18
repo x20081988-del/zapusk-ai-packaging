@@ -217,6 +217,7 @@ async function main(): Promise<void> {
     const totalChars = chunks.reduce((s, c) => s + c.text.length, 0);
     console.log(`  totalChars in chunks: ${totalChars}`);
     console.log(`  chunk sizes: ${chunks.map((c) => c.text.length).join(', ')}`);
+    console.log(`  sectionLabels: ${chunks.map((c) => c.sectionLabel ?? '-').slice(0, 6).join(' | ')}…`);
     ok('totalChars > 1500 (meaningful content extracted)', totalChars > 1500);
 
     // Sheet names should survive parsing. extractXlsx prepends "## Sheet: <name>".
@@ -227,6 +228,24 @@ async function main(): Promise<void> {
     ok('Specific number "92" (net profit 2027) survives', /\b92\b/.test(allText));
     ok('Specific number "1000" (valuation pre-money) survives', /\b1000\b/.test(allText));
     ok('Specific term "ЛЭП Россети" survives', allText.includes('ЛЭП') && allText.includes('Россети'));
+
+    // Sprint 62 P4 — chunks have sectionLabel.
+    const labeledChunks = chunks.filter((c) => Boolean(c.sectionLabel));
+    ok('all chunks have sectionLabel (P4 sheet-aware path)', labeledChunks.length === chunks.length,
+      `${labeledChunks.length}/${chunks.length}`);
+    ok('sectionLabel matches Sheet pattern', labeledChunks.every((c) => /^Sheet:/.test(c.sectionLabel!)));
+
+    // Sprint 62 P5 — numeric facts persisted.
+    const facts = await prisma.projectNumericFact.findMany({
+      where: { sourceFileId: fileRow.id },
+    });
+    console.log(`  numeric facts persisted: ${facts.length}`);
+    ok('numeric facts persisted (≥5 expected)', facts.length >= 5, `got ${facts.length}`);
+    ok('at least one net_profit fact', facts.some((f) => f.metricSlug === 'net_profit'));
+    ok('at least one fact has period 2027', facts.some((f) => f.period === '2027'));
+    ok('valuation fact has value > 0', facts.some((f) => f.metricSlug === 'valuation' && f.value > 0));
+    ok('all facts link to source file', facts.every((f) => f.sourceFileId === fileRow.id));
+    ok('all facts link to project', facts.every((f) => f.projectId === BENCH_PROJECT_ID));
   }
 
   // ─── Test B: idempotency on re-ingest ──────────────────────────────────

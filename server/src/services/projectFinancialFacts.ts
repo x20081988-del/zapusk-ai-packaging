@@ -21,12 +21,13 @@
 
 import type { LoadedProject } from './projectContextFormatter.js';
 import { detectFinancialQuestion } from './projectContextFormatter.js';
+import type { NumericFactForPrompt } from './numericFactsRetrieval.js';
 
 export interface FinancialFact {
   metric: string;          // «MRR», «Чистая прибыль 2027», «Оценка», …
   value: string;           // human-readable форматированное значение
   period?: string;         // «2027», «12 мес», если применимо
-  source: 'brief.keyMetrics' | 'brief.napkin' | 'investorTerms' | 'project.core';
+  source: 'brief.keyMetrics' | 'brief.napkin' | 'investorTerms' | 'project.core' | 'finmodel.xlsx';
 }
 
 export interface BuildFinancialFactsOptions {
@@ -34,6 +35,11 @@ export interface BuildFinancialFactsOptions {
   forceInclude?: boolean;
   // Hard cap общего размера блока. Defaults to 1500 — это всё ещё компактно.
   charBudget?: number;
+  // Sprint 62 P5 — pre-fetched structured numeric facts from
+  // ProjectNumericFact table. Caller should pass `await
+  // retrieveProjectNumericFacts({...})` here. Optional; if absent we only
+  // use the legacy brief/InvestorTerms-derived facts.
+  numericFacts?: NumericFactForPrompt[];
 }
 
 // Pure function. Не ходит в БД.
@@ -48,8 +54,14 @@ export function buildProjectFinancialFacts(
 
   const budget = options.charBudget ?? 1_500;
   const blocks: string[] = [];
+  const numericFacts = options.numericFacts ?? [];
   for (const project of projects) {
     const facts = extractFactsForProject(project);
+    // Sprint 62 P5 — append finmodel-derived numeric facts as additional
+    // FinancialFact entries (with source='finmodel.xlsx' provenance).
+    for (const f of numericFacts) {
+      facts.push(numericFactToFinancialFact(f));
+    }
     if (facts.length === 0) continue;
     const headerLine = projects.length > 1
       ? `— ${project.name}:`
@@ -176,7 +188,30 @@ function labelSource(s: FinancialFact['source']): string {
     case 'brief.napkin':     return 'бриф / бизнес на салфетке';
     case 'investorTerms':    return 'условия инвестирования';
     case 'project.core':     return 'карточка проекта';
+    case 'finmodel.xlsx':    return 'финмодель XLSX';
   }
+}
+
+// Sprint 62 P5 — convert a NumericFactForPrompt (from ProjectNumericFact
+// table) into the FinancialFact shape consumed by the formatter. Includes
+// a confidence-aware suffix when the source data is low-confidence.
+function numericFactToFinancialFact(f: NumericFactForPrompt): FinancialFact {
+  let value: string;
+  if (f.unit === '%') value = `${f.value}%`;
+  else if (f.unit === 'RUB' || f.unit === 'USD' || f.unit === 'EUR') {
+    value = `${Math.round(f.value).toLocaleString('ru-RU').replace(/ /g, ' ')} ${f.unit}`;
+  } else if (f.unit) value = `${f.value} ${f.unit}`;
+  else value = `${f.value}`;
+
+  // Append section provenance to metric label so prompt clearly shows
+  // «по финмодели → Sheet: P&L 2027».
+  const sectionTag = f.sectionLabel ? ` (${f.sectionLabel})` : '';
+  return {
+    metric: `${f.metric}${sectionTag}`,
+    value,
+    period: f.period ?? undefined,
+    source: 'finmodel.xlsx',
+  };
 }
 
 function fmtMoney(value: number, currency: string): string {

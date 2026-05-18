@@ -120,6 +120,7 @@ model Project {
   packagingJobs        PackagingJob[]
   briefVersions        ProjectBriefVersion[]
   knowledgeSources     KnowledgeSource[]
+  numericFacts         ProjectNumericFact[]
 }
 
 model UploadedFile {
@@ -766,6 +767,15 @@ model KnowledgeChunk {
   redactedText  String?   // phones/urls/emails замаскированы — для founder UI
   tokenEstimate Int       // примерно text.length / 4 — на момент ingest
 
+  // Sprint 62 P4 — Sheet/section provenance for structured documents.
+  // For XLSX: "Sheet: <name>". For PDF (future): "Page N" / section title.
+  // Nullable — legacy chunks and prose docs leave it null. Retrieval
+  // surfaces this so AI sees «this came from P&L 2027».
+  sectionLabel  String?
+  // Sprint 62 P4 — header context (e.g. XLSX header row). Helps both
+  // retrieval relevance and human-readable debugging.
+  headerContext String?
+
   tagsJson      String?
   createdAt     DateTime  @default(now())
 
@@ -1001,4 +1011,55 @@ model IdempotencyKey {
 
   @@unique([key, actorId, route])
   @@index([expiresAt])
+}
+
+// Sprint 62 P5 — Numeric facts layer V1.
+//
+// Goal: deterministic financial grounding for AI Assistant. Project files
+// often contain hard numbers (revenue, EBITDA margin, CAC, payback) on
+// structured XLSX sheets. We don't want AI to hallucinate them OR rely on
+// fuzzy retrieval against text chunks. So at ingestion time we extract
+// (metric, period, value) tuples into this table with full provenance,
+// and a runtime helper feeds matching facts directly into the AI prompt
+// with explicit «по финмодели → 92 млн RUB» labels (no AI guessing).
+//
+// Storage shape:
+//   metric       — canonical Russian or English label («Чистая прибыль», «CAC»)
+//   metricSlug   — normalized lower-snake-case for query lookup («net_profit», «cac»)
+//   period       — when applicable: «2027», «2027-2029», «12m». Null for
+//                  static metrics like «CAC = 180k».
+//   value        — numeric value as parsed
+//   unit         — «RUB» / «%» / «м2» / null
+//   confidence   — 0..100 heuristic (90 = exact known metric+year, 50 = generic match)
+//
+// Provenance (every fact links back to source):
+//   sourceFileId   — UploadedFile that produced it
+//   sourceChunkId  — KnowledgeChunk row that the fact was extracted from
+//   sectionLabel   — copied for fast filtering («Sheet: P&L 2027»)
+//   rowLabel       — original row text (debug)
+//   columnHeader   — original column header (debug)
+model ProjectNumericFact {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  metric          String   // canonical label, e.g. «Чистая прибыль»
+  metricSlug      String   // normalized for query, e.g. «net_profit»
+  period          String?  // «2027» / «2027-2029» / null
+  value           Float
+  unit            String?  // «RUB» / «%» / «м2» / null
+
+  // Provenance
+  sourceFileId    String?
+  sourceChunkId   String?
+  sectionLabel    String?  // copy of KnowledgeChunk.sectionLabel
+  rowLabel        String?  // original row text
+  columnHeader    String?  // original column header
+  confidence      Int      // 0..100
+
+  createdAt       DateTime @default(now())
+
+  @@index([projectId, metricSlug])
+  @@index([projectId, period])
+  @@index([sourceFileId])
 }

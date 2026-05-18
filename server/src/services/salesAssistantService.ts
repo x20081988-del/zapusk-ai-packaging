@@ -26,6 +26,7 @@ import {
   type LoadedProject,
 } from './projectContextFormatter.js';
 import { buildProjectFinancialFacts } from './projectFinancialFacts.js';
+import { retrieveProjectNumericFacts } from './numericFactsRetrieval.js';
 import { profilePrompt, formatBudgetLog } from './promptBudget.js';
 
 // Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
@@ -603,9 +604,19 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   // Sprint 61 — financial facts block. Deterministic, без AI. Вставляется
   // только если transcript содержит финансовые триггеры (выручка / прибыль /
   // CAC / 2027 etc.) И только если в проекте есть структурные данные.
+  // Sprint 62 P5 — теперь дополнительно тянем структурные NumericFact
+  // из ProjectNumericFact (извлечённые из XLSX листов на ingest).
+  const numericFacts = isFinanceQuestion && loadedProjects.length > 0
+    ? await retrieveProjectNumericFacts({
+        projectIds: loadedProjects.map((p) => p.id),
+        transcript: input.transcript,
+        limit: 15,
+      })
+    : [];
   const financialFactsBlock = buildProjectFinancialFacts(loadedProjects, input.transcript, {
     forceInclude: false,
     charBudget: 1500,
+    numericFacts,
   });
   const user = [
     deskMode === 'qualification'
@@ -684,6 +695,9 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   ]);
   console.log(formatBudgetLog(budgetReport) + ' feat=analyze');
 
+  // Sprint 62 P7 — analyze latency observability. Wraps the AI call so we
+  // can see provider/model + ms in one log line.
+  const tAiStart = Date.now();
   const ai = await aiClient.generateJson({
     system: applyDeskMode(promptDecision.system, input),
     user,
@@ -701,6 +715,15 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     actorId: input.actorId ?? null,
     requestType: 'sales_assistant_full_json',
   });
+  try {
+    console.log(
+      `[analyze/latency] feature=full provider=${ai.provider} model=${ai.model} ` +
+      `aiMs=${Date.now() - tAiStart} mock=${ai.fellBackToMock ? '1' : '0'} ` +
+      `tokens=${budgetReport.totalTokens} chars=${budgetReport.totalChars} ` +
+      `numericFacts=${numericFacts.length} kbSources=${knowledge.sources.length} ` +
+      `financeBoost=${isFinanceQuestion ? '1' : '0'}`,
+    );
+  } catch { /* ignore */ }
 
   let parsed: Partial<AssistantCard> | null = null;
   try {
@@ -884,9 +907,18 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   // Sprint 52 P0.6 — memory injection (см. buildMemoryBlock).
   const memoryLines = await buildMemoryBlock(input);
   // Sprint 61 — financial facts на fast пути. Бюджет жёстче: 800 chars.
+  // Sprint 62 P5 — numeric facts for fast path too (smaller limit).
+  const numericFactsFast = isFinanceQuestionFast && loadedProjects.length > 0
+    ? await retrieveProjectNumericFacts({
+        projectIds: loadedProjects.map((p) => p.id),
+        transcript: input.transcript,
+        limit: 8,
+      })
+    : [];
   const financialFactsBlockFast = buildProjectFinancialFacts(loadedProjects, input.transcript, {
     forceInclude: false,
     charBudget: 800,
+    numericFacts: numericFactsFast,
   });
   const user = [
     deskMode === 'qualification'
@@ -938,6 +970,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   ]);
   console.log(formatBudgetLog(budgetReportFast) + ' feat=analyze_fast');
 
+  const tFastAiStart = Date.now();
   const ai = await aiClient.generateJson({
     system: applyDeskMode(promptDecision.system, input),
     user,
@@ -955,6 +988,15 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     actorId: input.actorId ?? null,
     requestType: 'sales_assistant_fast_json',
   });
+  try {
+    console.log(
+      `[analyze/latency] feature=fast provider=${ai.provider} model=${ai.model} ` +
+      `aiMs=${Date.now() - tFastAiStart} mock=${ai.fellBackToMock ? '1' : '0'} ` +
+      `tokens=${budgetReportFast.totalTokens} chars=${budgetReportFast.totalChars} ` +
+      `numericFacts=${numericFactsFast.length} kbSources=${knowledge.sources.length} ` +
+      `financeBoost=${isFinanceQuestionFast ? '1' : '0'}`,
+    );
+  } catch { /* ignore */ }
 
   let parsed: Partial<FastAssistantCard> | null = null;
   try {

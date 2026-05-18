@@ -90,6 +90,10 @@ export interface RetrievedSource {
   score: number;
   // Sprint 41 — заполняется только в mode='debug'. В production-flow null.
   breakdown?: RetrievalScoreBreakdown;
+  // Sprint 62 P4 — chunk-level provenance for structured documents
+  // (e.g. «Sheet: P&L 2027»). Null for prose docs / legacy chunks.
+  sectionLabel?: string | null;
+  headerContext?: string | null;
 }
 
 export interface KnowledgeRetrievalResult {
@@ -132,25 +136,65 @@ export interface IngestResultExtended extends IngestResult {
 }
 
 export async function ingestKnowledgeSource(input: IngestSourceInput): Promise<IngestResultExtended> {
+  // Sprint 62 P7 — ingest latency observability.
+  const tIngestStart = Date.now();
+  let tParseEnd = 0;
+  let tChunkEnd = 0;
   // 1. Извлекаем raw text из одного из источников.
   let rawText = input.rawText ?? '';
   let uploadedFileId: string | null = null;
   let conversationAnalysisId: string | null = null;
   let salesSessionId: string | null = null;
 
+  // Sprint 62 P4 — if upload is XLSX we go through structured extraction
+  // (sheet-aware sections with header preserved). Otherwise fall back to
+  // the legacy flat-text path. xlsxStructuredPlan, when present, is used
+  // by step 3 below to emit per-sheet KnowledgeChunks with sectionLabel.
+  // Sprint 62 P5 — Numeric facts extracted in the same pass so we have
+  // exactly the same (section → chunk) mapping for provenance.
+  let xlsxNumericFacts: import('./numericFactsExtractor.js').ExtractedFact[] = [];
+  let xlsxStructuredPlan: Awaited<ReturnType<typeof import('./xlsxStructured.js').planChunksForXlsx>> | null = null;
   if (input.uploadedFileId) {
     uploadedFileId = input.uploadedFileId;
     const file = await prisma.uploadedFile.findUnique({ where: { id: input.uploadedFileId } });
     if (file) {
-      const extracted = await extractFromUploadedFile({
-        id: file.id,
-        originalName: file.originalName,
-        mimeType: file.mimeType,
-        path: file.path,
-        category: file.category,
-        url: file.url,
-      });
-      rawText = extracted.text || rawText;
+      const ext = (file.originalName.match(/\.[a-z0-9]+$/i)?.[0] ?? '').toLowerCase();
+      const isXlsx = ext === '.xlsx' || file.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      if (isXlsx && file.path) {
+        try {
+          const fsMod = await import('node:fs/promises');
+          const storageMod = await import('./storage.js');
+          const buf = await fsMod.readFile(storageMod.storage.resolvePath(file.path));
+          const xlsxMod = await import('./xlsxStructured.js');
+          const structured = await xlsxMod.extractXlsxStructured(buf);
+          if (structured.totalChars >= 40) {
+            xlsxStructuredPlan = xlsxMod.planChunksForXlsx(structured);
+            rawText = xlsxMod.flattenXlsxStructured(structured);
+            // Sprint 62 P5 — extract structured numeric facts.
+            try {
+              const factsMod = await import('./numericFactsExtractor.js');
+              xlsxNumericFacts = factsMod.extractFactsFromSheets(structured.sections);
+            } catch (err) {
+              console.warn('[knowledge:numeric-facts] extraction failed (non-fatal):', err);
+              xlsxNumericFacts = [];
+            }
+          }
+        } catch (err) {
+          console.warn('[knowledge:xlsx-structured] failed, falling back to flat:', err);
+          xlsxStructuredPlan = null;
+        }
+      }
+      if (!xlsxStructuredPlan) {
+        const extracted = await extractFromUploadedFile({
+          id: file.id,
+          originalName: file.originalName,
+          mimeType: file.mimeType,
+          path: file.path,
+          category: file.category,
+          url: file.url,
+        });
+        rawText = extracted.text || rawText;
+      }
     }
   } else if (input.conversationAnalysisId) {
     conversationAnalysisId = input.conversationAnalysisId;
@@ -189,6 +233,7 @@ export async function ingestKnowledgeSource(input: IngestSourceInput): Promise<I
     if (doc) rawText = `${doc.title}\n\n${doc.body}`;
   }
 
+  tParseEnd = Date.now();
   if (!rawText || rawText.trim().length < 40) {
     throw new Error('knowledge_source_text_too_short');
   }
@@ -250,27 +295,96 @@ export async function ingestKnowledgeSource(input: IngestSourceInput): Promise<I
   });
 
   // 3. Чанкируем и сохраняем chunks.
-  const chunks = chunkText(rawText);
+  // Sprint 62 P4 — if we have a structured XLSX plan, use it directly so
+  // each chunk carries sectionLabel + headerContext. Otherwise fall back
+  // to the generic paragraph-aware chunkText.
   let chunkCount = 0;
-  for (const [idx, text] of chunks.entries()) {
-    if (idx >= MAX_CHUNKS_PER_SOURCE) break;
-    const created = await prisma.knowledgeChunk.create({
-      data: {
-        sourceId: source.id,
-        projectId: source.projectId,
-        chunkIndex: idx,
-        text,
-        redactedText: redactSensitive(text),
-        tokenEstimate: Math.ceil(text.length / 4),
-        tagsJson: source.tagsJson,
-      },
-    });
-    // Sprint 41 P0.4 — FTS sync hook. Fire-and-forget; если FTS недоступен
-    // или sync упал — основной ingest продолжает работу. Audit пишется
-    // в knowledgeFts.ts при ошибке.
-    syncChunkToFts(created.id).catch(() => { /* logged internally */ });
-    chunkCount++;
+  if (xlsxStructuredPlan && xlsxStructuredPlan.length > 0) {
+    for (const [idx, planned] of xlsxStructuredPlan.entries()) {
+      if (idx >= MAX_CHUNKS_PER_SOURCE) break;
+      const created = await prisma.knowledgeChunk.create({
+        data: {
+          sourceId: source.id,
+          projectId: source.projectId,
+          chunkIndex: idx,
+          text: planned.text,
+          redactedText: redactSensitive(planned.text),
+          tokenEstimate: Math.ceil(planned.text.length / 4),
+          sectionLabel: planned.sectionLabel,
+          headerContext: planned.headerContext,
+          tagsJson: source.tagsJson,
+        },
+      });
+      syncChunkToFts(created.id).catch(() => { /* logged internally */ });
+      chunkCount++;
+    }
+  } else {
+    const chunks = chunkText(rawText);
+    for (const [idx, text] of chunks.entries()) {
+      if (idx >= MAX_CHUNKS_PER_SOURCE) break;
+      const created = await prisma.knowledgeChunk.create({
+        data: {
+          sourceId: source.id,
+          projectId: source.projectId,
+          chunkIndex: idx,
+          text,
+          redactedText: redactSensitive(text),
+          tokenEstimate: Math.ceil(text.length / 4),
+          tagsJson: source.tagsJson,
+        },
+      });
+      // Sprint 41 P0.4 — FTS sync hook. Fire-and-forget; если FTS недоступен
+      // или sync упал — основной ingest продолжает работу. Audit пишется
+      // в knowledgeFts.ts при ошибке.
+      syncChunkToFts(created.id).catch(() => { /* logged internally */ });
+      chunkCount++;
+    }
   }
+
+  // Sprint 62 P5 — persist numeric facts.
+  // Project-scoped only — global KB has no project to attach to. uploadedFileId
+  // links back to source. We don't link chunks 1:1 (multiple facts per chunk
+  // is normal in a P&L sheet) — just store sectionLabel + sourceFileId for now.
+  if (xlsxNumericFacts.length > 0 && source.projectId && uploadedFileId) {
+    let factCount = 0;
+    for (const f of xlsxNumericFacts) {
+      try {
+        await prisma.projectNumericFact.create({
+          data: {
+            projectId: source.projectId,
+            metric: f.metric.slice(0, 200),
+            metricSlug: f.metricSlug.slice(0, 80),
+            period: f.period?.slice(0, 32) ?? null,
+            value: f.value,
+            unit: f.unit?.slice(0, 16) ?? null,
+            sourceFileId: uploadedFileId,
+            sectionLabel: `Sheet: ${f.sheetName}`.slice(0, 200),
+            rowLabel: f.rowLabel.slice(0, 200),
+            columnHeader: f.columnHeader.slice(0, 80),
+            confidence: f.confidence,
+          },
+        });
+        factCount++;
+      } catch (err) {
+        // Best-effort; one bad fact must not break the whole ingest.
+        console.warn('[knowledge:numeric-fact-persist] failed:', err);
+      }
+    }
+    console.log(`[knowledge:numeric-facts] persisted ${factCount}/${xlsxNumericFacts.length} facts for project=${source.projectId} file=${uploadedFileId}`);
+  }
+
+  tChunkEnd = Date.now();
+  // Sprint 62 P7 — single-line ingest latency log.
+  try {
+    console.log(
+      `[ingest/latency] sourceId=${source.id} sourceType=${input.sourceType} ` +
+      `scope=${input.scope} totalMs=${tChunkEnd - tIngestStart} ` +
+      `parseMs=${tParseEnd - tIngestStart} chunkMs=${tChunkEnd - tParseEnd} ` +
+      `chars=${rawText.length} chunks=${chunkCount} ` +
+      `xlsxStructured=${xlsxStructuredPlan ? '1' : '0'} ` +
+      `numericFacts=${xlsxNumericFacts.length}`,
+    );
+  } catch { /* ignore */ }
 
   return {
     sourceId: source.id,
@@ -340,7 +454,18 @@ export async function retrieveKnowledgeForTranscript(
   transcript: string,
   options: RetrievalOptions,
 ): Promise<KnowledgeRetrievalResult> {
+  // Sprint 62 P7 — retrieval latency observability. Single structured log
+  // per retrieval call with the dominant cost drivers visible.
+  const tStart = Date.now();
+  const tStages = {
+    keywords: 0,
+    fts: 0,
+    chunkQuery: 0,
+    scoring: 0,
+    total: 0,
+  };
   const keywords = extractKeywords(transcript);
+  tStages.keywords = Date.now() - tStart;
   if (keywords.length === 0) {
     return { sources: [], totalChunksScanned: 0 };
   }
@@ -394,6 +519,7 @@ export async function retrieveKnowledgeForTranscript(
   // bm25 → bm25Norm = 1/(1+abs(bm25)), нормализуем в 0..1.
   type FtsHitInfo = { chunkId: string; bm25: number; bm25Norm: number };
   const ftsMap = new Map<string, FtsHitInfo>();
+  const tFtsStart = Date.now();
   if (isFtsAvailable()) {
     const ftsRows = await ftsSearch(transcript, candidatePool);
     for (const r of ftsRows) {
@@ -404,9 +530,11 @@ export async function retrieveKnowledgeForTranscript(
       });
     }
   }
+  tStages.fts = Date.now() - tFtsStart;
 
   // ── Шаг 2. Достаём chunks по WHERE + (если есть) ограничиваем FTS-id'ами.
   // Если FTS пуст — берём широкий candidate set и работаем keyword-only.
+  const tChunkStart = Date.now();
   const chunkWhere = ftsMap.size > 0
     ? { ...sharedWhere, id: { in: Array.from(ftsMap.keys()) } }
     : sharedWhere;
@@ -424,11 +552,13 @@ export async function retrieveKnowledgeForTranscript(
     take: candidatePool,
   });
 
+  tStages.chunkQuery = Date.now() - tChunkStart;
   if (chunks.length === 0) {
     return { sources: [], totalChunksScanned: 0 };
   }
 
   // ── Шаг 3. Hybrid scoring. ─────────────────────────────────────────────
+  const tScoringStart = Date.now();
   const featureBoost = featureBoosts(options.feature);
   const now = Date.now();
   const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
@@ -438,6 +568,8 @@ export async function retrieveKnowledgeForTranscript(
     sourceId: string;
     chunkText: string;
     redacted: string | null;
+    sectionLabel: string | null;
+    headerContext: string | null;
     source: typeof chunks[number]['source'];
     breakdown: RetrievalScoreBreakdown;
   };
@@ -505,6 +637,8 @@ export async function retrieveKnowledgeForTranscript(
         sourceId: src.id,
         chunkText: c.text,
         redacted: c.redactedText,
+        sectionLabel: c.sectionLabel ?? null,
+        headerContext: c.headerContext ?? null,
         source: src,
         breakdown: {
           bm25Score, bm25Norm,
@@ -546,6 +680,8 @@ export async function retrieveKnowledgeForTranscript(
       snippetRedacted: s.redacted,
       score: s.breakdown.finalScore,
       breakdown: mode === 'debug' ? s.breakdown : undefined,
+      sectionLabel: s.sectionLabel,
+      headerContext: s.headerContext,
     });
     perTypeCount.set(s.source.sourceType, typeCount + 1);
     if (sourcesById.size >= targetN) break;
@@ -560,6 +696,20 @@ export async function retrieveKnowledgeForTranscript(
     }).catch((err) => console.warn('[knowledge:retrieval-count]', err));
   }
 
+  tStages.scoring = Date.now() - tScoringStart;
+  tStages.total = Date.now() - tStart;
+  // Sprint 62 P7 — single-line latency observability for retrieval.
+  try {
+    console.log(
+      `[retrieval/latency] feature=${options.feature ?? '-'} mode=${mode} ` +
+      `totalMs=${tStages.total} ftsMs=${tStages.fts} chunkQueryMs=${tStages.chunkQuery} ` +
+      `scoringMs=${tStages.scoring} keywordsMs=${tStages.keywords} ` +
+      `ftsAvailable=${isFtsAvailable() ? '1' : '0'} ` +
+      `scanned=${chunks.length} returned=${sourcesById.size} ` +
+      `projectScoped=${options.projectId ? '1' : '0'} ` +
+      `financeBoost=${options.financeBoost ? '1' : '0'}`,
+    );
+  } catch { /* ignore */ }
   return {
     sources: Array.from(sourcesById.values()),
     totalChunksScanned: chunks.length,
