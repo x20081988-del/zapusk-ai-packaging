@@ -25,6 +25,7 @@ import multer from 'multer';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { storage } from '../services/storage.js';
+import { recordMeetingSnapshot } from '../services/datasetInstrumentation.js';
 
 export const salesSessionsRoutes = Router();
 salesSessionsRoutes.use(authMiddleware);
@@ -75,6 +76,15 @@ salesSessionsRoutes.post('/complete', withIdempotency(), async (req, res) => {
   try {
     const summary = await completeSession(input);
     const session = await persistSession(input, summary);
+
+    // Sprint 62 P6 — emit golden-dataset snapshot on terminal session state.
+    // PII-safe: investor name is sha256'd to a short hash, only metadata logged.
+    try {
+      const full = await prisma.salesSession.findUnique({ where: { id: session.id } });
+      if (full) recordMeetingSnapshot(full);
+    } catch (err) {
+      console.warn('[dataset/meeting-snapshot] failed (non-fatal):', err);
+    }
 
     // Sprint 43 P0.4 — линкуем advice events этой встречи. Ownership:
     // founder может линковать только свои advice (по actorId или projectId);

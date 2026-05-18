@@ -30,6 +30,7 @@ import { completeSession } from './salesSessionService.js';
 import { upsertMemoryForSession } from './negotiationMemoryService.js';
 import { compareDraftVsClean, type TranscriptDiff } from './transcriptDiff.js';
 import { isAIGuardrailError } from '../ai/client.js';
+import { recordMeetingSnapshot } from './datasetInstrumentation.js';
 
 export type RecomputeStatus =
   | 'recomputed'
@@ -176,6 +177,16 @@ export async function recomputeFromCleanTranscript(sessionId: string): Promise<R
     });
   } catch (err) {
     console.warn(`[recompute] session=${sessionId} memory upsert failed (non-fatal):`, err);
+  }
+
+  // Sprint 62 P6 — emit dataset snapshot after recompute (clean transcript
+  // landed). This captures the upgraded transcript quality + any AI re-derived
+  // outcome changes.
+  try {
+    const refreshed = await prisma.salesSession.findUnique({ where: { id: sessionId } });
+    if (refreshed) recordMeetingSnapshot(refreshed);
+  } catch (err) {
+    console.warn(`[recompute] session=${sessionId} dataset snapshot failed (non-fatal):`, err);
   }
 
   const durationMs = Date.now() - started;
