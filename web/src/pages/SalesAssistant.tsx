@@ -28,6 +28,7 @@ import { markFirstInterimRender, markFirstFinalRender } from '../lib/realtimeTim
 import { composeAnalyzeTranscript, getAnalyzeTranscriptStats } from '../lib/salesAssistantTranscript';
 import { newSegmentId, recordLifecycle } from '../lib/transcriptPipeline';
 import { RetrievalDebugPanel } from '../components/sales/RetrievalDebugPanel';
+import { isAdviceAlreadySaid } from '../lib/adviceAlreadySaid';
 import { evaluateHallucination } from '../lib/transcriptHallucinationFilter';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
@@ -544,6 +545,10 @@ export default function SalesAssistant() {
   // Reentrancy guard: повторные клики «Завершить встречу» не запускают
   // второй запрос пока первый летит. Защита от race + от двойного клика.
   const finishingRef = useRef(false);
+  // Sprint 62.HOTFIX P0.5 — guard against infinite auto-retry when AI keeps
+  // returning already-spoken advice. Allows at most ONE retry per user
+  // click, then surfaces the result regardless.
+  const repeatRetryClickIdRef = useRef<number>(0);
   // Sprint 50 P0.1 — один idempotency-key на текущую попытку финализации.
   // Первый клик минтит ключ, ретраи переиспользуют его → backend отдаёт
   // тот же result, дубль не создаётся. Очищается на success / reset.
@@ -1040,6 +1045,26 @@ export default function SalesAssistant() {
     const previousSpinStage = cardRef.current?.spinStage ?? null;
     const adviceHistorySnapshot = adviceHistoryRef.current.slice(-6);
     const startedAt = performance.now();
+    // Sprint 62.HOTFIX P0.2/P0.4 — detect whether the previously-displayed
+    // mainQuestion has already been spoken by the manager (matched in the
+    // live transcript). If yes, both fast and full analyze calls carry
+    // `previousAdviceAlreadySpoken: true` so the server prompt injects a
+    // stronger anti-repeat directive AND avoidRepeatedAdvice() server-side
+    // can rewrite the new mainQuestion if it still slips through.
+    const prevMainForCheck =
+      cardRef.current?.mainQuestion
+      ?? cardRef.current?.suggestedPhrase
+      ?? fastCardRef.current?.mainQuestion
+      ?? '';
+    const alreadySaid = isAdviceAlreadySaid(prevMainForCheck, transcriptForApi);
+    if (alreadySaid.alreadySpoken) {
+      console.warn(
+        `[sales-assistant/already-said] prev mainQuestion matches transcript ` +
+        `coverage=${(alreadySaid.coverage * 100).toFixed(0)}% ` +
+        `tokens=${alreadySaid.adviceTokenCount} ` +
+        `matched=[${alreadySaid.matchedTokens.join(',')}]`,
+      );
+    }
     // Sprint 50 hotfix — diagnostic surface for repeated-click debugging.
     // Tracks: clickId, manual/live char split, previous mainQuestion (so a
     // later mainQuestionChanged check can fire), and absolute timestamps for
@@ -1087,6 +1112,7 @@ export default function SalesAssistant() {
             previousAdvice,
             previousSpinStage,
             adviceHistory: adviceHistorySnapshot,
+            previousAdviceAlreadySpoken: alreadySaid.alreadySpoken,
             projectId: projectId || null,
             // Sprint 51 — desk mode + script catalog key.
             mode: deskMode,
@@ -1126,6 +1152,21 @@ export default function SalesAssistant() {
             mainQuestion: r.fast.mainQuestion,
             backupQuestions: r.fast.backupQuestions,
           };
+        }
+        // Sprint 62.HOTFIX P0.5 — stale-advice auto-retry. If the AI came
+        // back with a NEW mainQuestion that is ITSELF already in the
+        // transcript (meaning the AI still gave us a phrase the manager
+        // already spoke), fire ONE retry with the now-stricter flag.
+        // Guard against infinite loop via repeatRetryClickIdRef.
+        const newAlreadySaid = isAdviceAlreadySaid(r.fast.mainQuestion ?? '', transcriptForApi);
+        if (newAlreadySaid.alreadySpoken && repeatRetryClickIdRef.current !== myFastId) {
+          repeatRetryClickIdRef.current = myFastId;
+          console.warn(
+            `[sales-assistant/stale-advice-retry] fastReq=${myFastId} ` +
+            `new mainQuestion still already-said; coverage=${(newAlreadySaid.coverage * 100).toFixed(0)}%; ` +
+            `firing one auto-retry with stricter flag.`,
+          );
+          setTimeout(() => { runAnalyze(); }, 50);
         }
       } catch (err) {
         window.clearTimeout(fastTimer);
@@ -1172,6 +1213,7 @@ export default function SalesAssistant() {
             previousAdvice,
             previousSpinStage,
             adviceHistory: adviceHistorySnapshot,
+            previousAdviceAlreadySpoken: alreadySaid.alreadySpoken,
             projectId: projectId || null,
             // Sprint 51 — desk mode + script catalog key.
             mode: deskMode,

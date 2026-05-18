@@ -185,6 +185,11 @@ const analyzeSchema = z.object({
   previousAdvice: z.unknown().optional().nullable(),
   previousSpinStage: z.enum(['S', 'P', 'I', 'N']).optional().nullable(),
   adviceHistory: z.array(z.unknown()).max(12).optional().nullable(),
+  // Sprint 62.HOTFIX P0.3 — frontend-detected "previous mainQuestion already
+  // spoken by manager". When true, server prompt injects an extra-strict
+  // rule: «не повторяй её даже частично, дай следующий шаг». Optional;
+  // defaults to false so legacy clients still work.
+  previousAdviceAlreadySpoken: z.boolean().optional().nullable(),
   projectId: z.string().optional().nullable(),
   mode: z.enum(['meeting', 'qualification']).optional().nullable(),
   scriptKey: z.enum(QUALIFICATION_SCRIPT_KEYS).optional().nullable(),
@@ -222,6 +227,7 @@ salesAssistantRoutes.post('/analyze', withRateLimit('ai_inference'), async (req,
       previousAdvice: parsed.data.previousAdvice ?? undefined,
       previousSpinStage: parsed.data.previousSpinStage ?? undefined,
       adviceHistory: parsed.data.adviceHistory ?? undefined,
+      previousAdviceAlreadySpoken: parsed.data.previousAdviceAlreadySpoken ?? false,
       projectId: parsed.data.projectId ?? null,
       // Sprint 38 — роль нужна для KB retrieval (visibility + raw vs redacted).
       actorRole: getActorRole(req),
@@ -306,6 +312,7 @@ salesAssistantRoutes.post('/analyze-fast', withRateLimit('ai_inference'), async 
       previousAdvice: parsed.data.previousAdvice ?? undefined,
       previousSpinStage: parsed.data.previousSpinStage ?? undefined,
       adviceHistory: parsed.data.adviceHistory ?? undefined,
+      previousAdviceAlreadySpoken: parsed.data.previousAdviceAlreadySpoken ?? false,
       projectId: parsed.data.projectId ?? null,
       // Sprint 38 — то же что и в /analyze.
       actorRole: getActorRole(req),

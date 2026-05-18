@@ -134,6 +134,11 @@ export interface AnalyzeInput {
   previousAdvice?: unknown;
   previousSpinStage?: SpinStage | null;
   adviceHistory?: unknown[];
+  // Sprint 62.HOTFIX P0.3 — client-detected flag: the previous
+  // mainQuestion has been spoken aloud by the manager (matched in
+  // live transcript via isAdviceAlreadySaid). Triggers stronger
+  // anti-repeat directive in prompt + server-side post-processing.
+  previousAdviceAlreadySpoken?: boolean;
   projectId?: string | null;
   // Sprint 38 — роль актора нужна для KB retrieval (visibility-фильтр,
   // raw vs redacted snippet). Передаётся route'ом из getActorRole(req).
@@ -624,6 +629,16 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
       : 'Режим работы: live AI co-pilot переговоров с инвестором. Это НЕ summary встречи.',
     'Сформируй structured mini-brief для текущего момента. Каждый блок 1-3 строки, не больше.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно. Если этап S уже закрыт — двигай в P/I/N.',
+    // Sprint 62.HOTFIX P0.3 — when client detected the previous mainQuestion
+    // has been spoken aloud by the manager, the directive becomes much stronger.
+    ...(input.previousAdviceAlreadySpoken ? [
+      'ВАЖНО: предыдущая подсказка УЖЕ ПРОИЗНЕСЕНА менеджером (она присутствует в transcript). НЕ повторяй её ни дословно, ни в перефразированной форме. Дай СЛЕДУЮЩИЙ ШАГ:',
+      '  • реакция на ответ инвестора, если он прозвучал в transcript;',
+      '  • следующий разведывательный вопрос по SPIN (двигайся S → P → I → N, не возвращайся назад);',
+      '  • уточняющий вопрос про конкретику (чек, срок, критерии, опыт);',
+      '  • переход к новому ракурсу разговора (риски, доходность, выход).',
+      'Если новый mainQuestion начинается такими же словами как предыдущий — он не подойдёт.',
+    ] : []),
     '',
     ...qualLines,
     ...memoryLines,
@@ -928,6 +943,11 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
       ? 'Менеджер на первичном звонке. Дай ему реплику прямо сейчас, без аналитики.'
       : 'Фаундер на встрече. Дай ему реплику прямо сейчас, без аналитики.',
     'Не повторяй previousAdvice и предыдущий mainQuestion дословно.',
+    // Sprint 62.HOTFIX P0.3 — stronger fast-path directive when previous
+    // advice has been spoken aloud.
+    ...(input.previousAdviceAlreadySpoken ? [
+      'ВАЖНО: предыдущая подсказка уже произнесена. Дай новый mainQuestion с другим первым словом, новым ракурсом или следующим этапом SPIN.',
+    ] : []),
     'Не выдумывай цифры проекта. Если точного значения нет — скажи, что нужно уточнить по финмодели/брифу.',
     '',
     ...qualLines,
@@ -1513,7 +1533,45 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
 
 function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
   const previous = `${formatAdvice(input.previousAdvice)}\n${formatAdviceHistory(input.adviceHistory)}`.toLowerCase();
-  if (!previous || !card.mainQuestion || !previous.includes(card.mainQuestion.toLowerCase())) return card;
+  // Sprint 62.HOTFIX P0.3 — also detect when the NEW mainQuestion's content
+  // is already present in the transcript (case = manager already said it
+  // or a paraphrase of it). The legacy check (substring of previousAdvice)
+  // misses paraphrases AND misses the case where AI re-suggests a phrase
+  // that the manager already spoke.
+  const transcript = (input.transcript ?? '').toLowerCase();
+  const tokenizeForRepeat = (s: string): Set<string> => new Set(
+    s.replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 4)
+      .map((t) => (t.length > 6 ? t.slice(0, -2) : t)),
+  );
+  const newQTokens = card.mainQuestion ? tokenizeForRepeat(card.mainQuestion) : new Set<string>();
+  const transcriptTokens = tokenizeForRepeat(transcript);
+  let transcriptCoverage = 0;
+  if (newQTokens.size >= 4) {
+    let matched = 0;
+    for (const t of newQTokens) if (transcriptTokens.has(t)) matched++;
+    transcriptCoverage = matched / newQTokens.size;
+  }
+  const transcriptRepeat = transcriptCoverage >= 0.6;
+  const previousRepeat = Boolean(
+    previous && card.mainQuestion && previous.includes(card.mainQuestion.toLowerCase()),
+  );
+  // Sprint 62.HOTFIX P0.3 — when client explicitly flagged "already spoken",
+  // we trust the signal even if our local heuristics didn't fire.
+  const clientFlagged = Boolean(input.previousAdviceAlreadySpoken);
+  if (!previousRepeat && !transcriptRepeat && !clientFlagged) return card;
+  if (previousRepeat || transcriptRepeat || clientFlagged) {
+    try {
+      console.warn(
+        `[sales-assistant/repeat-detected] ` +
+        `previousRepeat=${previousRepeat ? 1 : 0} transcriptRepeat=${transcriptRepeat ? 1 : 0} ` +
+        `clientFlagged=${clientFlagged ? 1 : 0} transcriptCoverage=${transcriptCoverage.toFixed(2)} ` +
+        `mainQuestionLen=${card.mainQuestion?.length ?? 0}`,
+      );
+    } catch { /* ignore */ }
+  }
 
   if (card.spinStage === 'S') {
     const stage: SpinStage = 'P';

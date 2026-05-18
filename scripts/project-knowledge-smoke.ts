@@ -34,6 +34,7 @@ import { buildProjectFinancialFacts } from '../server/src/services/projectFinanc
 import { estimateTokens, profilePrompt } from '../server/src/services/promptBudget.ts';
 import { evaluateHallucination } from '../web/src/lib/transcriptHallucinationFilter.ts';
 import { reconcileTruncatedFinal } from '../web/src/lib/transcriptReconcile.ts';
+import { isAdviceAlreadySaid } from '../web/src/lib/adviceAlreadySaid.ts';
 import { recoverUtf8Filename, looksLikeMojibake } from '../server/src/lib/filenameEncoding.ts';
 import { recoverDisplayFilename } from '../web/src/lib/filenameDisplay.ts';
 import {
@@ -652,6 +653,95 @@ section('15. Interim/final truncation reconciliation');
   );
   ok('mid-phrase stem (not at tail): no recovery (conservative)',
     !r11.recovered, `got: ${JSON.stringify(r11)}`);
+}
+
+// ─── Test 16. Advice already-said detection (Sprint 62.HOTFIX P0.2) ────────
+//
+// Regression guard for production case:
+//   AI suggested: «Да, понял, давайте тогда коротко по сути проекта.
+//     Terminal — это платформа социальной коммерции…»
+//   Manager spoke it (now in transcript). User clicked «Получить
+//   подсказку» again. AI returned essentially the same phrase.
+//
+// isAdviceAlreadySaid(adviceText, transcript) must return alreadySpoken=true
+// for this case, and false for legitimately-distinct next questions.
+section('16. Advice already-said detection');
+{
+  // The exact production case.
+  const advice = 'Да, понял, давайте тогда коротко по сути проекта. Terminal — это платформа социальной коммерции, помогает фаундерам собирать инвесторов через прямую коммуникацию.';
+  // Manager spoke it (slightly different punctuation/phrasing).
+  const transcriptWithIt = 'Да понял давайте тогда коротко по сути проекта Terminal это платформа социальной коммерции помогает фаундерам собирать инвесторов через прямую коммуникацию.';
+  const r1 = isAdviceAlreadySaid(advice, transcriptWithIt);
+  ok('PROD case: alreadySpoken=true', r1.alreadySpoken,
+    `coverage=${(r1.coverage * 100).toFixed(0)}% matched=${JSON.stringify(r1.matchedTokens)}`);
+  ok('PROD case: coverage ≥ 0.6', r1.coverage >= 0.6, `got ${r1.coverage}`);
+  ok('PROD case: at least 4 meaningful tokens', r1.adviceTokenCount >= 4);
+
+  // Punctuation / case differences should still match (token-based,
+  // case-insensitive, punctuation-stripped).
+  const r2 = isAdviceAlreadySaid(
+    'Расскажите про портфель и доходность',
+    'РАССКАЖИТЕ ПРО ПОРТФЕЛЬ! и ДОХОДНОСТЬ?',
+  );
+  ok('punctuation/case insensitive: true', r2.alreadySpoken, `got ${JSON.stringify(r2)}`);
+
+  // Russian morphology: «проекта» (genitive) ≈ «проекте» (prepositional)
+  // ≈ «проект» (nominative) → all share 5-char prefix «проек».
+  // Manager paraphrased the advice — same content, different case endings.
+  const r3 = isAdviceAlreadySaid(
+    'Расскажите про инвестиционную команду этого проекта',
+    'Расскажу про инвестиционных в команде моего проекте отдельно',
+  );
+  ok('Russian morphology stem match: true', r3.alreadySpoken,
+    `coverage=${(r3.coverage * 100).toFixed(0)}%`);
+
+  // Partial overlap below 60% threshold → false.
+  const r4 = isAdviceAlreadySaid(
+    'Расскажите про команду и доходность портфеля по облигациям',
+    'Команда есть',
+  );
+  ok('partial overlap < 60%: false (no false positive)', !r4.alreadySpoken,
+    `coverage=${r4.coverage.toFixed(2)}`);
+
+  // Short generic phrase — protected by min-token floor (≥4 meaningful tokens).
+  const r5 = isAdviceAlreadySaid(
+    'Спросите про чек',
+    'Спросите про чек у инвестора',
+  );
+  ok('short generic advice: no false positive (min-token gate)',
+    !r5.alreadySpoken,
+    `tokens=${r5.adviceTokenCount}`);
+
+  // Empty inputs.
+  const r6 = isAdviceAlreadySaid('', 'transcript');
+  ok('empty advice: false', !r6.alreadySpoken);
+  const r7 = isAdviceAlreadySaid('advice text here', '');
+  ok('empty transcript: false', !r7.alreadySpoken);
+
+  // Distinct next question — should NOT trigger.
+  const r8 = isAdviceAlreadySaid(
+    'Какой портфель вас сейчас удовлетворяет меньше всего по доходности?',
+    'Да понял давайте тогда коротко по сути проекта Terminal это платформа социальной коммерции',
+  );
+  ok('legitimate next question: false', !r8.alreadySpoken,
+    `coverage=${r8.coverage.toFixed(2)}`);
+
+  // Stopwords should not count toward coverage.
+  const r9 = isAdviceAlreadySaid(
+    'Это что когда где если что',  // mostly stopwords
+    'Это что когда где если что — нет, не интересно',
+  );
+  ok('all-stopword advice: meets min false', !r9.alreadySpoken,
+    `tokens=${r9.adviceTokenCount}`);
+
+  // Common conversational fillers («Да», «Понял», «Давайте», «Спасибо»)
+  // are stopwords → if advice is mostly fillers, no false-positive.
+  const r10 = isAdviceAlreadySaid(
+    'Да понял спасибо давайте',  // all stopwords post-filter
+    'Да понял спасибо давайте обсудим',
+  );
+  ok('filler-only advice: no false positive', !r10.alreadySpoken,
+    `tokens=${r10.adviceTokenCount}`);
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────
