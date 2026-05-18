@@ -509,7 +509,14 @@ export async function retrieveKnowledgeForTranscript(
   const SCORE_THRESHOLD = mode === 'fast' ? 0.12 : 0.06;
   // P0.7 — короткие чанки бесполезны для retrieval (одно предложение редко
   // даёт смысловой контекст). Фильтруем.
-  const MIN_CHUNK_LEN = 160;
+  // Sprint 62.VERIFICATION P2 — small XLSX sheets ingested via P4 sheet-aware
+  // path can produce chunks under 160 chars (e.g. a 3-row Valuation sheet
+  // → ~120 chars). Such chunks have STRONG provenance (sectionLabel /
+  // headerContext) and SHOULD be retrievable. Lower the floor for them
+  // while keeping the prose-chunk floor at 160 (those have no structural
+  // signal so short = unreliable).
+  const MIN_CHUNK_LEN_PROSE = 160;
+  const MIN_CHUNK_LEN_STRUCTURED = 60;
   // P0.7 — максимум 1 chunk на source (уже было) и максимум 2 source'а на
   // один materialType. Это балансирует «AI получил много кейсов разных типов»
   // против «AI завалили только successful_sale'ами».
@@ -575,7 +582,11 @@ export async function retrieveKnowledgeForTranscript(
   };
 
   const scored: Scored[] = chunks
-    .filter((c) => c.text && c.text.length >= MIN_CHUNK_LEN)
+    .filter((c) => {
+      if (!c.text) return false;
+      const floor = c.sectionLabel ? MIN_CHUNK_LEN_STRUCTURED : MIN_CHUNK_LEN_PROSE;
+      return c.text.length >= floor;
+    })
     .map((c) => {
       const fts = ftsMap.get(c.id);
       const bm25Score = fts?.bm25 ?? 0;
