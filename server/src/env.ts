@@ -136,6 +136,24 @@ export const env = {
   // Если ключа нет — PackagingPipeline возвращает mock preview URL.
   LOVABLE_API_KEY: process.env.LOVABLE_API_KEY ?? '',
   LOVABLE_API_BASE_URL: process.env.LOVABLE_API_BASE_URL ?? 'https://api.lovable.dev',
+
+  // Sprint 61.P1 — Rollback safety. Three independent kill-switches.
+  // Default: all enabled (production behavior post-Sprint-61).
+  //
+  //   PROJECT_CONTEXT_LAYER_ENABLED=false → revert to 6-line project context.
+  //     Used by salesAssistantService.ts before calling
+  //     formatProjectContextForAssistant.
+  //   PROJECT_KB_AUTO_INGEST_ENABLED=false → file uploads do NOT auto-create
+  //     KnowledgeSource. Existing KB-sources continue to work in retrieval.
+  //   PROJECT_FINANCE_BOOST_ENABLED=false → financeBoost arg always false.
+  //     Retrieval reverts to projectBoost-only.
+  //
+  // Why three independent toggles, not one: рег-тесты + benchmark show each
+  // layer has different value-prop. If one regresses in prod, we can disable
+  // just that one without losing the others.
+  PROJECT_CONTEXT_LAYER_ENABLED: process.env.PROJECT_CONTEXT_LAYER_ENABLED !== 'false',
+  PROJECT_KB_AUTO_INGEST_ENABLED: process.env.PROJECT_KB_AUTO_INGEST_ENABLED !== 'false',
+  PROJECT_FINANCE_BOOST_ENABLED: process.env.PROJECT_FINANCE_BOOST_ENABLED !== 'false',
 };
 
 export const isProd = env.NODE_ENV === 'production';

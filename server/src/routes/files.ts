@@ -93,10 +93,13 @@ filesRoutes.post('/:projectId/upload', multerUploadWithGuard, async (req, res) =
     // KnowledgeSource(scope='project'). Если падает — лог, не блокирует ответ.
     // Environment по workspaceStatus вызывающего: demo workspace → demo KB,
     // production → production KB (см. retrieveKnowledgeForTranscript filter).
-    scheduleProjectFileIngest(row.id, req.params.projectId, {
-      environment: workspaceToKnowledgeEnv((req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null),
-      createdById: user.id,
-    });
+    // Sprint 61.P1 — feature flag kill-switch.
+    if (env.PROJECT_KB_AUTO_INGEST_ENABLED) {
+      scheduleProjectFileIngest(row.id, req.params.projectId, {
+        environment: workspaceToKnowledgeEnv((req as { user?: { workspaceStatus?: string } }).user?.workspaceStatus ?? null),
+        createdById: user.id,
+      });
+    }
   }
   res.status(201).json({ files: created });
 });

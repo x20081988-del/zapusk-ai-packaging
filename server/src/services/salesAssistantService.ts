@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { env } from '../env.js';
 import { aiClient } from '../ai/client.js';
 import { SALES_ASSISTANT_SYSTEM } from '../ai/salesAssistantPrompt.js';
 import { MEETING_PREP_SYSTEM_FALLBACK } from '../ai/meetingPrepPrompt.js';
@@ -25,6 +26,7 @@ import {
   type LoadedProject,
 } from './projectContextFormatter.js';
 import { buildProjectFinancialFacts } from './projectFinancialFacts.js';
+import { profilePrompt, formatBudgetLog } from './promptBudget.js';
 
 // Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
 // `analyzeSalesTurn` теперь читает активный template `sales_gpt` из БД и
@@ -536,7 +538,13 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   // Sprint 61 — единый loader + formatter. Грузим проекты ОДИН раз,
   // переиспользуем shape для финансовых фактов и project-context блока.
   const loadedProjects: LoadedProject[] = await loadProjectsForContext(projectIdsForContext);
-  const projectContext = formatProjectsContextForAssistant(loadedProjects, { verbosity: 'full' });
+  // Sprint 61.P1 — feature flag. When PROJECT_CONTEXT_LAYER_ENABLED=false,
+  // fall back to 'fast' verbosity (the most compact Sprint 61 shape:
+  // no files, no weaknesses, no interview answers). This is a softer
+  // revert than literally removing the formatter — still keeps the
+  // structural improvements but trims surface area.
+  const projectContextVerbosity = env.PROJECT_CONTEXT_LAYER_ENABLED ? 'full' : 'fast';
+  const projectContext = formatProjectsContextForAssistant(loadedProjects, { verbosity: projectContextVerbosity });
   const recentContext = input.recentContext?.trim() || tail(input.transcript, 6_000);
   const previousAdvice = formatAdvice(input.previousAdvice);
   const adviceHistory = formatAdviceHistory(input.adviceHistory);
@@ -559,7 +567,8 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   // Sprint 61 — Финансовый-триггер детектор. Используется для буста retrieval
   // (project_presentation + financial_question) и для инжекта детерминированного
   // блока «Финансовые факты проекта» (buildProjectFinancialFacts).
-  const isFinanceQuestion = detectFinancialQuestion(input.transcript);
+  // Sprint 61.P1 — feature flag kill-switch.
+  const isFinanceQuestion = env.PROJECT_FINANCE_BOOST_ENABLED && detectFinancialQuestion(input.transcript);
   const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
@@ -655,6 +664,25 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
       'Верни строго JSON без markdown.',
     ].join('\n'),
   ].join('\n');
+
+  // Sprint 61.P1 — token-budget профайлинг. Логирует разбивку «куда уходят
+  // токены» (project_context vs facts vs kb vs memory vs transcript). Lets
+  // operator answer «почему prompt разбух» БЕЗ повторного запроса. Heuristic
+  // tokenizer ~10-20% off vs tiktoken — этого хватает чтобы видеть пропорции
+  // и hard-budget breaches.
+  const budgetReport = profilePrompt([
+    { label: 'system',          text: applyDeskMode(promptDecision.system, input) },
+    { label: 'project_context', text: projectContext },
+    { label: 'finance_facts',   text: financialFactsBlock },
+    { label: 'kb',              text: knowledgeBlock },
+    { label: 'memory',          text: memoryLines.join('\n') },
+    { label: 'qualification',   text: qualLines.join('\n') },
+    { label: 'transcript',      text: input.transcript },
+    { label: 'recent_context',  text: recentContext },
+    { label: 'advice_history',  text: adviceHistory },
+    { label: 'task_list',       text: user.split('Задача:')[1] ?? '' },
+  ]);
+  console.log(formatBudgetLog(budgetReport) + ' feat=analyze');
 
   const ai = await aiClient.generateJson({
     system: applyDeskMode(promptDecision.system, input),
@@ -828,7 +856,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   // 8s timeout'ом, поэтому keyword-retrieval (без AI-вызова) подходит идеально:
   // 100-200ms максимум, дальше уходит токеновый бюджет в OpenAI. Маленький
   // topN (3) чтобы prompt не разрастался.
-  const isFinanceQuestionFast = detectFinancialQuestion(input.transcript);
+  const isFinanceQuestionFast = env.PROJECT_FINANCE_BOOST_ENABLED && detectFinancialQuestion(input.transcript);
   const knowledge = await retrieveKnowledgeForTranscript(input.transcript, {
     projectId: input.projectId ?? null,
     role: input.actorRole ?? 'FOUNDER',
@@ -896,6 +924,19 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
       'Верни строго JSON. Никакой аналитики, никаких объяснений.',
     ].join('\n'),
   ].join('\n');
+
+  // Sprint 61.P1 — token-budget профайлинг для fast пути (более жёсткий
+  // budget, важнее видеть переполнение).
+  const budgetReportFast = profilePrompt([
+    { label: 'system',          text: applyDeskMode(promptDecision.system, input) },
+    { label: 'project_context', text: projectContext },
+    { label: 'finance_facts',   text: financialFactsBlockFast },
+    { label: 'kb',              text: knowledgeBlock },
+    { label: 'memory',          text: memoryLines.join('\n') },
+    { label: 'qualification',   text: qualLines.join('\n') },
+    { label: 'recent_context',  text: recentContext },
+  ]);
+  console.log(formatBudgetLog(budgetReportFast) + ' feat=analyze_fast');
 
   const ai = await aiClient.generateJson({
     system: applyDeskMode(promptDecision.system, input),
