@@ -2,7 +2,107 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-18 (Sprint 61.HOTFIX: Project workspace UX + dictation hallucination + mojibake filenames + meeting transcript access).
+Last updated: 2026-05-18 (Sprint 62: Realtime visibility audit + retrieval debug UI + KB backfill + sheet-aware XLSX + numeric facts + observability).
+
+---
+
+## Completed (this sprint — Sprint 62 Project Intelligence Stabilization 2026-05-18)
+
+P0 — Live realtime transcription visibility audit + UX:
+- [x] Traced full pipeline mic → WebRTC → OpenAI Realtime → onInterim →
+  React state → analyze payload. **Answer to «Can AI see transcript before
+  user sees it visually?» — they are EQUIVALENT.** runAnalyze() ALWAYS
+  passes interimTranscript: interimRef.current to composeAnalyzeTranscript;
+  interim text user sees is the same string AI receives. The «empty for
+  3-5 seconds then sudden burst» is the silent WebRTC+ASR setup window,
+  not «AI sees text user doesn't». Documented in code with line refs.
+- [x] `web/src/lib/realtimeTiming.ts` — RealtimeTimingTrace tracks 11
+  milestones (sessionRequested → micReady → sdpExchange → dataChannelOpen
+  → firstDelta → firstFinal → firstInterimRender / firstFinalRender)
+  with elapsedMs from start. Final summary on session stop.
+- [x] `RealtimeConnectionPhase` enum (7 phases) + `onPhase` callback +
+  user-visible Russian phase badge during the silent setup window
+  («Подключаюсь к Realtime…» / «Слушаю, говорите…»). Hidden once first
+  audio is received.
+- [x] Regression smoke section 11 — 10 assertions covering interim →
+  analyze payload contract.
+
+P2 — Retrieval debug UI (admin/internal):
+- [x] `web/src/components/sales/RetrievalDebugPanel.tsx` — collapsible
+  admin-only panel under AI hint card. Re-runs /api/knowledge/search-
+  debug-v2 with the EXACT transcript+projectId of the last hint. Shows
+  per-chunk title/sourceType/scope/finalScore/dominance%, full breakdown
+  (bm25Norm/keywordScore/qualityBoost/projectBoost/typeBoost/freshness),
+  reasons badges, FTS status, scanned count, retrieval latency. A/B
+  controls: financeBoost auto/on/off, feature analyze/analyze_fast.
+  Founder UI unchanged.
+
+P3 — Safe project KB backfill:
+- [x] `server/src/scripts/kbBackfill.ts` + `npm run kb:backfill`.
+  Dry-run by default; --apply for real. Idempotent (sha256 dedup),
+  resumable, per-file logs + summary. Pre-skips already-indexed
+  files via alreadyIndexed check. Verified on dev DB.
+
+P4 — XLSX sheet-aware chunking:
+- [x] `server/src/services/xlsxStructured.ts` — extractXlsxStructured
+  + planChunksForXlsx. Each chunk carries sectionLabel («Sheet: P&L
+  2027») + headerContext. Large sheets split by ROW boundary with
+  header repeated.
+- [x] Additive migration: `KnowledgeChunk.sectionLabel` +
+  `headerContext` (nullable). Retrieval surfaces them on
+  RetrievedSource.
+- [x] Smoke section 14 — chunk plan integrity.
+
+P5 — Numeric facts layer V1:
+- [x] Additive migration: `ProjectNumericFact` table with full
+  provenance (metric/slug/period/value/unit + sourceFileId +
+  sectionLabel + rowLabel + columnHeader + confidence).
+- [x] `numericFactsExtractor.ts` — auto-detects label column (handles
+  xlsx json_to_sheet column re-ordering), 30+ canonical metrics in
+  dictionary, % / RUB / м2 / лет unit parsing, Russian decimal comma.
+- [x] `numericFactsRetrieval.ts` — ranks by confidence + year match
+  bonus + slug match bonus; if transcript has hints, filter to
+  relevant.
+- [x] `projectFinancialFacts.ts` accepts `numericFacts` option;
+  caller (`salesAssistantService.analyzeSalesTurn` + Fast) does
+  `await retrieveProjectNumericFacts(…)` and passes results in.
+  AI prompt now sees structured facts with `[источник: финмодель XLSX]`
+  provenance tag.
+- [x] Stress test: 12-sheet finmodel → 80 numeric facts persisted;
+  net_profit/2027/valuation extracted; finmodel retrieval score
+  0.239 → 0.417 (+74%).
+- [x] Smoke sections 12+13 — 12 assertions on extractor + retrieval ranking.
+
+P6 — Golden dataset foundation (instrumentation only):
+- [x] `datasetInstrumentation.ts` — `summarizeForDataset` pure
+  projection + `recordMeetingSnapshot` emit single
+  `[dataset/meeting-snapshot]` log line. PII-safe: investor name →
+  12-char sha256 prefix.
+- [x] Hooked into POST /complete (after persistSession) and recompute
+  service (after clean transcript replaces draft).
+- [x] NO new DB table — existing SalesSession row is the source of
+  truth; P6 stabilizes the projection.
+
+P7 — Cross-layer latency observability:
+- [x] `[retrieval/latency]` in `retrieveKnowledgeForTranscript`: total /
+  fts / chunkQuery / scoring / keywords ms + scanned + returned +
+  projectScoped + financeBoost.
+- [x] `[ingest/latency]` in `ingestKnowledgeSource`: total / parse /
+  chunk ms + chars + chunks + xlsxStructured + numericFacts.
+- [x] `[analyze/latency]` in `analyzeSalesTurn` + Fast: provider /
+  model / aiMs + mock + tokens + chars + numericFacts + kbSources +
+  financeBoost.
+
+Verification:
+- server/web tsc=0, npm run build OK
+- ALL existing smokes green: smoke:transcript, replay,
+  regression:realcalls, smoke:project-knowledge (14 sections, 113
+  assertions), stress:ingest (16 checks), benchmark:retrieval (no
+  regression).
+- kb:backfill dry-run on dev: 3 candidates / 2 duplicate / 1 would-ingest.
+- 2 additive Prisma migrations (no destructive changes).
+
+**Files changed**: 14 modified, 8 new, 2 new migrations.
 
 ---
 
