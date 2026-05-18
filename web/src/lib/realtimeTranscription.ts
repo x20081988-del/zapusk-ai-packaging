@@ -6,6 +6,7 @@ import {
   compareInterimVsFinal,
 } from './transcriptPipeline';
 import { createRealtimeTimingTrace, type RealtimeTimingTrace } from './realtimeTiming';
+import { reconcileTruncatedFinal } from './transcriptReconcile';
 
 // Sprint 49 — OpenAI Realtime live transcription через WebRTC.
 //
@@ -390,7 +391,38 @@ export async function startRealtimeTranscription(
               text: normalized,
               ...(normalized !== rawTranscript ? { reason: 'brand_normalize_applied' } : {}),
             });
-            // Sprint 58 P0.3 — interim-vs-final mutation diff.
+            // Sprint 62.HOTFIX P0.1 — interim/final truncation reconciliation.
+            // OpenAI Realtime occasionally returns a .completed with a
+            // dramatically truncated transcript relative to the interim
+            // buffer we just accumulated (prod case 2026-05-18: said
+            // «Здравствуйте, меня зовут Григорий, проверяю транскрипцию»,
+            // got «Транскрипция»). Detect and recover by preferring
+            // interim text. See reconcileTruncatedFinal for gates.
+            const reconciled = reconcileTruncatedFinal(interimSnapshot, normalized);
+            const toAppend = reconciled.text;
+            if (reconciled.recovered) {
+              recordLifecycle({
+                segmentId,
+                sessionId: session.traceId ?? 'unknown',
+                source: 'realtime',
+                stage: 'normalized',
+                status: 'ok',
+                text: toAppend,
+                reason: `truncation_recovered: interim=${interimSnapshot.length}c final=${normalized.length}c ratio=${reconciled.ratio.toFixed(1)}`,
+              });
+              try {
+                console.warn('[transcription/truncation-recovered]', {
+                  segmentId,
+                  sessionId: session.traceId,
+                  interimChars: interimSnapshot.length,
+                  finalChars: normalized.length,
+                  ratio: reconciled.ratio.toFixed(2),
+                  interimPreview: interimSnapshot.slice(0, 80),
+                  finalPreview: normalized.slice(0, 80),
+                });
+              } catch { /* ignore */ }
+            }
+            // Sprint 58 P0.3 — interim-vs-final mutation diff (kept).
             // High mutation = OpenAI rewrote what it heard. Surfaces silent
             // paraphrasing. Threshold + suspicious flag inside helper.
             if (interimSnapshot) {
@@ -408,7 +440,7 @@ export async function startRealtimeTranscription(
                 });
               }
             }
-            callbacks.onFinal(normalized, segmentId);
+            callbacks.onFinal(toAppend, segmentId);
           } else {
             try {
               console.debug('[transcription/segment-dropped]', {

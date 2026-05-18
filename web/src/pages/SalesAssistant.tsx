@@ -1847,16 +1847,37 @@ export default function SalesAssistant() {
   // still silent and no transcript chars have arrived yet.
   //
   // isLiveSessionActive is the SINGLE truth source: any of three signals
-  // means "the live meeting has started". Don't gate on hasLiveTranscript:
-  // a silent first 10 seconds must still show «Получить подсказку», not
-  // «Подготовиться ко встрече», otherwise the founder can't get an
-  // opening question until they speak first — exactly backwards.
+  // means "the live meeting has started".
   const isLiveSessionActive =
     liveSessionStarted ||
     meetingState === 'listening' ||
     listening;
   const hasMeaningfulPrepContext = manualTranscript.trim().length >= 20;
-  const inPrepMode = hasMeaningfulPrepContext && !isLiveSessionActive;
+  // Sprint 62.HOTFIX P0.4 — Restore explicit «Подготовиться ко встрече»
+  // default for cold-start state. Production user reported:
+  //   Before: button starts as «Подготовиться ко встрече» → click → plan →
+  //           button flips to «Получить подсказку».
+  //   Now (regression): button immediately says «Получить подсказку»,
+  //           confusing the founder who hasn't prepared anything.
+  //
+  // New rule: when nothing has happened yet (no mic, no plan, no
+  // transcript), DEFAULT to PREP mode. The button «Подготовиться ко
+  // встрече» becomes the obvious next action.
+  //
+  // Transitions OUT of prep mode:
+  //   - mic started (isLiveSessionActive)
+  //   - meetingPlan generated (prep is done)
+  //   - live transcript has any final segment
+  // Any of these → flip to «Получить подсказку».
+  //
+  // Note: Sprint 50's narrow `hasMeaningfulPrepContext &&` gate is
+  // preserved as one of multiple TRUE conditions — a user who pastes
+  // context but does NOT have a plan yet still sees PREP.
+  const hasAnyLiveTranscript = transcript.some((t) => t.final);
+  const inPrepMode =
+    !isLiveSessionActive &&
+    !meetingPlan &&
+    !hasAnyLiveTranscript;
   const analyzeAuthExpired = Boolean(aiError && /Сессия истекла/i.test(aiError));
   const visibleProjects = useMemo(
     () => projects.filter((p) => role !== 'FOUNDER' || !isLegacyDemoProject(p)),
@@ -2129,12 +2150,22 @@ export default function SalesAssistant() {
                 variant="ai"
                 iconLeft={<Sparkles size={14} />}
                 onClick={() => runPrepare()}
-                disabled={!hasMeaningfulPrepContext}
                 loading={isPreparing}
                 className={clsx(actionButtonClass, 'shadow-ai-glow')}
+                title={!hasMeaningfulPrepContext
+                  ? 'Вставьте контекст встречи (минимум 20 символов), затем нажмите «Подготовиться»'
+                  : 'AI соберёт цели, опорные вопросы и план разговора'}
               >
-                <span className="hidden lg:inline">{labels.prepLong}</span>
-                <span className="lg:hidden">{labels.prepShort}</span>
+                {/* Sprint 62.HOTFIX P0.5 — explicit loading copy «Готовлю
+                    встречу…». Without this, the spinner sat next to the same
+                    label «Подготовиться ко встрече», so the user couldn't
+                    tell if anything was happening. */}
+                <span className="hidden lg:inline">
+                  {isPreparing ? 'Готовлю встречу…' : labels.prepLong}
+                </span>
+                <span className="lg:hidden">
+                  {isPreparing ? 'Готовлю…' : labels.prepShort}
+                </span>
               </Button>
             ) : (
               <Button
@@ -2765,11 +2796,14 @@ export default function SalesAssistant() {
               variant="ai"
               iconLeft={<Sparkles size={14} />}
               onClick={() => runPrepare()}
-              disabled={!hasMeaningfulPrepContext}
               loading={isPreparing}
               className="w-full whitespace-nowrap shadow-ai-glow"
+              title={!hasMeaningfulPrepContext
+                ? 'Вставьте контекст встречи (минимум 20 символов), затем нажмите «Подготовиться»'
+                : undefined}
             >
-              {labels.prepShort}
+              {/* Sprint 62.HOTFIX P0.5 — loading copy. */}
+              {isPreparing ? 'Готовлю…' : labels.prepShort}
             </Button>
           ) : (
             <Button

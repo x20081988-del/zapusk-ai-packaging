@@ -33,6 +33,7 @@ import {
 import { buildProjectFinancialFacts } from '../server/src/services/projectFinancialFacts.ts';
 import { estimateTokens, profilePrompt } from '../server/src/services/promptBudget.ts';
 import { evaluateHallucination } from '../web/src/lib/transcriptHallucinationFilter.ts';
+import { reconcileTruncatedFinal } from '../web/src/lib/transcriptReconcile.ts';
 import { recoverUtf8Filename, looksLikeMojibake } from '../server/src/lib/filenameEncoding.ts';
 import { recoverDisplayFilename } from '../web/src/lib/filenameDisplay.ts';
 import {
@@ -569,6 +570,88 @@ section('14. XLSX sheet-aware chunk planning');
   ok('all chunks have non-null sectionLabel', plan.every((p) => Boolean(p.sectionLabel)));
   ok('header survives in every chunk text',
     plan.every((p) => p.text.includes('## Sheet:')));
+}
+
+// ─── Test 15. Interim/final truncation reconciliation (Sprint 62.HOTFIX) ───
+//
+// Regression guard for the production bug observed 2026-05-18:
+//   User said: «Здравствуйте, меня зовут Григорий, проверяю транскрипцию».
+//   UI showed: «Транскрипция» (only the last word).
+//
+// Root cause: OpenAI's .completed event returned a truncated transcript;
+// our pipeline preferred the (shorter, wrong) final over the (longer,
+// correct) interim buffer. reconcileTruncatedFinal now detects this case.
+section('15. Interim/final truncation reconciliation');
+{
+  // The exact production case.
+  const interim = 'Здравствуйте, меня зовут Григорий, проверяю транскрипцию';
+  const final = 'Транскрипция';
+  const r1 = reconcileTruncatedFinal(interim, final);
+  ok('PROD case: full phrase preserved (recovered=true)',
+    r1.recovered && r1.text === interim, `got: ${JSON.stringify(r1)}`);
+  ok('PROD case: forbidden output «only Транскрипция» NOT used',
+    r1.text !== final);
+  // Verify each required substring survives.
+  for (const required of ['Здравствуйте', 'меня зовут Григорий', 'проверяю транскрипцию']) {
+    ok(`PROD case: substring «${required}» preserved`, r1.text.includes(required));
+  }
+
+  // Forbidden behavior: not silently dropping first half.
+  const r2 = reconcileTruncatedFinal('Привет, как дела сегодня', 'дела');
+  ok('short-tail-only final triggers recovery', r2.recovered && r2.text.startsWith('Привет'),
+    `got: ${JSON.stringify(r2)}`);
+
+  // Same-length case: do NOT intervene.
+  const r3 = reconcileTruncatedFinal('Привет', 'Привет');
+  ok('same-length: pass through (no recovery)', !r3.recovered && r3.text === 'Привет');
+
+  // Model-corrected stutter: interim has noise, final is clean and ≥30 chars.
+  // (Should NOT recover — the final is the truth.)
+  const r4 = reconcileTruncatedFinal('пр пр пр привет', 'Привет, как у тебя дела сегодня вечером');
+  ok('long-clean final beats short stutter (no recovery)', !r4.recovered);
+
+  // Empty interim — pass through.
+  const r5 = reconcileTruncatedFinal('', 'Привет');
+  ok('empty interim: no recovery, return final', !r5.recovered && r5.text === 'Привет');
+
+  // Empty final — pass through (returns whatever non-empty there is).
+  const r6 = reconcileTruncatedFinal('Привет', '');
+  ok('empty final: no recovery', !r6.recovered);
+
+  // Long final never triggers recovery even if interim is longer.
+  const longInterim = 'Здравствуйте я хочу обсудить условия инвестиций в проект Atlas '.repeat(3);
+  const longFinal = 'Здравствуйте, я хочу обсудить условия инвестиций в проект Atlas Industrial Park, имею вопросы по чеку и срокам.';
+  const r7 = reconcileTruncatedFinal(longInterim, longFinal);
+  ok('long final never recovers (>30 chars threshold)', !r7.recovered);
+
+  // Stem matches but no length disparity → no recovery.
+  const r8 = reconcileTruncatedFinal('Привет, дела хорошо', 'дела хорошо');
+  ok('comparable lengths: no recovery', !r8.recovered);
+
+  // Final is unrelated to interim — no stem overlap → no recovery.
+  const r9 = reconcileTruncatedFinal('Здравствуйте, меня зовут Григорий', 'Покупка');
+  ok('unrelated final: no recovery (stem mismatch)', !r9.recovered, `got: ${JSON.stringify(r9)}`);
+
+  // Russian morphology: interim ends with accusative «транскрипцию», final
+  // is nominative «Транскрипция». Stem «транскрип» matches at tail → recover.
+  // Interim ≥ 3× final length required to trigger the ratio gate.
+  const r10 = reconcileTruncatedFinal(
+    'Окей сегодня вечером я ещё раз проверяю транскрипцию',
+    'Транскрипция',
+  );
+  ok('Russian case morphology: recovery succeeds via stem match',
+    r10.recovered && r10.text.includes('проверяю транскрипцию'),
+    `got: ${JSON.stringify(r10)}`);
+
+  // Edge: stem appears MID-phrase, not at tail. This is NOT the truncation
+  // pattern OpenAI produces (it keeps the LAST word, not a random one).
+  // Conservative: no recovery — fall through to final.
+  const r11 = reconcileTruncatedFinal(
+    'Я проверяю транскрипцию для тестирования системы прямо сейчас',
+    'Транскрипция',
+  );
+  ok('mid-phrase stem (not at tail): no recovery (conservative)',
+    !r11.recovered, `got: ${JSON.stringify(r11)}`);
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────
