@@ -2,7 +2,92 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-17 (Sprint 61: Project Knowledge Layer for AI Assistant).
+Last updated: 2026-05-18 (Sprint 61.P1: Measurement foundation + critical XLSX bug fix).
+
+---
+
+## Completed (this sprint — Project Knowledge Layer P1 2026-05-18)
+
+P1 = «Foundation для измерений, без которой Sprint 62 (embeddings, multi-file
+reasoning, advanced ranking) — гадание». Главное достижение: впервые в проекте
+у retrieval-стека есть НЕВКУСОВЫЕ метрики и regression-protection.
+
+- [x] **P1.A — Retrieval benchmark.** `npm run benchmark:retrieval` — 12-query
+  benchmark на изолированном 7-source датасете (4 project + 3 global).
+  Считает Recall@1/3/5, MRR, top-1 margin, breakdown по 5 категориям. Сравнивает
+  4 retrieval конфига (baseline / project_only / finance_only / sprint61_auto) +
+  weight sweep (bm25/keyword/projectBoost/finance multipliers). Exits 1 на
+  регрессию > 0.01 MRR vs project_only. `scoringWeights` параметр в
+  `RetrievalOptions` — A/B-testable без правки prod кода.
+- [x] **P1.B — Two critical bug fixes surfaced by benchmark.**
+  - `fileParser.extractXlsx` — `XLSX.readFile()` is not a function в ESM
+    сборке без `XLSX.set_fs(fs)`. **С момента создания проекта НИ ОДИН
+    XLSX не парсился правильно** — финансовые модели возвращали пустую
+    строку. Brief AI никогда не видел Excel-данных. KB ingestion XLSX
+    всегда падал с `knowledge_source_text_too_short`. Switched to
+    `XLSX.read(buffer)`. Validated end-to-end: 12-sheet workbook →
+    1965 chars в 2 chunks, sheet names и числа выживают.
+  - `FINANCE_TRIGGER_PATTERNS` coverage gap: «Use of funds», «деньги»,
+    «финмодель», «cash flow» не триггерили financeBoost. Sprint61_auto
+    MRR 0.576 → 0.674 (+0.10) только от расширения регекса.
+- [x] **P1.C — Token-budget profiler.** `promptBudget.ts` — pure heuristic
+  токенизатор (без tiktoken-deps), `profilePrompt(segments)` возвращает
+  per-segment token estimate + warnings (soft 8K, hard 12K, per-segment 4K).
+  Wired in `analyzeSalesTurn` и `analyzeSalesTurnFast`. Каждый AI вызов
+  теперь логирует `[prompt-budget] total=Nt project_context=… kb=…
+  transcript=…` — оператор видит, куда уходят токены.
+- [x] **P1.D — Ingest stress test.** `npm run stress:ingest` — 7 проверок:
+  end-to-end ingestion 12-sheet XLSX через storage→UploadedFile→KB, дедуп
+  по contentHash, retrieval на «прибыль 2027», 4 failure modes (empty
+  XLSX / corrupt buffer / project_mismatch / file_not_found). Этот тест
+  и обнаружил XLSX.readFile bug.
+- [x] **P1.E — Rollback safety: 3 независимых feature flags.**
+  - `PROJECT_CONTEXT_LAYER_ENABLED` — false → fast verbosity (мини-контекст).
+  - `PROJECT_KB_AUTO_INGEST_ENABLED` — false → upload не индексирует.
+  - `PROJECT_FINANCE_BOOST_ENABLED` — false → financeBoost всегда false.
+  Default — все ON (Sprint 61 поведение). Если в проде какой-то слой
+  регрессирует, отключаем точечно.
+- [x] **Verification.** server/web tsc=0, npm run build OK,
+  `smoke:transcript` / `replay` / `regression:realcalls` /
+  `smoke:project-knowledge` (52 assertions) / `stress:ingest` /
+  `benchmark:retrieval` — все зелёные.
+
+**Headline numbers (P1 benchmark, FTS-on, isolated):**
+
+| config | R@5 | MRR | Δ vs baseline |
+|---|---|---|---|
+| baseline (no project, no finance) | 8.3% | 0.083 | — |
+| project_only | 66.7% | 0.465 | +0.38 |
+| finance_only | 66.7% | 0.569 | +0.49 |
+| sprint61_auto | 66.7% | 0.569 | +0.49 |
+
+Sprint 61 даёт **+0.49 MRR absolute** против baseline на этой выборке.
+finance_numeric категория (4 запроса про метрики) — MRR=0.75 (срабатывает
+надёжно). Weight sweep показал, что кw-heavy (bm25=0.2, keyword=0.4) даёт
+ещё +0.10 MRR — DOCUMENTED, не флипнут в прод до broader query set.
+
+**Что НЕ сделано в P1 (осознанно, на следующие итерации):**
+- Embeddings — не входило в P1. Нужно сначала benchmark baseline.
+- Multi-file reasoning — отдельный sprint, требует кросс-source attention.
+- Per-sheet XLSX chunking — известная limitation в docs/project-knowledge-layer.md.
+- Backfill legacy UploadedFile rows в KB — runbook есть, скрипта нет.
+
+**Files changed**
+- `server/src/scripts/retrievalBenchmark.ts` (new)
+- `server/src/scripts/retrievalBenchmarkFixtures.ts` (new)
+- `server/src/scripts/retrievalBenchmarkDebug.ts` (new)
+- `server/src/scripts/ingestStress.ts` (new)
+- `server/src/services/promptBudget.ts` (new)
+- `server/src/services/fileParser.ts` (XLSX.read fix)
+- `server/src/services/projectContextFormatter.ts` (regex coverage)
+- `server/src/services/salesAssistantService.ts` (flags + prompt-budget logging)
+- `server/src/services/knowledgeService.ts` (scoringWeights option)
+- `server/src/routes/files.ts` (PROJECT_KB_AUTO_INGEST_ENABLED flag)
+- `server/src/routes/knowledge.ts` (search-debug-v2 financeBoost param)
+- `server/src/env.ts` (3 feature flags)
+- `scripts/project-knowledge-smoke.ts` (+5 token-estimator assertions)
+- `package.json` (benchmark:retrieval + stress:ingest scripts)
+- `TASKS.md`
 
 ---
 
