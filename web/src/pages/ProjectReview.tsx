@@ -52,14 +52,14 @@ export default function ProjectReview() {
   }
 
   if (!project) {
-    return <AppLayout title="Проверка материалов"><Card><div className="text-sm text-muted text-center py-8">Загрузка…</div></Card></AppLayout>;
+    return <AppLayout title="Проверка AI-материалов"><Card><div className="text-sm text-muted text-center py-8">Загрузка…</div></Card></AppLayout>;
   }
 
   const briefReview = getReview(idx, 'brief', 'brief');
 
   return (
     <AppLayout
-      title={`${project.name} · Проверка материалов`}
+      title={`${project.name} · Проверка AI-материалов`}
       action={
         <Link to={`/projects/${id}`}>
           <Button variant="ghost" size="sm" iconLeft={<ArrowLeft size={14} />}>К проекту</Button>
@@ -112,7 +112,7 @@ export default function ProjectReview() {
 
       {/* ARTEFACTS TABLE */}
       <Card padded>
-        <CardHeader title="Материалы" subtitle="Оценка каждого материала командой Zapusk" />
+        <CardHeader title="AI-сгенерированные материалы" subtitle="Оценка заданий и готовых материалов командой ZAPUSK AI" />
         <div className="space-y-3">
           {ALL_PROMPT_KINDS.map((kind) => {
             const latest = project.generatedPrompts?.find((p) => p.kind === kind);

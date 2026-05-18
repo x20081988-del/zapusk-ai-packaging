@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Sparkles, FileText, Download, ArrowLeft, ExternalLink, Trash2, Link2, Rocket, ChevronRight, Wand2, Package,
+  Sparkles, FileText, Download, ArrowLeft, ExternalLink, Rocket, ChevronRight, Wand2, Package,
   MessageCircle,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -12,10 +12,7 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { ProjectMaterialCard } from '../components/ui/ProjectMaterialCard';
 import { TransformationShowcase } from '../components/ui/TransformationShowcase';
 import { EmptyState } from '../components/ui/EmptyState';
-import { Modal } from '../components/ui/Modal';
-import { Input } from '../components/ui/Input';
-import { UploadZone } from '../components/ui/UploadZone';
-import { api, downloadBlob, type ArtefactReview, type InvestmentTrack, type PackagingJob, type Project, type UploadedFile } from '../lib/api';
+import { api, downloadBlob, type ArtefactReview, type InvestmentTrack, type PackagingJob, type Project } from '../lib/api';
 import {
   formatMoney, formatPercent, formatDate, parseObj,
   STAGE_LABELS, INVESTOR_TYPE_LABELS,
@@ -34,11 +31,11 @@ import { AIDiscoverabilityScore } from '../components/ui/AIDiscoverabilityScore'
 import { InvestmentJourney } from '../components/project/InvestmentJourney';
 import { TrackPicker } from '../components/project/TrackPicker';
 import { ActivityHistory } from '../components/project/ActivityHistory';
-import { recoverDisplayFilename } from '../lib/filenameDisplay';
 import { MaterialHistoryDrawer, type MaterialKind } from '../components/ui/MaterialHistoryDrawer';
 import { listMeetings } from '../lib/salesSessions';
 import { listOutcomes, OUTCOME_LABELS, type AssistantOutcome } from '../lib/assistantOutcomes';
 import { History } from 'lucide-react';
+import { ProjectMaterialsWorkspace } from '../components/project/ProjectMaterialsWorkspace';
 
 export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
@@ -47,7 +44,6 @@ export default function ProjectCockpit() {
   const [generatingBrief, setGeneratingBrief] = useState(false);
   const [generatingKind, setGeneratingKind] = useState<string | null>(null);
   const [generatingFull, setGeneratingFull] = useState(false);
-  const [linkOpen, setLinkOpen] = useState(false);
   const [reviews, setReviews] = useState<ArtefactReview[]>([]);
   // Sprint 21: путь привлечения инвестиций. jobs нужны для расчёта статусов
   // пунктов; trackPickerOpen открывается автоматически если трек не выбран.
@@ -105,29 +101,6 @@ export default function ProjectCockpit() {
 
   const { steps, percent } = computeProgress(project);
   const napkin = parseObj<Record<string, unknown>>(project.brief?.napkin, {});
-
-  async function uploadFiles(files: File[]) {
-    if (!id || files.length === 0) return;
-    const form = new FormData();
-    form.append('category', 'pitch');
-    files.forEach((f) => form.append('files', f));
-    await api.upload(`/api/files/${id}/upload`, form);
-    load();
-  }
-
-  async function addLink(url: string, note: string) {
-    if (!id) return;
-    await api.post(`/api/files/${id}/link`, { url, note, category: 'reference' });
-    load();
-  }
-
-  async function removeFile(fileId: string) {
-    if (!id) return;
-    // Sprint 30: confirm перед archive (soft-delete).
-    if (!window.confirm('Убрать файл из материалов? Файл уйдёт в корзину на 30 дней — админ сможет восстановить.')) return;
-    await api.delete(`/api/files/${id}/${fileId}`);
-    load();
-  }
 
   async function generateBrief() {
     if (!id) return;
@@ -204,7 +177,7 @@ export default function ProjectCockpit() {
             Рабочий стол
           </Button>
           <Link to={`/projects/${id}/review`}>
-            <Button variant="secondary" size="sm">Проверка материалов</Button>
+            <Button variant="secondary" size="sm">Проверка AI-материалов</Button>
           </Link>
           <Link to="/personal-manager">
             <Button variant="secondary" size="sm" iconLeft={<MessageCircle size={14} />}>Менеджер</Button>
@@ -397,30 +370,11 @@ export default function ProjectCockpit() {
         </div>
       </Card>
 
-      {/* Sprint 14: «Материалы» и «Бизнес на салфетке» — фаундер видит, что
-          загрузил и что собрала система. */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* MATERIALS */}
-        <Card padded className="lg:col-span-1">
-          <CardHeader
-            title="Материалы"
-            subtitle={`${project.files?.length ?? 0} загружено`}
-            action={
-              <Button size="sm" variant="ghost" iconLeft={<Link2 size={12} />} onClick={() => setLinkOpen(true)}>
-                Ссылка
-              </Button>
-            }
-          />
-          <UploadZone onFiles={uploadFiles} hint="Презентация, финансовая модель, описание, логотип, референсы" />
-          {project.files && project.files.length > 0 && (
-            <ul className="mt-4 space-y-2">
-              {project.files.map((f) => <FileRow key={f.id} file={f} onRemove={() => removeFile(f.id)} />)}
-            </ul>
-          )}
-        </Card>
+      <ProjectMaterialsWorkspace projectId={id!} onChanged={load} />
 
-        {/* NAPKIN */}
-        <Card padded accent={project.brief ? 'ai' : null} className="lg:col-span-2">
+      {/* Sprint 14: «Бизнес на салфетке» — фаундер видит, что собрала система. */}
+      <div className="mb-6">
+        <Card padded accent={project.brief ? 'ai' : null}>
           <CardHeader
             title="Бизнес на салфетке"
             subtitle={project.brief ? `Разбор v${project.brief.version} · ${briefStatus.longLabel}` : 'Будет собран после генерации брифа'}
@@ -513,7 +467,7 @@ export default function ProjectCockpit() {
       {/* READY MATERIALS */}
       <Card padded className="mb-6">
         <CardHeader
-          title="Материалы"
+          title="AI-сгенерированные материалы"
           subtitle="Здесь хранятся готовые инвестиционные материалы проекта: презентации, финансовые модели, посадочные страницы и краткие материалы для инвесторов. Вы можете открыть материал, скачать его, утвердить или отправить на доработку. Задание для создания материала доступно отдельно."
           action={
             <Link to={`/projects/${id}/packaging`}>
@@ -572,7 +526,6 @@ export default function ProjectCockpit() {
         </div>
       </Card>
 
-      <AddLinkModal open={linkOpen} onClose={() => setLinkOpen(false)} onAdd={addLink} />
       <TrackPicker
         open={trackPickerOpen}
         current={project.investmentTrack ?? null}
@@ -624,43 +577,6 @@ function NapkinField({ label, value }: { label: string; value?: string }) {
       <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">{label}</div>
       <div className="text-sm text-primary leading-snug">{value || <span className="text-faint">—</span>}</div>
     </div>
-  );
-}
-
-function FileRow({ file, onRemove }: { file: UploadedFile; onRemove: () => void }) {
-  const isLink = Boolean(file.url);
-  return (
-    <li className="flex items-center gap-3 px-3 py-2 rounded-md bg-canvas/50 border border-hairline group">
-      <div className="w-8 h-8 rounded-md bg-surface border border-line flex items-center justify-center flex-shrink-0">
-        {isLink ? <Link2 size={13} className="text-secondary" /> : <FileText size={13} className="text-secondary" />}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-primary truncate">{recoverDisplayFilename(file.originalName)}</div>
-        <div className="text-[10px] text-muted">
-          {isLink ? file.url : `${Math.round(file.size / 1024)} КБ · ${file.category}`}
-        </div>
-      </div>
-      <button onClick={onRemove} className="text-muted hover:text-danger opacity-0 group-hover:opacity-100 transition-opacity">
-        <Trash2 size={13} />
-      </button>
-    </li>
-  );
-}
-
-function AddLinkModal({ open, onClose, onAdd }: { open: boolean; onClose: () => void; onAdd: (url: string, note: string) => void }) {
-  const [url, setUrl] = useState('');
-  const [note, setNote] = useState('');
-  return (
-    <Modal open={open} onClose={onClose} title="Добавить ссылку">
-      <div className="p-5 space-y-4">
-        <Input label="Ссылка" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://docs.google.com/…" />
-        <Input label="Подпись" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Финансовая модель" />
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button onClick={() => { onAdd(url, note); setUrl(''); setNote(''); onClose(); }}>Добавить</Button>
-        </div>
-      </div>
-    </Modal>
   );
 }
 
@@ -722,4 +638,3 @@ function outcomeTone(type: string): 'success' | 'info' | 'warning' | 'danger' | 
   if (type === 'ghosted') return 'warning';
   return 'neutral';
 }
-

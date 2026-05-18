@@ -184,6 +184,9 @@ export interface Project {
   brief?: ProjectBrief | null;
   generatedPrompts?: GeneratedPrompt[];
   generatedDocs?: GeneratedDocument[];
+  sourceMaterialsCount?: number;
+  generatedMaterialsCount?: number;
+  aiContextMaterialsCount?: number;
 }
 
 export interface UploadedFile {
@@ -197,6 +200,59 @@ export interface UploadedFile {
   path: string;
   url: string | null;
   createdAt: string;
+}
+
+export type MaterialAiContextStatus = 'connected' | 'analyzing' | 'storage_only' | 'error';
+
+export interface SourceMaterialRegistryItem {
+  id: string;
+  materialType: 'source';
+  version: number;
+  file: UploadedFile;
+  aiContext: {
+    status: MaterialAiContextStatus;
+    label: string;
+    badges: string[];
+    knowledgeSourceId: string | null;
+    knowledgeSourceStatus: string | null;
+    scope: string | null;
+    sourceType: string | null;
+    projectId: string | null;
+    uploadedFileId: string | null;
+    isCandidate: boolean | null;
+    visibility: string | null;
+    chunkCount: number;
+    numericFactsCount: number;
+    retrievalCount: number;
+    lastAnalyzedAt: string | null;
+    lastRetrievedAt: string | null;
+  };
+}
+
+export interface GeneratedMaterialRegistryItem {
+  id: string;
+  materialType: 'generated';
+  generatedType: 'document' | 'prompt';
+  kind: string;
+  title: string;
+  version: number;
+  format: string;
+  createdAt: string;
+}
+
+export interface ProjectMaterialsRegistry {
+  sourceMaterials: SourceMaterialRegistryItem[];
+  generatedMaterials: GeneratedMaterialRegistryItem[];
+  summary: {
+    sourceCount: number;
+    generatedCount: number;
+    aiContextCount: number;
+    analyzingCount: number;
+    storageOnlyCount: number;
+    errorCount: number;
+    chunkCount: number;
+    numericFactsCount: number;
+  };
 }
 
 export interface ProjectBrief {

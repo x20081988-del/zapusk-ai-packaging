@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Activity, Clock, FileText, Headphones, MessageCircle, Sparkles, UserRound,
+  Activity, Clock, Database, FileText, Headphones, MessageCircle, Sparkles, UserRound,
 } from 'lucide-react';
 import { Card, CardHeader } from '../ui/Card';
 import { EmptyState } from '../ui/EmptyState';
@@ -9,7 +9,7 @@ import {
 } from '../../lib/aiProviders';
 import { getAuth } from '../../lib/auth';
 import { recoverDisplayFilename } from '../../lib/filenameDisplay';
-import type { PackagingJob, Project, UploadedFile } from '../../lib/api';
+import { api, type PackagingJob, type Project, type ProjectMaterialsRegistry, type UploadedFile } from '../../lib/api';
 
 // Sprint 21 — история активности по проекту. Сводит в одну ленту:
 //   • загруженные материалы (UploadedFile)
@@ -25,7 +25,7 @@ interface Props {
   jobs: PackagingJob[];
 }
 
-type EventKind = 'file_uploaded' | 'brief_updated' | 'material_ready' | 'material_review' | 'material_in_progress';
+type EventKind = 'file_uploaded' | 'file_indexed' | 'brief_updated' | 'material_ready' | 'material_review' | 'material_in_progress';
 
 interface ActivityEvent {
   id: string;
@@ -38,8 +38,17 @@ interface ActivityEvent {
 export function ActivityHistory({ project, jobs }: Props) {
   const role = getAuth()?.role ?? 'client';
   const showVendors = canSeeAIVendors(role);
+  const [registry, setRegistry] = useState<ProjectMaterialsRegistry | null>(null);
 
-  const events = useMemo(() => buildEvents(project, jobs, showVendors), [project, jobs, showVendors]);
+  useEffect(() => {
+    let alive = true;
+    api.get<ProjectMaterialsRegistry>(`/api/files/${project.id}/registry`)
+      .then((r) => { if (alive) setRegistry(r); })
+      .catch(() => { if (alive) setRegistry(null); });
+    return () => { alive = false; };
+  }, [project.id]);
+
+  const events = useMemo(() => buildEvents(project, jobs, showVendors, registry), [project, jobs, showVendors, registry]);
 
   return (
     <Card padded>
@@ -79,7 +88,7 @@ export function ActivityHistory({ project, jobs }: Props) {
   );
 }
 
-function buildEvents(project: Project, jobs: PackagingJob[], showVendors: boolean): ActivityEvent[] {
+function buildEvents(project: Project, jobs: PackagingJob[], showVendors: boolean, registry: ProjectMaterialsRegistry | null): ActivityEvent[] {
   const out: ActivityEvent[] = [];
 
   // Файлы
@@ -90,6 +99,18 @@ function buildEvents(project: Project, jobs: PackagingJob[], showVendors: boolea
       kind: 'file_uploaded',
       title: `${labelForFile(f)} · ${recoverDisplayFilename(f.originalName)}`,
       detail: humanFileMeta(f),
+    });
+  }
+
+  // AI-context ingestion events from the unified materials registry.
+  for (const item of registry?.sourceMaterials ?? []) {
+    if (item.aiContext.status !== 'connected') continue;
+    out.push({
+      id: `file-indexed:${item.file.id}`,
+      at: item.aiContext.lastAnalyzedAt ?? item.file.createdAt,
+      kind: 'file_indexed',
+      title: `Файл добавлен в AI-контекст · ${recoverDisplayFilename(item.file.originalName)}`,
+      detail: `Извлечено ${item.aiContext.chunkCount} knowledge chunks · найдено ${item.aiContext.numericFactsCount} numeric facts · AI обновил knowledge base проекта.`,
     });
   }
 
@@ -202,6 +223,7 @@ function isIngestibleFile(f: UploadedFile): boolean {
 function iconFor(kind: EventKind) {
   switch (kind) {
     case 'file_uploaded': return <FileText size={14} />;
+    case 'file_indexed': return <Database size={14} />;
     case 'brief_updated': return <Sparkles size={14} />;
     case 'material_ready': return <Headphones size={14} />;
     case 'material_review': return <MessageCircle size={14} />;
@@ -213,6 +235,7 @@ function iconFor(kind: EventKind) {
 function iconWrapClass(kind: EventKind): string {
   switch (kind) {
     case 'file_uploaded': return 'border-line bg-elevated text-secondary';
+    case 'file_indexed': return 'border-ai/30 bg-ai/10 text-ai-glow';
     case 'brief_updated': return 'border-ai/30 bg-ai/10 text-ai-glow';
     case 'material_ready': return 'border-success/30 bg-success/10 text-success';
     case 'material_review': return 'border-zapusk/30 bg-zapusk/10 text-zapusk-400';

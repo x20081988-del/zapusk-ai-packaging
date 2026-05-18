@@ -9,6 +9,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { api, type ArtefactReview, type Project } from '../lib/api';
 import { getDemoMaterials } from '../lib/demoMaterials';
 import { buildReviewIndex, getReview } from '../lib/reviews';
+import { ProjectMaterialsWorkspace } from '../components/project/ProjectMaterialsWorkspace';
 
 export default function ProjectPackaging() {
   const { id } = useParams<{ id: string }>();
@@ -82,7 +83,7 @@ export default function ProjectPackaging() {
 
   return (
     <AppLayout
-      title={project ? `${project.name} · Материалы проекта` : 'Материалы проекта'}
+      title={project ? `${project.name} · Материалы и AI-контекст` : 'Материалы и AI-контекст'}
       action={
         <div className="flex items-center gap-2">
           <Link to={`/projects/${id}`}>
@@ -97,9 +98,11 @@ export default function ProjectPackaging() {
         </div>
       }
     >
+      {id && <ProjectMaterialsWorkspace projectId={id} onChanged={load} />}
+
       <Card padded className="mb-6">
         <CardHeader
-          title="Материалы проекта"
+          title="AI-сгенерированные материалы"
           subtitle="Здесь хранятся готовые инвестиционные материалы проекта: презентации, финансовые модели, посадочные страницы и краткие материалы для инвесторов. Вы можете открыть материал, скачать его, утвердить или отправить на доработку. Задание для создания материала доступно отдельно."
         />
         {materials.length === 0 ? (

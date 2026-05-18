@@ -7,6 +7,8 @@ import { authMiddleware, getUser, normalizeRole } from '../auth.js';
 import { storage } from '../services/storage.js';
 import { recordAudit } from '../lib/audit.js';
 import { isAdminLike, requireNotInvestor } from '../lib/ownership.js';
+import { env } from '../env.js';
+import { scheduleProjectFileIngest } from '../services/projectKnowledgeIngest.js';
 
 export const projectsRoutes = Router();
 projectsRoutes.use(authMiddleware);
@@ -62,9 +64,37 @@ projectsRoutes.get('/', async (req, res) => {
     include: {
       files: { where: { archivedAt: null }, select: { id: true } },
       brief: { select: { version: true, updatedAt: true } },
+      _count: { select: { generatedDocs: true, generatedPrompts: true } },
     },
   });
-  res.json({ projects });
+  const projectIds = projects.map((p) => p.id);
+  const aiContextRows = projectIds.length
+    ? await prisma.knowledgeSource.groupBy({
+        by: ['projectId'],
+        where: {
+          projectId: { in: projectIds },
+          uploadedFileId: { not: null },
+          status: 'published',
+          archivedAt: null,
+        },
+        _count: { _all: true },
+      })
+    : [];
+  const aiContextByProject = new Map<string, number>();
+  for (const row of aiContextRows) {
+    if (row.projectId) aiContextByProject.set(row.projectId, row._count._all);
+  }
+  res.json({
+    projects: projects.map((p) => {
+      const { _count, ...project } = p;
+      return {
+        ...project,
+        sourceMaterialsCount: project.files.length,
+        generatedMaterialsCount: _count.generatedDocs + _count.generatedPrompts,
+        aiContextMaterialsCount: aiContextByProject.get(project.id) ?? 0,
+      };
+    }),
+  });
 });
 
 projectsRoutes.post('/', async (req, res) => {
@@ -96,7 +126,7 @@ projectsRoutes.post('/', async (req, res) => {
     const rel = path.join(project.id, diskName);
     const buffer = Buffer.from(body, 'utf8');
     await storage.saveBuffer(rel, buffer);
-    await prisma.uploadedFile.create({
+    const row = await prisma.uploadedFile.create({
       data: {
         projectId: project.id,
         filename: diskName,
@@ -107,6 +137,12 @@ projectsRoutes.post('/', async (req, res) => {
         path: rel,
       },
     });
+    if (env.PROJECT_KB_AUTO_INGEST_ENABLED) {
+      scheduleProjectFileIngest(row.id, project.id, {
+        environment: workspaceToKnowledgeEnv(user.workspaceStatus ?? null),
+        createdById: user.id,
+      });
+    }
   }
   res.status(201).json({ project });
 });
@@ -200,3 +236,9 @@ projectsRoutes.delete('/:id', async (req, res) => {
   });
   res.json({ ok: true, archivedAt: new Date().toISOString() });
 });
+
+function workspaceToKnowledgeEnv(status: string | null): 'production' | 'demo' | 'synthetic' {
+  if (status === 'demo') return 'demo';
+  if (status === 'synthetic') return 'synthetic';
+  return 'production';
+}

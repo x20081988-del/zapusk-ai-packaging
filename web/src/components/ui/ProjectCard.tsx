@@ -61,8 +61,12 @@ export function ProjectCard({ project, percent }: { project: Project; percent: n
             <ProgressBar value={brief.completion} />
           )}
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-muted">
-              {(project.files?.length ?? 0)} файлов
+            <span className="text-[11px] text-muted min-w-0 truncate">
+              Исходные: {project.sourceMaterialsCount ?? project.files?.length ?? 0}
+              {' · '}
+              AI: {project.aiContextMaterialsCount ?? 0}
+              {' · '}
+              Сгенерировано: {project.generatedMaterialsCount ?? 0}
             </span>
             <Button
               size="sm"

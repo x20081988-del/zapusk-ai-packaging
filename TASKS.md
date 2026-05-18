@@ -2,7 +2,51 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-18 (Sprint 62: Realtime visibility audit + retrieval debug UI + KB backfill + sheet-aware XLSX + numeric facts + observability).
+Last updated: 2026-05-18 (Sprint 62.P0: Project Materials Flow — Source Materials vs AI-generated Materials + AI Context Visibility).
+
+---
+
+## Completed (this sprint — Sprint 62.P0 Project Materials Flow 2026-05-18)
+
+**Что сделано**
+- Раздел «Материалы проекта» пересобран в понятный workspace: отдельно видны исходные материалы проекта, AI-контекст и AI-сгенерированные материалы.
+- Добавлен read-only registry endpoint `GET /api/files/:projectId/registry`, который собирает единый список `UploadedFile` + linked `KnowledgeSource` + `KnowledgeChunk` count + `ProjectNumericFact` count + generated prompt/document metadata.
+- На каждом source-файле показываются AI-context статусы и badges: `AI-контекст подключён`, `AI анализируется`, `Только хранение`, `Ошибка анализа`, `Текст извлечён`, `XLSX структурирован`, `Numeric facts extracted`.
+- Добавлен AI Context Inspector: «AI использует в контексте» с файлами, chunks, numeric facts и временем последнего анализа.
+- Добавлен lifecycle-пояснитель: Upload → извлечение текста → chunking → AI indexing → financial facts → AI Assistant.
+- Контекст, введённый при создании проекта, теперь тоже отправляется в Project KB auto-ingest как `Контекст проекта.txt`.
+- Карточка проекта больше не пишет просто «2 файла»: теперь показывает `Исходные`, `AI`, `Сгенерировано`.
+- История проекта получила AI-ingestion события: «Файл добавлен в AI-контекст», chunks и numeric facts.
+- `/projects/:id/packaging` переименован по смыслу в «Материалы и AI-контекст», а review-flow — в «Проверка AI-материалов», чтобы не смешивать source и generated.
+
+**Какие файлы изменены**
+- `server/src/routes/files.ts`
+- `server/src/routes/projects.ts`
+- `web/src/lib/api.ts`
+- `web/src/components/project/ProjectMaterialsWorkspace.tsx`
+- `web/src/components/project/ActivityHistory.tsx`
+- `web/src/components/ui/ProjectCard.tsx`
+- `web/src/pages/ProjectCockpit.tsx`
+- `web/src/pages/ProjectPackaging.tsx`
+- `web/src/pages/ProjectReview.tsx`
+- `TASKS.md`
+
+**Проверки**
+- `cd server && npx tsc --noEmit` — passed
+- `cd web && npx tsc --noEmit` — passed
+- `npm run build` — passed
+- Local API smoke: `GET /api/files/:projectId/registry` под admin JWT — returned source summary, AI-context status, chunk count and numeric facts count.
+
+**Осталось**
+- Manual browser QA под реальным активным пользователем: визуально проверить `/projects`, `/projects/:id`, `/projects/:id/packaging` на desktop/mobile.
+- При необходимости добавить persisted ingestion status в БД: сейчас ошибки parse/unsupported видны в логах, а UI выводит best-effort статус по linked KnowledgeSource/chunks.
+
+**Known risks**
+- Без новой таблицы ingestion-state UI не может отличить «анализ ещё идёт» от «старый файл был загружен до auto-ingest/backfill» или «parse failed до создания KnowledgeSource».
+- Версионность сейчас inferred из filename (`v2`, `СТАЛО`, `final`) и metadata generated artifacts; настоящая material lineage/version graph остаётся future architecture.
+
+**Next recommended task**
+- Sprint 62.P1: добавить persisted `ProjectMaterial` / `MaterialVersion` layer или lightweight ingestion status table, чтобы статусы `parsed/skipped_short/unsupported/error` были доступны UI без чтения Render logs.
 
 ---
 
