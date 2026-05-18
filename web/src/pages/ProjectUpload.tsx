@@ -7,6 +7,7 @@ import { UploadZone } from '../components/ui/UploadZone';
 import { Button } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Input';
 import { api, downloadBlob, type Project, type UploadedFile } from '../lib/api';
+import { recoverDisplayFilename } from '../lib/filenameDisplay';
 
 const CATEGORIES = [
   { value: 'pitch', label: 'Презентация' },
@@ -116,7 +117,7 @@ function Row({ projectId, file, onRemove }: { projectId: string; file: UploadedF
         {isLink ? <Link2 size={13} className="text-secondary" /> : <FileText size={13} className="text-secondary" />}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-primary truncate">{file.originalName}</div>
+        <div className="text-sm font-medium text-primary truncate">{recoverDisplayFilename(file.originalName)}</div>
         <div className="text-xs text-muted">
           {isLink ? file.url : `${Math.round(file.size / 1024)} КБ · ${file.category}`}
         </div>
@@ -133,7 +134,7 @@ function Row({ projectId, file, onRemove }: { projectId: string; file: UploadedF
         </a>
       ) : (
         <button
-          onClick={() => downloadBlob(`/api/files/${projectId}/${file.id}/download`, file.originalName)}
+          onClick={() => downloadBlob(`/api/files/${projectId}/${file.id}/download`, recoverDisplayFilename(file.originalName))}
           className="text-muted hover:text-primary transition-colors"
           title="Скачать"
         >

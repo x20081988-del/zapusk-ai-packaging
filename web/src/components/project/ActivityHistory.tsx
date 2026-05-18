@@ -8,6 +8,7 @@ import {
   outputTypeLabel, canSeeAIVendors, providerLabel, toolClientLabel,
 } from '../../lib/aiProviders';
 import { getAuth } from '../../lib/auth';
+import { recoverDisplayFilename } from '../../lib/filenameDisplay';
 import type { PackagingJob, Project, UploadedFile } from '../../lib/api';
 
 // Sprint 21 — история активности по проекту. Сводит в одну ленту:
@@ -87,7 +88,7 @@ function buildEvents(project: Project, jobs: PackagingJob[], showVendors: boolea
       id: `file:${f.id}`,
       at: f.createdAt,
       kind: 'file_uploaded',
-      title: `Загружен материал · ${f.originalName}`,
+      title: `${labelForFile(f)} · ${recoverDisplayFilename(f.originalName)}`,
       detail: humanFileMeta(f),
     });
   }
@@ -154,7 +155,24 @@ function buildEvents(project: Project, jobs: PackagingJob[], showVendors: boolea
 function humanFileMeta(f: UploadedFile): string {
   const sizeKb = Math.max(1, Math.round(f.size / 1024));
   if (f.url) return f.url;
-  return `${sizeKb} КБ · ${categoryLabel(f.category)}`;
+  // Sprint 61.HOTFIX (P1) — append KB-ingestion hint so founder knows
+  // which files actually fed the AI context vs. which were just stored.
+  const ingestHint = isIngestibleFile(f) ? '· добавлено в AI-контекст' : '· текст не извлечён';
+  return `${sizeKb} КБ · ${categoryLabel(f.category)} ${ingestHint}`;
+}
+
+// Sprint 61.HOTFIX (P1) — нагляднее, чем «Загружен материал».
+function labelForFile(f: UploadedFile): string {
+  if (f.url) return 'Добавлена ссылка';
+  switch (f.category) {
+    case 'pitch':       return 'Загружена презентация';
+    case 'financial':   return 'Загружена финмодель';
+    case 'description': return 'Загружено описание';
+    case 'reference':   return 'Загружен референс';
+    case 'image':       return 'Загружено изображение';
+    case 'logo':        return 'Загружен логотип';
+    default:            return 'Загружен материал';
+  }
 }
 
 function categoryLabel(cat: string): string {
@@ -167,6 +185,18 @@ function categoryLabel(cat: string): string {
     case 'reference': return 'референс';
     default: return cat;
   }
+}
+
+// Sprint 61.HOTFIX (P1) — match server-side isIngestibleMime in
+// projectKnowledgeIngest.ts. Files whose text we can extract end up in
+// project-scoped KB; images/audio/video do not. Keep these in sync.
+function isIngestibleFile(f: UploadedFile): boolean {
+  if (f.url) return false; // external link — not indexed
+  const ext = (f.originalName.match(/\.[a-z0-9]+$/i)?.[0] ?? '').toLowerCase();
+  if (ext === '.pdf' || ext === '.docx' || ext === '.xlsx' || ext === '.txt' || ext === '.md') return true;
+  const mime = f.mimeType ?? '';
+  if (mime.startsWith('text/')) return true;
+  return false;
 }
 
 function iconFor(kind: EventKind) {

@@ -70,7 +70,7 @@ export function MissingDataPanel({
                 <span className="text-[10px] text-muted font-num">{items.length}</span>
               </div>
               {items.length === 0 ? (
-                <p className="text-[11px] text-faint">— покрыто</p>
+                <p className="text-[11px] text-faint">— вопросы закрыты</p>
               ) : (
                 <ul className="space-y-1.5">
                   {items.map((q, i) => (

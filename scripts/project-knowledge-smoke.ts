@@ -32,6 +32,9 @@ import {
 } from '../server/src/services/projectContextFormatter.ts';
 import { buildProjectFinancialFacts } from '../server/src/services/projectFinancialFacts.ts';
 import { estimateTokens, profilePrompt } from '../server/src/services/promptBudget.ts';
+import { evaluateHallucination } from '../web/src/lib/transcriptHallucinationFilter.ts';
+import { recoverUtf8Filename, looksLikeMojibake } from '../server/src/lib/filenameEncoding.ts';
+import { recoverDisplayFilename } from '../web/src/lib/filenameDisplay.ts';
 
 // Reach into projectKnowledgeIngest for sourceType picker without exporting
 // internals — we test it via a duplicated lookup table here to avoid forcing
@@ -280,6 +283,115 @@ section('8. Token estimator (Sprint 61.P1)');
   // segment_oversize — 10_000 cyrillic = 5_000 tokens > MAX_SEGMENT(4000).
   const oversized = profilePrompt([{ label: 'transcript', text: 'А'.repeat(10_000) }]);
   ok('segment_oversize warning emitted', oversized.warnings.some((w) => w.startsWith('segment_oversize')));
+}
+
+// ─── Test 9. Dictation hallucination filter (Sprint 61.HOTFIX) ─────────────
+section('9. Dictation hallucination filter');
+{
+  // Observed prod hallucinations — all must be DROPPED in dictation surface.
+  const dictationHallucinations = [
+    'Наши переговоры продолжаются',
+    'наши переговоры продолжаются',
+    'НАШИ ПЕРЕГОВОРЫ ПРОДОЛЖАЮТСЯ',
+    'Это задача',
+    'Это задача.',
+    'Это задача...',
+    'это задача…',
+    'Видимо, потому что мы меняемся',
+    'видимо, потому что мы меняемся',
+    'Видимо, потому что мы меняемся.',
+    'сидим',
+    'сидим.',
+    'Сидим',
+    // Known prompt-leakage — drop in EVERY surface.
+    'Мы всегда помним, что нужно учитывать стадию проекта и какой чек нужен от инвестора',
+    // Classic isolated short pattern — drop after silence.
+    'Чек или доля?',
+    'Ну, если вы настаиваете…',
+  ];
+  for (const text of dictationHallucinations) {
+    const decision = evaluateHallucination(text, { surface: 'dictation', lastFinalTs: null });
+    ok(`drop "${text.slice(0, 32)}"`, decision.drop, `reason=${decision.reason ?? '-'}`);
+  }
+  // Legitimate dictation MUST pass.
+  const legitDictation = [
+    'Это компания в логистике для маркетплейсов',
+    'Мы зарабатываем на комиссии с продаж',
+    'Команда — три человека: я, CFO и операционный директор',
+    'Сделаем оценку проекта через два месяца',
+    'Да',
+    'Нет, спасибо',
+  ];
+  for (const text of legitDictation) {
+    const decision = evaluateHallucination(text, { surface: 'dictation', lastFinalTs: null });
+    ok(`PASS "${text.slice(0, 32)}"`, !decision.drop, `decision=${JSON.stringify(decision)}`);
+  }
+  // Meeting surface: «Это задача» / «сидим» can be legitimate investor speech.
+  // The dictation-specific patterns must NOT trigger in meeting surface.
+  const meetingLegit = [
+    'Это задача масштабирования',
+    'Сидим, обсуждаем сделку',
+    'Видимо, потому что мы меняемся вместе с рынком',
+    'Наши переговоры продолжаются — давайте обсудим payment terms',
+  ];
+  for (const text of meetingLegit) {
+    const decision = evaluateHallucination(text, { surface: 'meeting', lastFinalTs: null });
+    ok(`meeting PASS "${text.slice(0, 32)}"`, !decision.drop, `decision=${JSON.stringify(decision)}`);
+  }
+  // Known advice leakage drops in BOTH surfaces.
+  const advice = 'Мы всегда помним, что нужно учитывать стадию проекта, какой чек нужен от инвестора';
+  ok('meeting drops known advice leakage',
+    evaluateHallucination(advice, { surface: 'meeting', lastFinalTs: null }).drop);
+  ok('dictation drops known advice leakage',
+    evaluateHallucination(advice, { surface: 'dictation', lastFinalTs: null }).drop);
+  // Isolation window — short suspicious pattern within 8s of last final → KEEP.
+  const recentFinalTs = Date.now() - 1_000;
+  const decisionRecent = evaluateHallucination('Чек или доля?', { surface: 'meeting', lastFinalTs: recentFinalTs });
+  ok('isolation: keep "Чек или доля?" right after legit speech', !decisionRecent.drop);
+  // Outside isolation window → DROP.
+  const oldFinalTs = Date.now() - 20_000;
+  const decisionOld = evaluateHallucination('Чек или доля?', { surface: 'meeting', lastFinalTs: oldFinalTs });
+  ok('isolation: drop "Чек или доля?" after 20s silence', decisionOld.drop);
+}
+
+// ─── Test 10. Mojibake filename recovery (Sprint 61.HOTFIX) ────────────────
+section('10. Mojibake filename recovery');
+{
+  // Real production mojibake samples.
+  // "Презентация.pdf" encoded as UTF-8 bytes, decoded as latin1:
+  const mojibake1 = 'ÐÑÐµÐ·ÐµÐ½ÑÐ°ÑÐ¸Ñ.pdf';
+  // Compose programmatically to make sure pattern matches what multer produces:
+  const programmatic = Buffer.from('Презентация.pdf', 'utf8').toString('latin1');
+  ok('programmatic mojibake recovers to Презентация.pdf',
+    recoverUtf8Filename(programmatic) === 'Презентация.pdf',
+    `got "${recoverUtf8Filename(programmatic)}"`);
+  // Same on the display side (browser-side helper).
+  ok('display helper recovers programmatic mojibake',
+    recoverDisplayFilename(programmatic) === 'Презентация.pdf',
+    `got "${recoverDisplayFilename(programmatic)}"`);
+  // Hand-crafted version from above:
+  const recovered1 = recoverUtf8Filename(mojibake1);
+  ok('hand-crafted mojibake recovers something with Cyrillic',
+    /[Ѐ-ӿ]/.test(recovered1), `got "${recovered1}"`);
+  // Clean UTF-8 filename should pass through unchanged.
+  ok('clean Cyrillic passes through unchanged',
+    recoverUtf8Filename('Финмодель v3.xlsx') === 'Финмодель v3.xlsx');
+  // ASCII filename should pass through unchanged.
+  ok('ASCII passes through unchanged',
+    recoverUtf8Filename('pitch_deck.pdf') === 'pitch_deck.pdf');
+  // Empty / null safety.
+  ok('empty string returns empty',
+    recoverUtf8Filename('') === '');
+  // looksLikeMojibake detector.
+  ok('looksLikeMojibake detects programmatic mojibake',
+    looksLikeMojibake(programmatic));
+  ok('looksLikeMojibake says no on clean cyrillic',
+    !looksLikeMojibake('Презентация.pdf'));
+  ok('looksLikeMojibake says no on ASCII',
+    !looksLikeMojibake('pitch_deck.pdf'));
+  // Mixed Latin chars that aren't mojibake should not be falsely recovered.
+  ok('café.pdf is preserved (legit Latin-1)',
+    recoverUtf8Filename('café.pdf') === 'café.pdf');
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────

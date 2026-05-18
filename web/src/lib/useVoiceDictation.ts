@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { startRealtimeTranscription, type RealtimeSession } from './realtimeTranscription';
+import { evaluateHallucination } from './transcriptHallucinationFilter';
 
 type DictationStatus = 'idle' | 'connecting' | 'listening' | 'recognizing' | 'fallback' | 'error';
 type DictationProvider = 'openai' | 'browser' | null;
@@ -54,6 +55,11 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
   const shouldListenRef = useRef(false);
   const recognitionActiveRef = useRef(false);
   const providerRef = useRef<DictationProvider>(null);
+  // Sprint 61.HOTFIX — last-accepted-final timestamp powers the isolation
+  // window check in the hallucination filter. Hallucinations typically appear
+  // after long silence (>8s); we keep this so we can distinguish "filler
+  // phrase after silence" from "user actually said it mid-sentence".
+  const lastFinalTsRef = useRef<number | null>(null);
 
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState<DictationStatus>('idle');
@@ -127,6 +133,18 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
         else interimText = [interimText, text].filter(Boolean).join(' ');
       }
       if (finalText) {
+        // Sprint 61.HOTFIX — apply hallucination filter to browser-fallback path too.
+        const decision = evaluateHallucination(finalText, {
+          surface: 'dictation',
+          lastFinalTs: lastFinalTsRef.current,
+        });
+        if (decision.drop) {
+          console.warn('[dictation/hallucination-dropped]', { reason: decision.reason, preview: finalText.slice(0, 60), surface: 'dictation', provider: 'browser' });
+          setInterim('');
+          setStatus('fallback');
+          return;
+        }
+        lastFinalTsRef.current = Date.now();
         onTranscriptRef.current(finalText);
         setInterim('');
         setStatus('fallback');
@@ -179,6 +197,10 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
 
     activeRef.current = true;
     shouldListenRef.current = true;
+    // Sprint 61.HOTFIX — reset isolation timer so previous session's last-final
+    // doesn't make the first new segment look "non-isolated" and bypass the
+    // hallucination filter.
+    lastFinalTsRef.current = null;
     setActive(true);
     setInterim('');
     setStatus('connecting');
@@ -193,7 +215,23 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
         },
         onFinal: (text) => {
           if (!activeRef.current) return;
-          if (text.trim()) onTranscriptRef.current(text.trim());
+          const trimmed = text.trim();
+          if (trimmed) {
+            // Sprint 61.HOTFIX — apply shared hallucination filter to realtime
+            // dictation. Root cause of «Наши переговоры продолжаются» /
+            // «сидим» / «Это задача» appearing in textarea: this path bypassed
+            // the filter that lives in SalesAssistant.appendFinalSegment.
+            const decision = evaluateHallucination(trimmed, {
+              surface: 'dictation',
+              lastFinalTs: lastFinalTsRef.current,
+            });
+            if (decision.drop) {
+              console.warn('[dictation/hallucination-dropped]', { reason: decision.reason, preview: trimmed.slice(0, 60), surface: 'dictation', provider: 'openai' });
+            } else {
+              lastFinalTsRef.current = Date.now();
+              onTranscriptRef.current(trimmed);
+            }
+          }
           setInterim('');
           setStatus('listening');
         },

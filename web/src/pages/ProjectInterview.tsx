@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Sparkles, Save, Wand2, CheckCircle2 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
@@ -65,11 +65,17 @@ function latestSavedAt(stored: StoredAnswer[]): Date | null {
 
 export default function ProjectInterview() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  // Sprint 61.HOTFIX (P0.4) — explicit success state. Without this the only
+  // signal after «Сохранить и обновить бриф» was a green badge change deep
+  // in the page; founder reported «loader spins, then nothing obvious».
+  const [saveOutcome, setSaveOutcome] = useState<null | 'saved' | 'regenerated' | 'error'>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   async function load() {
     if (!id) return;
@@ -92,6 +98,8 @@ export default function ProjectInterview() {
   async function save(opts: { thenRegenerate?: boolean } = {}) {
     if (!id) return;
     setSaving(true);
+    setSaveOutcome(null);
+    setSaveError(null);
     try {
       const payload = questions
         .map((q) => ({ question: q.text, answer: answers[q.text] ?? '', category: q.category }))
@@ -103,7 +111,13 @@ export default function ProjectInterview() {
         setRegenerating(true);
         await api.post(`/api/brief/${id}/generate`);
         await load();
+        setSaveOutcome('regenerated');
+      } else {
+        setSaveOutcome('saved');
       }
+    } catch (err) {
+      setSaveOutcome('error');
+      setSaveError(err instanceof Error ? err.message : 'Не удалось сохранить ответы');
     } finally {
       setSaving(false);
       setRegenerating(false);
@@ -147,7 +161,7 @@ export default function ProjectInterview() {
         {questions.length === 0 ? (
           <Card padded>
             <EmptyState
-              title={project?.brief ? 'Базовые блоки покрыты' : 'Сначала сгенерируйте бриф'}
+              title={project?.brief ? 'Все вопросы закрыты' : 'Сначала сгенерируйте бриф'}
               description={project?.brief
                 ? 'Существенных пробелов не найдено. Можно переходить к материалам проекта.'
                 : 'Сформируйте бриф на странице проекта — после этого здесь появятся уточняющие вопросы.'}
@@ -168,11 +182,46 @@ export default function ProjectInterview() {
                 />
               ))}
             </div>
+            {/* Sprint 61.HOTFIX (P0.4) — explicit success/error state. */}
+            {saveOutcome === 'saved' && (
+              <div className="mt-4 px-5 py-3 rounded-lg bg-success/10 border border-success/30 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="text-sm text-success flex items-start gap-2">
+                  <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+                  <span>Ответы сохранены. Чтобы пересобрать бриф с учётом новых данных — нажмите «Сохранить и обновить бриф».</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${id}`)}>
+                    Вернуться к проекту
+                  </Button>
+                </div>
+              </div>
+            )}
+            {saveOutcome === 'regenerated' && (
+              <div className="mt-4 px-5 py-3 rounded-lg bg-success/10 border border-success/30 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="text-sm text-success flex items-start gap-2">
+                  <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+                  <span>Бриф обновлён по вашим ответам. Можно вернуться к проекту или продолжить с оставшимися вопросами.</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${id}`)}>
+                    Вернуться к проекту
+                  </Button>
+                  <Link to={`/projects/${id}/brief`}>
+                    <Button variant="secondary" size="sm">Открыть бриф</Button>
+                  </Link>
+                </div>
+              </div>
+            )}
+            {saveOutcome === 'error' && saveError && (
+              <div className="mt-4 px-5 py-3 rounded-lg bg-danger/10 border border-danger/30 text-sm text-danger">
+                Не удалось сохранить: {saveError}
+              </div>
+            )}
             <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-5 py-4 rounded-lg bg-surface border border-line">
               <div className="text-xs text-secondary flex items-start gap-2">
                 <CheckCircle2 size={13} className="text-success mt-0.5 shrink-0" />
                 <span>
-                  Ответы сохраняются в бриф. Полный комплект материалов будет использовать их в финансовой модели и материалах для встречи с инвестором.
+                  Ответы сохраняются в бриф. «Нет данных» — тоже валидный ответ: AI пометит как «требует уточнения» и не будет блокировать упаковку.
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">

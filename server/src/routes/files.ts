@@ -15,6 +15,7 @@ import { multerFileFilter, uploadRejectionMessage } from '../lib/uploadValidatio
 // автоматически шлём его в project-scoped KB (fire-and-forget), чтобы
 // AI Assistant мог retrieve содержимое pitch-deck / финмодели.
 import { scheduleProjectFileIngest } from '../services/projectKnowledgeIngest.js';
+import { recoverUtf8Filename } from '../lib/filenameEncoding.js';
 
 export const filesRoutes = Router();
 filesRoutes.use(authMiddleware);
@@ -73,7 +74,11 @@ filesRoutes.post('/:projectId/upload', multerUploadWithGuard, async (req, res) =
 
   const created = [];
   for (const f of files) {
-    const ext = path.extname(f.originalname);
+    // Sprint 61.HOTFIX — recover UTF-8 Cyrillic filenames mangled by multer's
+    // default latin1 decoding. Without this Cyrillic names get stored as
+    // "Ð¿Ñ€ÐµÐ·…" mojibake and break display + KB title.
+    const originalNameUtf8 = recoverUtf8Filename(f.originalname);
+    const ext = path.extname(originalNameUtf8) || path.extname(f.originalname);
     const diskName = `${randomUUID()}${ext}`;
     const rel = path.join(req.params.projectId, diskName);
     await storage.saveBuffer(rel, f.buffer);
@@ -81,7 +86,7 @@ filesRoutes.post('/:projectId/upload', multerUploadWithGuard, async (req, res) =
       data: {
         projectId: req.params.projectId,
         filename: diskName,
-        originalName: f.originalname,
+        originalName: originalNameUtf8,
         mimeType: f.mimetype,
         size: f.size,
         category,

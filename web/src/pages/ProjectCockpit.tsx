@@ -28,12 +28,13 @@ import { PersonalManagerMiniCard } from '../components/ui/PersonalManagerCard';
 import { RecentMeetings } from '../components/ui/RecentMeetings';
 // Sprint 21: статичный Project Journey убран в пользу нового
 // «Пути привлечения инвестиций» (см. components/project/InvestmentJourney).
-import { getBriefStatus, briefStatusTone } from '../lib/briefStatus';
+import { getBriefStatus, briefStatusTone, briefCtaHrefForProject } from '../lib/briefStatus';
 import { AIPackagingHistory } from '../components/ui/AIPackagingHistory';
 import { AIDiscoverabilityScore } from '../components/ui/AIDiscoverabilityScore';
 import { InvestmentJourney } from '../components/project/InvestmentJourney';
 import { TrackPicker } from '../components/project/TrackPicker';
 import { ActivityHistory } from '../components/project/ActivityHistory';
+import { recoverDisplayFilename } from '../lib/filenameDisplay';
 import { MaterialHistoryDrawer, type MaterialKind } from '../components/ui/MaterialHistoryDrawer';
 import { listMeetings } from '../lib/salesSessions';
 import { listOutcomes, OUTCOME_LABELS, type AssistantOutcome } from '../lib/assistantOutcomes';
@@ -231,6 +232,62 @@ export default function ProjectCockpit() {
         </div>
       }
     >
+      {/* Sprint 61.HOTFIX (P0.2) — prominent next-step block.
+          Production manual test reported: «требуется уточнение» exists, but
+          founder can't see what's actually blocking next stages. This block
+          surfaces the SINGLE next action with explicit count + CTA at the
+          top of the page so it's visible without scrolling. */}
+      {(briefStatus.state === 'in_progress' || briefStatus.state === 'needs_review') && (
+        <Card padded accent="ai" className="mb-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <div className="w-8 h-8 rounded-md bg-ai/15 border border-ai/30 flex items-center justify-center shrink-0">
+                <Sparkles size={14} className="text-ai-glow" />
+              </div>
+              <div className="flex-1">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
+                  Следующий шаг
+                </div>
+                <p className="text-sm text-primary leading-snug">
+                  Чтобы продолжить упаковку, закройте {briefStatus.openQuestions}{' '}
+                  {pluralRu(briefStatus.openQuestions, 'открытый вопрос', 'открытых вопроса', 'открытых вопросов')} брифа.
+                  Ответьте на них или отметьте «Нет данных».
+                </p>
+                <p className="text-xs text-muted mt-1 leading-snug">
+                  Без ответов AI не может собрать финансовую модель и презентацию для инвестора.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Link to={`/projects/${id}/interview`}>
+                <Button variant="ai" size="md" iconLeft={<Sparkles size={14} />}>
+                  Закрыть открытые вопросы брифа
+                </Button>
+              </Link>
+            </div>
+          </div>
+        </Card>
+      )}
+      {briefStatus.state === 'not_started' && (
+        <Card padded accent="ai" className="mb-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <div className="w-8 h-8 rounded-md bg-ai/15 border border-ai/30 flex items-center justify-center shrink-0">
+                <Sparkles size={14} className="text-ai-glow" />
+              </div>
+              <div className="flex-1">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-ai-glow font-semibold mb-1">
+                  Следующий шаг
+                </div>
+                <p className="text-sm text-primary leading-snug">
+                  Нужно сгенерировать бриф — это запускает всю упаковку и AI-материалы.
+                </p>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* HERO */}
       <Card padded className="mb-6 relative overflow-hidden">
         <div className="absolute -top-16 -right-16 w-64 h-64 bg-zapusk/10 rounded-full blur-3xl" />
@@ -283,7 +340,7 @@ export default function ProjectCockpit() {
             >
               Сформировать полный комплект материалов
             </Button>
-            <Link to={`/projects/${id}/brief`} className="block">
+            <Link to={briefCtaHrefForProject(id!, briefStatus.state)} className="block">
               <Button
                 variant="ai"
                 size="md"
@@ -378,7 +435,7 @@ export default function ProjectCockpit() {
                 >
                   История версий
                 </Button>
-                <Link to={`/projects/${id}/brief`}>
+                <Link to={briefCtaHrefForProject(id!, briefStatus.state)}>
                   <Button variant="ghost" size="sm" iconRight={<ChevronRight size={14} />}>{briefStatus.cta}</Button>
                 </Link>
               </div>
@@ -543,6 +600,15 @@ export default function ProjectCockpit() {
   );
 }
 
+// Sprint 61.HOTFIX (P0.2) — Russian plural rule (1 / 2-4 / 5+).
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
 function Metric({ label, value, accent }: { label: string; value: string; accent?: 'zapusk' }) {
   return (
     <div>
@@ -569,7 +635,7 @@ function FileRow({ file, onRemove }: { file: UploadedFile; onRemove: () => void 
         {isLink ? <Link2 size={13} className="text-secondary" /> : <FileText size={13} className="text-secondary" />}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-primary truncate">{file.originalName}</div>
+        <div className="text-xs font-medium text-primary truncate">{recoverDisplayFilename(file.originalName)}</div>
         <div className="text-[10px] text-muted">
           {isLink ? file.url : `${Math.round(file.size / 1024)} КБ · ${file.category}`}
         </div>

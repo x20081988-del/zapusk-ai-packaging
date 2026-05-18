@@ -26,6 +26,7 @@ import { newIdempotencyKey } from '../lib/api';
 import { startRealtimeTranscription, type RealtimeSession } from '../lib/realtimeTranscription';
 import { composeAnalyzeTranscript, getAnalyzeTranscriptStats } from '../lib/salesAssistantTranscript';
 import { newSegmentId, recordLifecycle } from '../lib/transcriptPipeline';
+import { evaluateHallucination } from '../lib/transcriptHallucinationFilter';
 
 // ─── Web Speech API typing (browser-prefixed) ────────────────────────────────
 interface SRResultLike { transcript: string; isFinal?: boolean }
@@ -99,33 +100,10 @@ interface TranscriptSegment {
 //   /^Я правильно понимаю\??$/      — common Russian conversational filler
 //   /^Что для вас важнее.{0,40}\?$/ — legitimate qualifying question
 //
-// Kept (both observed on prod, no clean reading):
-const SUSPICIOUS_AI_PROMPT_PHRASES = [
-  /^Чек или доля\??$/i,
-  // `[.…]{0,3}` matches literal dot OR Unicode ellipsis (U+2026 «…»).
-  // Realtime/Whisper emits «…» as a real character, not three dots.
-  /^Ну, если вы настаиваете[.…]{0,3}$/i,
-];
-const KNOWN_ADVICE_LEAKAGE_PHRASES = [
-  // Sprint hotfix — production desktop realtime once emitted this exact
-  // sales-coach/advice sentence while the user was silent. It is never
-  // valid transcript content: it belongs to advice/prompt vocabulary.
-  /мы\s+всегда\s+помним[\s\S]{0,100}учитывать\s+стади[юи]\s+проекта[\s\S]{0,100}какой\s+чек\s+нужен\s+от\s+инвестора/i,
-];
-const HALLUCINATION_ISOLATION_WINDOW_MS = 8_000; // segment is "isolated" if no prior segment in 8 sec
-const HALLUCINATION_MAX_CHARS = 40;
-
-function looksLikeAiHallucination(text: string, prev: TranscriptSegment[]): boolean {
-  if (KNOWN_ADVICE_LEAKAGE_PHRASES.some((re) => re.test(text))) return true;
-  if (text.length > HALLUCINATION_MAX_CHARS) return false;
-  const matchesPattern = SUSPICIOUS_AI_PROMPT_PHRASES.some((re) => re.test(text));
-  if (!matchesPattern) return false;
-  // Isolation check: no prior final segment within isolation window.
-  const last = prev[prev.length - 1];
-  if (!last) return true; // first segment + matches pattern → drop
-  const sinceLast = Date.now() - last.ts;
-  return sinceLast >= HALLUCINATION_ISOLATION_WINDOW_MS;
-}
+// Sprint 61.HOTFIX — patterns + logic moved to shared lib
+// (web/src/lib/transcriptHallucinationFilter.ts). useVoiceDictation reuses
+// the same filter now. To add a new pattern: edit the shared module, run
+// `npm run smoke:transcript` to make sure regression dataset still passes.
 
 function appendFinalSegment(
   prev: TranscriptSegment[],
@@ -160,7 +138,18 @@ function appendFinalSegment(
     });
     return prev;
   }
-  if (looksLikeAiHallucination(trimmed, prev)) {
+  // Sprint 61.HOTFIX — shared filter used by both this surface and dictation.
+  const lastFinalTs = (() => {
+    for (let i = prev.length - 1; i >= 0; i--) {
+      if (prev[i].final) return prev[i].ts;
+    }
+    return null;
+  })();
+  const decision = evaluateHallucination(trimmed, {
+    surface: 'meeting',
+    lastFinalTs,
+  });
+  if (decision.drop) {
     recordLifecycle({
       segmentId,
       sessionId,
@@ -168,7 +157,7 @@ function appendFinalSegment(
       stage: 'hallucination_filtered',
       status: 'dropped',
       text: trimmed,
-      reason: 'isolated_short_ai_pattern_after_silence',
+      reason: decision.reason ?? 'shared_filter_drop',
     });
     return prev;
   }

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Activity, AlertCircle, CheckCircle2, ChevronDown, Clock3, Compass, Lock,
   Sparkles, Wand2, UserRound, Briefcase, Megaphone, ClipboardCheck, Radio,
@@ -58,7 +59,7 @@ export function InvestmentJourney({ project, jobs, options, onChooseTrack }: Pro
         <JourneyHeader build={build} metrics={metrics} trackChosen={trackChosen} onChooseTrack={onChooseTrack} />
         {build.isBrandNew && <BrandNewHero />}
         {build.stages.map((stage) => (
-          <StageCard key={stage.id} stage={stage} />
+          <StageCard key={stage.id} stage={stage} projectId={project.id} hasBrief={Boolean(project.brief)} />
         ))}
       </div>
 
@@ -160,7 +161,7 @@ function Kpi({ label, value, tone }: { label: string; value: number; tone: 'ai' 
   );
 }
 
-function StageCard({ stage }: { stage: Stage }) {
+function StageCard({ stage, projectId, hasBrief }: { stage: Stage; projectId: string; hasBrief: boolean }) {
   // Sprint 28 — closed stages по умолчанию collapsed; open stages — expanded.
   const [open, setOpen] = useState(stage.unlocked);
   const Icon = STAGE_ICON[stage.id] ?? Sparkles;
@@ -207,7 +208,14 @@ function StageCard({ stage }: { stage: Stage }) {
           </ul>
           {stage.primaryCta && (
             <div className="mt-3 flex justify-end">
-              <Button size="sm" variant="secondary">{stage.primaryCta.label}</Button>
+              {/* Sprint 61.HOTFIX (P0.1) — wire stage primary CTAs to actual
+                  hrefs. Previously these rendered as inert buttons with no
+                  onClick — clicking them did nothing. Production manual
+                  test on Luce Silva reported «Продолжить бриф does not
+                  open/continue brief flow» — root cause confirmed here. */}
+              <Link to={stagePrimaryCtaHref(stage, projectId, hasBrief)}>
+                <Button size="sm" variant="secondary">{stage.primaryCta.label}</Button>
+              </Link>
             </div>
           )}
         </>
@@ -228,6 +236,37 @@ function StageCard({ stage }: { stage: Stage }) {
       )}
     </Card>
   );
+}
+
+// Sprint 61.HOTFIX (P0.1) — route stage primary CTA labels to actual pages.
+// «Продолжить бриф» / «Открыть бриф» / «Заполнить бриф» → /interview when
+// founder still has unanswered questions (in_progress / needs_review state),
+// otherwise /brief (read view).
+function stagePrimaryCtaHref(stage: Stage, projectId: string, hasBrief: boolean): string {
+  switch (stage.id) {
+    case 'brief': {
+      // Heuristic: if any item in the brief stage is still «в работе» or
+      // «ожидает_информацию», the founder needs to answer questions —
+      // route to /interview, not /brief.
+      const hasOpenItems = stage.items.some(
+        (i) => i.status === 'в_работе' || i.status === 'ожидает_информацию',
+      );
+      if (!hasBrief) return `/projects/${projectId}/brief`;
+      return hasOpenItems ? `/projects/${projectId}/interview` : `/projects/${projectId}/brief`;
+    }
+    case 'packaging':
+      return `/projects/${projectId}/packaging`;
+    case 'legal':
+      return `/projects/${projectId}`;
+    case 'ai_leads':
+      return `/ai-leads`;
+    case 'meetings':
+      return `/meetings`;
+    case 'placement':
+      return `/projects/${projectId}/packaging`;
+    default:
+      return `/projects/${projectId}`;
+  }
 }
 
 function stageIconClass(stage: Stage): string {

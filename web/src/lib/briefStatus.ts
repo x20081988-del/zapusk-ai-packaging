@@ -169,17 +169,46 @@ function pluralize(n: number): string {
 /**
  * Resolve target href for the brief CTA from anywhere in the app.
  *
+ * Sprint 61.HOTFIX (P0.1) — When the CTA is "Продолжить бриф" (brief in
+ * progress / needs review), route DIRECTLY to /interview so the founder
+ * lands on the questions form, not the brief read-view. The old behavior
+ * sent them to /brief where they had to scroll to MissingDataPanel and
+ * click again. Production manual test on Luce Silva: «click does not open
+ * the brief flow» — root cause confirmed.
+ *
  * Priority:
- *   1. If a specific projectId is passed and exists → that project's brief page.
- *   2. If user has projects but none preselected → return null to let UI open a picker.
- *   3. If user has zero projects → /projects/new.
+ *   1. If a specific projectId is passed:
+ *      → /interview when state ∈ {in_progress, needs_review}
+ *      → /brief otherwise (ready/not_started — view-mode)
+ *   2. If user has zero projects → /projects/new.
+ *   3. If user has multiple, no preselection → null (caller opens picker).
  */
 export function resolveBriefCtaHref(opts: {
   projectId?: string | null;
   projects: Pick<Project, 'id'>[];
+  /**
+   * Optional brief state. Pass this when the caller already computed it so
+   * we can decide between /brief (view) and /interview (answer-form).
+   * Without it we keep the old behavior (/brief) for back-compat.
+   */
+  briefState?: BriefState;
 }): string | null {
-  if (opts.projectId) return `/projects/${opts.projectId}/brief`;
+  if (opts.projectId) {
+    const isAnswerMode = opts.briefState === 'in_progress' || opts.briefState === 'needs_review';
+    const suffix = isAnswerMode ? '/interview' : '/brief';
+    return `/projects/${opts.projectId}${suffix}`;
+  }
   if (opts.projects.length === 0) return '/projects/new';
   if (opts.projects.length === 1) return `/projects/${opts.projects[0].id}/brief`;
   return null; // caller should open a project picker
+}
+
+/**
+ * Sprint 61.HOTFIX (P0.1) — convenience helper for ProjectCockpit and similar
+ * pages that already have the project + brief status. Routes to /interview
+ * for answer-mode states, /brief for view-mode.
+ */
+export function briefCtaHrefForProject(projectId: string, state: BriefState): string {
+  const isAnswerMode = state === 'in_progress' || state === 'needs_review';
+  return `/projects/${projectId}${isAnswerMode ? '/interview' : '/brief'}`;
 }

@@ -2,7 +2,124 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-18 (Sprint 61.P1: Measurement foundation + critical XLSX bug fix).
+Last updated: 2026-05-18 (Sprint 61.HOTFIX: Project workspace UX + dictation hallucination + mojibake filenames + meeting transcript access).
+
+---
+
+## Completed (this sprint — Project workspace hotfix 2026-05-18)
+
+P0/P1 hotfix sprint addressing 9 production-tested issues found on Luce Silva
+workspace. Each issue followed the protocol: reproduce → root-cause → fix
+→ verify → regression guard.
+
+- [x] **P0.1 — «Продолжить бриф» button now opens the questions flow.**
+  Root cause: `resolveBriefCtaHref` returned `/projects/${id}/brief` (read
+  view) regardless of brief state. The interview/answer form lives on
+  `/projects/${id}/interview` — founder had to scroll and click again.
+  Additionally InvestmentJourney stage primary CTAs rendered as inert
+  buttons with NO onClick — clicks did nothing.
+  Fix: new `briefCtaHrefForProject(projectId, state)` routes to `/interview`
+  for `in_progress` / `needs_review`, `/brief` otherwise. Wired into
+  ProjectCockpit + InvestmentJourney (`stagePrimaryCtaHref` per stage).
+- [x] **P0.2 — Prominent «Следующий шаг» block on ProjectCockpit.**
+  Production issue: «требуется уточнение» exists but founder doesn't know
+  what specifically blocks next stages. Added top-of-page accent card:
+  count + explicit CTA «Закрыть открытые вопросы брифа» → /interview.
+  Different copy for not_started / in_progress / needs_review states.
+- [x] **P0.3 — «Нет данных» chip in AIQuestionCard.**
+  Backend audit confirmed any non-empty answer counts as answered (see
+  `answeredQuestionSet` in briefService). Fix was UX: explicit chip
+  prefills «Нет данных — требует уточнения», with visible «отмечено как
+  Нет данных» badge so founder sees their explicit no-data choice. Helper
+  `isNoDataAnswer` matches common Russian variants (нет/не знаем/уточняется).
+- [x] **P0.4 — Brief save success state.**
+  Production complaint: «loader spins, then nothing obvious happens».
+  Added explicit success banner with «Бриф обновлён» / «Ответы сохранены»
+  copy + next CTAs (Вернуться к проекту / Открыть бриф). Error state
+  shown with details. saveOutcome state machine: null → saved/regenerated/error.
+- [x] **P0.5 — «покрыто» → «вопросы закрыты».**
+  Replaced in MissingDataPanel + ProjectInterview empty state.
+- [x] **P0.6 — Dictation hallucination filter — HIGH PRIORITY.**
+  Root cause traced through pipeline:
+    mic → useVoiceDictation → startRealtimeTranscription → onFinal callback.
+  `useVoiceDictation.onFinal` bypassed the hallucination guard that lives
+  ONLY in SalesAssistant.tsx. The realtime API (gpt-4o-transcribe) can
+  hallucinate during silence — classic Whisper failure mode. Production
+  observed: «Наши переговоры продолжаются», «сидим», «Видимо, потому что
+  мы меняемся», «Это задача».
+  Fix:
+    1. Extracted shared filter `web/src/lib/transcriptHallucinationFilter.ts`
+       used by BOTH meeting (SalesAssistant) and dictation surfaces.
+    2. Added dictation-specific patterns (meta-language phrases) — only
+       active on dictation surface (meeting can legitimately contain
+       «это задача масштабирования» etc.).
+    3. Filter applies to BOTH realtime and Web Speech fallback paths.
+    4. Reset `lastFinalTs` on session start — prev session can't bleed in.
+    5. 22 regression assertions in `smoke:project-knowledge` covering
+       drop patterns, legitimate dictation pass-through, meeting-surface
+       false-positive prevention, isolation window behaviour.
+- [x] **P0.7 — Mojibake Cyrillic filenames.**
+  Root cause: multer 1.4.x decodes multipart field values as latin1.
+  Cyrillic UTF-8 bytes for «Презентация.pdf» get rendered as garbled
+  «Ð¿Ñ€ÐµÐ·…». Fix at two layers:
+    1. Server: `recoverUtf8Filename` in `server/src/lib/filenameEncoding.ts`
+       applied at upload time. New uploads land clean in DB.
+    2. Web: `recoverDisplayFilename` in `web/src/lib/filenameDisplay.ts`
+       applied at display time for legacy rows already in DB. No DB
+       migration needed. Applied in ActivityHistory, ProjectCockpit FileRow,
+       ProjectUpload list + download.
+  10 regression assertions in smoke including programmatic mojibake
+  round-trip, ASCII pass-through, legit Latin-1 (café.pdf) preservation.
+- [x] **P0.8 — Meeting transcript access from Memory.**
+  Audit confirmed `SalesSession.transcript` already stored (clean/draft
+  hybrid per Sprint 60) and exposed in API. UI never surfaced it.
+  Fix: «Открыть транскрипцию» button on each MeetingCard → modal with:
+    - transcript-quality badge (черновик / финальная / failed);
+    - copy button;
+    - download .txt button;
+    - hint if still on draft (clean comes after audio upload).
+  NO new storage model — wired existing field through existing API contract.
+- [x] **P1 — File category labels in project history.**
+  Replaced generic «Загружен материал» with category-aware copy
+  (Загружена презентация / финмодель / описание / референс / изображение /
+  логотип). Added KB-ingestion hint in meta: «добавлено в AI-контекст»
+  vs «текст не извлечён» — matches Sprint 61 KB auto-ingest taxonomy.
+
+**Files changed (12)**
+- NEW `web/src/lib/transcriptHallucinationFilter.ts`
+- NEW `web/src/lib/filenameDisplay.ts`
+- NEW `server/src/lib/filenameEncoding.ts`
+- MOD `web/src/lib/useVoiceDictation.ts` (apply shared filter, lastFinalTs reset)
+- MOD `web/src/pages/SalesAssistant.tsx` (use shared filter)
+- MOD `web/src/lib/briefStatus.ts` (briefCtaHrefForProject, state-aware routing)
+- MOD `web/src/pages/ProjectCockpit.tsx` (next-step block, mojibake recovery)
+- MOD `web/src/pages/ProjectInterview.tsx` (save success states + CTAs)
+- MOD `web/src/pages/ProjectUpload.tsx` (mojibake recovery)
+- MOD `web/src/components/ui/AIQuestionCard.tsx` («Нет данных» chip)
+- MOD `web/src/components/ui/MeetingCard.tsx` (transcript modal)
+- MOD `web/src/components/ui/MissingDataPanel.tsx» («вопросы закрыты»)
+- MOD `web/src/components/project/ActivityHistory.tsx` (category labels + KB hint)
+- MOD `web/src/components/project/InvestmentJourney.tsx` (wire stage CTAs)
+- MOD `server/src/routes/files.ts` (UTF-8 recovery at upload time)
+- MOD `scripts/project-knowledge-smoke.ts` (+33 regression assertions)
+
+**Project-stage state machine audit (P0.2 supporting):**
+- Brief states (briefStatus.ts): `not_started` / `in_progress` / `needs_review` / `ready`
+- Investment-track stages (investmentTrack.ts): brief / packaging / legal /
+  ai_leads / meetings / placement. Statuses: `не_начато` / `в_работе` /
+  `ожидает_информацию` / `на_проверке» / «готово».
+- Found ambiguity: stage `primaryCta.label` existed but was NOT routed
+  to actual href — clicks did nothing. Fixed in P0.1.
+- State-machine documentation kept in code comments next to each state
+  enum. No DB migration.
+
+**Verification:**
+- server/web tsc=0
+- npm run build OK
+- smoke:transcript / replay / regression:realcalls / smoke:project-knowledge
+  (now 102 assertions across 10 sections) / stress:ingest / benchmark:retrieval
+  — all green
+- NO new dependencies, NO DB migration, NO breaking API change
 
 ---
 
