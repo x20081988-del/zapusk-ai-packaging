@@ -35,6 +35,11 @@ import { estimateTokens, profilePrompt } from '../server/src/services/promptBudg
 import { evaluateHallucination } from '../web/src/lib/transcriptHallucinationFilter.ts';
 import { reconcileTruncatedFinal } from '../web/src/lib/transcriptReconcile.ts';
 import { isAdviceAlreadySaid } from '../web/src/lib/adviceAlreadySaid.ts';
+import {
+  isGenericDemoHint,
+  rewriteGenericHint,
+  CONTEXT_AWARE_FALLBACK,
+} from '../server/src/lib/genericHintGuard.ts';
 import { recoverUtf8Filename, looksLikeMojibake } from '../server/src/lib/filenameEncoding.ts';
 import { recoverDisplayFilename } from '../web/src/lib/filenameDisplay.ts';
 import {
@@ -742,6 +747,130 @@ section('16. Advice already-said detection');
   );
   ok('filler-only advice: no false positive', !r10.alreadySpoken,
     `tokens=${r10.adviceTokenCount}`);
+}
+
+// ─── Test 17. Generic demo hint detector (Sprint 62.P1 demo hotfix) ───────
+//
+// Regression guard for production demo case:
+//   AI returned «Что ж, предлагаю коротко пройтись по проекту…»
+//   even though manual context + live transcript already had substance.
+//   Founder reported "AI looks like placeholder copy".
+//
+// isGenericDemoHint(text) must catch the placeholder phrase set without
+// flagging legitimate context-aware questions.
+section('17. Generic demo hint detector');
+{
+  // ─── Should catch (the demo placeholder shapes) ─────────────────────────
+  ok(
+    'catches "Давайте коротко по сути проекта"',
+    isGenericDemoHint('Давайте коротко по сути проекта'),
+  );
+  ok(
+    'catches "Предлагаю коротко пройтись по проекту"',
+    isGenericDemoHint('Что ж, предлагаю коротко пройтись по проекту.'),
+  );
+  ok(
+    'catches "Расскажу коротко, что это за проект"',
+    isGenericDemoHint('Расскажу коротко, что это за проект Terminal.'),
+  );
+  ok(
+    'catches PROJECT_DETAILS_TRANSITION_PHRASE',
+    isGenericDemoHint('Да, понял, давайте тогда коротко по сути проекта...'),
+  );
+  ok(
+    'catches "быстро обсудить" placeholder',
+    isGenericDemoHint('Давайте быстро обсудим проект и перейдём к деталям.'),
+  );
+
+  // ─── Should NOT catch (legitimate context-aware questions) ──────────────
+  ok(
+    'does not catch finance-specific question',
+    !isGenericDemoHint('Какая у вас доходность по портфелю облигаций за последний год?'),
+    'should not flag specific finance Q',
+  );
+  ok(
+    'does not catch SPIN problem-question',
+    !isGenericDemoHint('Какой проект из вашего портфеля сейчас вызывает больше всего сомнений?'),
+  );
+  ok(
+    'does not catch CONTEXT_AWARE_FALLBACK itself',
+    !isGenericDemoHint(CONTEXT_AWARE_FALLBACK.mainQuestion),
+    'fallback must not flag itself, would be infinite-rewrite loop',
+  );
+  ok(
+    'does not catch next-step question',
+    !isGenericDemoHint('Какой чек комфортен для первого захода?'),
+  );
+  ok(
+    'does not catch qualification opener',
+    !isGenericDemoHint('Был ли у вас опыт инвестиций в маркетплейсы или платформенные бизнесы?'),
+  );
+
+  // ─── Edge cases ─────────────────────────────────────────────────────────
+  ok('empty string: false',   !isGenericDemoHint(''),    'empty must be false');
+  ok('null: false',           !isGenericDemoHint(null),  'null must be false');
+  ok('undefined: false',      !isGenericDemoHint(undefined), 'undefined must be false');
+  ok(
+    'short greeting (< 12 chars): false',
+    !isGenericDemoHint('Коротко.'),
+    'too short to be placeholder',
+  );
+}
+
+// ─── Test 18. rewriteGenericHint post-processing (Sprint 62.P1) ───────────
+//
+// Verifies that:
+//   • rewrite fires ONLY when hasContext=true,
+//   • rewrite replaces both mainQuestion AND backupQuestions,
+//   • original non-generic backups are preserved,
+//   • suggestedPhraseField mirroring works for CoreCard,
+//   • no rewrite for legitimate questions (idempotent).
+section('18. rewriteGenericHint post-processing');
+{
+  // Generic + context → rewrite
+  const r1 = rewriteGenericHint(
+    { mainQuestion: 'Давайте коротко по сути проекта', backupQuestions: ['Расскажите про проект', 'Какой чек комфортен?'] },
+    { hasContext: true },
+  );
+  ok('generic + hasContext: rewritten=true', r1.rewritten, `reason=${r1.reason}`);
+  ok('generic + hasContext: mainQuestion replaced',
+    r1.card.mainQuestion === CONTEXT_AWARE_FALLBACK.mainQuestion);
+  ok('generic + hasContext: clean original backup survives',
+    r1.card.backupQuestions?.includes('Какой чек комфортен?') === true);
+  ok('generic + hasContext: generic original backup filtered out',
+    r1.card.backupQuestions?.every((q) => !isGenericDemoHint(q)) === true);
+
+  // Generic + NO context → pass through
+  const r2 = rewriteGenericHint(
+    { mainQuestion: 'Давайте коротко по сути проекта' },
+    { hasContext: false },
+  );
+  ok('generic + no-context: rewritten=false (skip — first turn allowed)',
+    !r2.rewritten, `reason=${r2.reason}`);
+
+  // Legitimate + context → pass through
+  const r3 = rewriteGenericHint(
+    { mainQuestion: 'Какой формат участия вам ближе — финансовый или стратегический?' },
+    { hasContext: true },
+  );
+  ok('specific + hasContext: rewritten=false', !r3.rewritten);
+
+  // CoreCard-shaped: suggestedPhrase mirror
+  const r4 = rewriteGenericHint(
+    {
+      mainQuestion: 'Предлагаю коротко пройтись по проекту',
+      suggestedPhrase: 'Предлагаю коротко пройтись по проекту',
+    },
+    { hasContext: true, suggestedPhraseField: 'suggestedPhrase' as const },
+  );
+  ok('CoreCard mirror: mainQuestion rewritten',
+    (r4.card as { mainQuestion: string }).mainQuestion === CONTEXT_AWARE_FALLBACK.mainQuestion);
+  ok('CoreCard mirror: suggestedPhrase rewritten',
+    (r4.card as { suggestedPhrase: string }).suggestedPhrase === CONTEXT_AWARE_FALLBACK.mainQuestion);
+
+  // Idempotency: rewriting an already-rewritten card is a no-op
+  const r5 = rewriteGenericHint(r1.card, { hasContext: true });
+  ok('idempotent: already-rewritten card stays unchanged', !r5.rewritten);
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────

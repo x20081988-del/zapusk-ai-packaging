@@ -1124,6 +1124,15 @@ export default function SalesAssistant() {
               : undefined,
             // Sprint 52 P0.6 — для memory retrieval (по investorName).
             investorName: investorName.trim() || undefined,
+            // Sprint 62.P1 demo hotfix — per-component payload split so server
+            // can log [sales-assistant/context-used] manualChars=… finalChars=…
+            // interimChars=… (otherwise server only sees the concatenated
+            // transcript and can't tell whether the live interim landed).
+            payloadStats: {
+              manualChars: payloadStats.manualContextChars,
+              finalChars: payloadStats.liveTranscriptChars,
+              interimChars: payloadStats.interimChars,
+            },
           },
           { signal: fastCtrl.signal },
         );
@@ -1225,6 +1234,12 @@ export default function SalesAssistant() {
               : undefined,
             // Sprint 52 P0.6 — для memory retrieval (по investorName).
             investorName: investorName.trim() || undefined,
+            // Sprint 62.P1 demo hotfix — see fast pipeline above.
+            payloadStats: {
+              manualChars: payloadStats.manualContextChars,
+              finalChars: payloadStats.liveTranscriptChars,
+              interimChars: payloadStats.interimChars,
+            },
           },
           { signal: fullCtrl.signal },
         );
@@ -2633,8 +2648,16 @@ export default function SalesAssistant() {
                     {t.text}
                   </p>
                 ))}
+                {/* Sprint 62.P1 demo hotfix — interim was rendered as dimmed
+                    italic muted text. Founders reported "ничего не происходит
+                    10 секунд", because the dim style is hard to notice against
+                    the canvas background, and final-only takes 900-1200ms after
+                    speech ends. Bumping interim to the same size and a more
+                    visible secondary color: it's still semantically "draft"
+                    (italic + opacity-90), but the first words appear visually
+                    within ~1-2 sec of speech. */}
                 {interim && (
-                  <p className="text-[13.5px] text-muted italic leading-relaxed">{interim}…</p>
+                  <p className="text-[13.5px] text-secondary italic leading-relaxed opacity-90">{interim}…</p>
                 )}
               </div>
             </>

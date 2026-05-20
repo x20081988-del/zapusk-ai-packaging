@@ -169,24 +169,52 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
     //     first phoneme that VAD detection itself missed. Higher would
     //     pull in too much pre-call noise.
     //
-    //   silence_duration_ms: 1200
+    //   silence_duration_ms: 900 (Sprint 62.P1 demo hotfix)
     //     Sprint 50 raised from default 500→1200ms after Russian
     //     dictation segments kept getting chopped mid-sentence. Russian
     //     speech has natural between-clause pauses around 800–1200ms;
     //     anything below 1000ms chops utterances. Above 1500ms risks
-    //     merging separate utterances from different speakers. 1200ms
-    //     stays the sweet spot for B2B investor calls (single speaker per
-    //     channel, conversational pace).
+    //     merging separate utterances from different speakers.
+    //
+    //     Sprint 62.P1 demo hotfix — dropped to 900ms. Founder reports
+    //     "ничего не происходит 10 секунд, потом всё сразу" during live
+    //     demo. 1200ms was OPTIMIZED for verbatim quality on long Russian
+    //     monologues (post-call analysis). For live demos with shorter
+    //     turn-taking, 900ms is the perception sweet spot: interim
+    //     deltas still render <2s after speech starts (separate path),
+    //     and finals lag ~300ms less. Tunable via OPENAI_REALTIME_VAD_SILENCE_MS
+    //     env override without redeploy.
+    //
+    //   threshold: 0.45 (was 0.5)
+    //     Lowered for noisier laptop mics + mid-call hesitations. 0.45
+    //     still rejects keyboard taps and background hum; 0.5 was missing
+    //     quiet investor segments. Stay above 0.4 to avoid VAD chatter.
+    //     Tunable via OPENAI_REALTIME_VAD_THRESHOLD env override.
     //
     //   No `temperature` — OpenAI Realtime transcription does NOT accept
     //   a temperature parameter (it's a chat-completion concept). The
     //   transcription model is sampling-deterministic by default.
+    const vadSilenceMs = Number(process.env.OPENAI_REALTIME_VAD_SILENCE_MS ?? 900);
+    const vadThreshold = Number(process.env.OPENAI_REALTIME_VAD_THRESHOLD ?? 0.45);
     audioInput.turn_detection = {
       type: 'server_vad',
-      threshold: 0.5,
+      threshold: Number.isFinite(vadThreshold) && vadThreshold > 0 && vadThreshold < 1
+        ? vadThreshold
+        : 0.45,
       prefix_padding_ms: 300,
-      silence_duration_ms: 1200,
+      silence_duration_ms: Number.isFinite(vadSilenceMs) && vadSilenceMs >= 400 && vadSilenceMs <= 2000
+        ? vadSilenceMs
+        : 900,
     };
+    // Sprint 62.P1 demo hotfix — observability for VAD perceived-latency.
+    // Lets ops correlate "demo felt slow" complaints with actual VAD config
+    // running at the time, without grepping the prod source.
+    console.log(
+      `[transcription/demo-latency] traceId=${traceId} model=${model} ` +
+      `vadSilenceMs=${audioInput.turn_detection.silence_duration_ms} ` +
+      `threshold=${audioInput.turn_detection.threshold} ` +
+      `prefixPaddingMs=${audioInput.turn_detection.prefix_padding_ms}`,
+    );
   }
 
   const requestBody = {

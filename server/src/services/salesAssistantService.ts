@@ -28,6 +28,11 @@ import {
 import { buildProjectFinancialFacts } from './projectFinancialFacts.js';
 import { retrieveProjectNumericFacts } from './numericFactsRetrieval.js';
 import { profilePrompt, formatBudgetLog } from './promptBudget.js';
+import {
+  buildAntiGenericGuard,
+  rewriteGenericHint,
+  isGenericDemoHint,
+} from '../lib/genericHintGuard.js';
 
 // Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
 // `analyzeSalesTurn` теперь читает активный template `sales_gpt` из БД и
@@ -666,6 +671,14 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     '',
     formatProjectDetailsPromptRule(projectDetailsSignal),
     '',
+    // Sprint 62.P1 demo hotfix — anti-generic guard. Empty string when
+    // transcript+context is trivial; otherwise injects a hard "no placeholder
+    // openers" directive so AI doesn't fall back to «давайте коротко по сути
+    // проекта» when it has real material to react to.
+    buildAntiGenericGuard(
+      ((input.transcript ?? '').length + (recentContext ?? '').length) >= 30,
+    ),
+    '',
     [
       'Задача:',
       '1. Определи spinStage и какие spinGaps ещё открыты в разговоре.',
@@ -822,8 +835,25 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
   };
   const finalCard = applyProjectDetailsOverride(card, projectDetailsSignal);
 
+  // Sprint 62.P1 demo hotfix — generic-opener safety net. Even with the
+  // prompt-level guard, AI occasionally returns "let's go through the
+  // project briefly" style mainQuestion when it shouldn't. Rewrite to a
+  // context-aware fallback when transcript/context is substantive.
+  const hasContextForGuard =
+    ((input.transcript ?? '').length + (input.recentContext ?? '').length) >= 30;
+  const rewriteResult = rewriteGenericHint(finalCard, {
+    hasContext: hasContextForGuard,
+    suggestedPhraseField: 'suggestedPhrase',
+  });
+  if (rewriteResult.rewritten) {
+    console.warn(
+      `[sales-assistant/generic-hint-rewritten] feature=analyze reason=${rewriteResult.reason} ` +
+      `oldMainQuestion="${(finalCard.mainQuestion ?? '').slice(0, 80)}"`,
+    );
+  }
+
   return {
-    ...finalCard,
+    ...rewriteResult.card,
     source: ai.provider === 'mock' ? 'mock' : 'ai',
     provider: ai.provider,
     model: ai.model,
@@ -967,6 +997,14 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     '',
     formatProjectDetailsPromptRule(projectDetailsSignal),
     '',
+    // Sprint 62.P1 demo hotfix — anti-generic guard. Empty string when
+    // transcript+context is trivial; otherwise injects a hard "no placeholder
+    // openers" directive so AI doesn't fall back to «давайте коротко по сути
+    // проекта» when it has real material to react to.
+    buildAntiGenericGuard(
+      ((input.transcript ?? '').length + (recentContext ?? '').length) >= 30,
+    ),
+    '',
     [
       'Задача (только 4 поля):',
       '1. spinStage — текущий этап (S/P/I/N).',
@@ -1030,7 +1068,7 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
   const selfSaleQuestions = arrStrings(parsed?.selfSaleQuestions, 4);
   const stage = normalizeStage(parsed?.spinStage);
 
-  return applyProjectDetailsOverrideFast({
+  const overridden = applyProjectDetailsOverrideFast({
     mainQuestion,
     backupQuestions: backupQuestions.length ? backupQuestions : ['Что для вас сейчас приоритет в инвестициях?'],
     selfSaleQuestions,
@@ -1044,6 +1082,20 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
     usedKnowledgeSources: knowledgeForUi,
     knowledgeRetrievalMeta,
   }, projectDetailsSignal);
+
+  // Sprint 62.P1 demo hotfix — generic-opener safety net (FAST path).
+  // Same logic as the full analyze: if AI returned a placeholder hint
+  // despite having substantive context, rewrite to a context-aware fallback.
+  const hasContextForGuard =
+    ((input.transcript ?? '').length + (input.recentContext ?? '').length) >= 30;
+  const rewriteResult = rewriteGenericHint(overridden, { hasContext: hasContextForGuard });
+  if (rewriteResult.rewritten) {
+    console.warn(
+      `[sales-assistant/generic-hint-rewritten] feature=analyze_fast reason=${rewriteResult.reason} ` +
+      `oldMainQuestion="${(overridden.mainQuestion ?? '').slice(0, 80)}"`,
+    );
+  }
+  return rewriteResult.card;
 }
 
 // Sprint 61 — старые loadProjectContext / loadProjectsContext удалены.

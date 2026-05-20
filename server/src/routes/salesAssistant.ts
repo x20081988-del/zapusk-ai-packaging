@@ -14,6 +14,61 @@ import {
 import { isAIGuardrailError } from '../ai/client.js';
 import type { Request } from 'express';
 
+// Sprint 62.P1 demo hotfix — context-used logger. Fires at every /analyze
+// and /analyze-fast handler entry to verify what the client actually shipped
+// to the server. Useful when "AI doesn't see what I just said" — grep this
+// log first to confirm interimChars > 0 / manualChars > 0 for the failing
+// request id.
+//
+// Sources of fields:
+//   • manualChars/finalChars/interimChars — from optional client payloadStats
+//     (Sprint 62.P1). Legacy clients send undefined → log as "n/a".
+//   • transcriptChars/recentContextChars — derived from the API payload
+//     itself, always present.
+//   • projectId / projectIds / investorName — same.
+//
+// kbSources / numericFacts counts come AFTER retrieval — see the existing
+// `[analyze/latency]` log at the bottom of analyzeSalesTurn /
+// analyzeSalesTurnFast.
+function logContextUsed(
+  feature: 'analyze' | 'analyze_fast',
+  data: {
+    transcript: string;
+    recent?: string | null;
+    recentContext?: string | null;
+    previousAdvice?: unknown;
+    adviceHistory?: unknown;
+    projectId?: string | null;
+    projectIds?: string[] | null;
+    investorName?: string | null;
+    mode?: string | null;
+    payloadStats?: { manualChars?: number; finalChars?: number; interimChars?: number } | null;
+  },
+  req: Request,
+): void {
+  const stats = data.payloadStats ?? {};
+  const manualChars = stats.manualChars ?? -1;
+  const finalChars = stats.finalChars ?? -1;
+  const interimChars = stats.interimChars ?? -1;
+  const transcriptChars = data.transcript?.length ?? 0;
+  const recentContextChars = (data.recentContext ?? data.recent ?? '').length;
+  const adviceHistoryItems = Array.isArray(data.adviceHistory) ? data.adviceHistory.length : 0;
+  const hasPrevAdvice = data.previousAdvice ? 1 : 0;
+  try {
+    console.log(
+      `[sales-assistant/context-used] feature=${feature} ` +
+      `actorId=${getUser(req).id} projectId=${data.projectId ?? 'none'} ` +
+      `extraProjects=${data.projectIds?.length ?? 0} ` +
+      `mode=${data.mode ?? 'meeting'} investorName=${data.investorName ? 'set' : 'none'} ` +
+      `manualChars=${manualChars} finalChars=${finalChars} interimChars=${interimChars} ` +
+      `transcriptChars=${transcriptChars} recentContextChars=${recentContextChars} ` +
+      `adviceHistoryItems=${adviceHistoryItems} hasPrevAdvice=${hasPrevAdvice}`,
+    );
+  } catch {
+    /* observability must never crash the request */
+  }
+}
+
 // Sprint 40 P0.6 + Sprint 42 P0.4 — retrieval observability.
 //   • AuditEvent (Sprint 40) — security forensics: «кто и когда дёрнул KB».
 //   • KnowledgeRetrievalEvent (Sprint 42) — структурированная metrics-таблица:
@@ -200,6 +255,16 @@ const analyzeSchema = z.object({
   // Sprint 52 P0.6 — для memory retrieval (NegotiationMemory по
   // investorName). Опционально, не влияет если пусто.
   investorName: z.string().max(200).optional().nullable(),
+  // Sprint 62.P1 demo hotfix — client-side payload stats for observability.
+  // Lets server log `[sales-assistant/context-used] manualChars=… finalChars=…
+  // interimChars=…` so we can verify the live interim transcript is actually
+  // reaching the AI call, not just the final segments. Optional + capped to
+  // 8-digit ints so legacy clients work and no validation surprise on prod.
+  payloadStats: z.object({
+    manualChars: z.number().int().min(0).max(99_999_999).optional(),
+    finalChars: z.number().int().min(0).max(99_999_999).optional(),
+    interimChars: z.number().int().min(0).max(99_999_999).optional(),
+  }).optional().nullable(),
 });
 
 // Sprint 50 P0.2 — analyze rate-limit. AI cost guardrails already cap the
@@ -220,6 +285,7 @@ salesAssistantRoutes.post('/analyze', withRateLimit('ai_inference'), async (req,
 
   // Sprint 49 hotfix 8 — латентность + structured warn при ошибках.
   const tStart = Date.now();
+  logContextUsed('analyze', parsed.data, req);
   try {
     const card = await analyzeSalesTurn({
       transcript: parsed.data.transcript.trim(),
@@ -305,6 +371,7 @@ salesAssistantRoutes.post('/analyze-fast', withRateLimit('ai_inference'), async 
 
   // Sprint 49 hotfix 8 — латентность + structured warn при ошибках fast-фазы.
   const tStart = Date.now();
+  logContextUsed('analyze_fast', parsed.data, req);
   try {
     const fast = await analyzeSalesTurnFast({
       transcript: parsed.data.transcript.trim(),
