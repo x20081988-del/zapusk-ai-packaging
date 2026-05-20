@@ -10,6 +10,20 @@ aiLeadsRoutes.use(authMiddleware);
 // Sprint 37 P0.4 — INVESTOR не имеет AI-leads (это founder-side инструмент).
 aiLeadsRoutes.use(requireNotInvestor());
 
+// Sprint 62.P1 demo hotfix — dedicated showcase endpoint for /demo/ai-leads.
+// Sprint 35 правильно убрал доверие к ?demo=1 на основном /api/ai-leads/,
+// потому что любой user мог одним GET'ом подмешать себе моков. Но
+// /demo/ai-leads — это маркетинговая страница, она ВСЕГДА должна показывать
+// синтетические demo-данные (Sprint 35 их санитизировал). Отдельный endpoint
+// делает интент явным и не реактивирует ?demo=1-bypass.
+//
+// Никаких real-DB-данных не возвращает — это purely showcase, тот же
+// mockLeads() что и в demo workspace.
+aiLeadsRoutes.get('/showcase', async (_req, res) => {
+  const dashboard = await leadProvider.getDashboard(null, { demoMode: true });
+  res.json(dashboard);
+});
+
 aiLeadsRoutes.get('/', async (req, res) => {
   const user = getUser(req);
   const projectId = typeof req.query.projectId === 'string' && req.query.projectId.trim()

@@ -64,7 +64,15 @@ interface AILead {
     sent: string[];
     nextStep: string;
   };
-  audio: { label: string; durationSec: number; url?: string };
+  audio: {
+    label: string;
+    durationSec: number;
+    url?: string;
+    // Sprint 62.P1 demo hotfix — honest availability. Legacy responses
+    // (без поля) считаются true для back-compat, чтобы старый UI не сломался.
+    available?: boolean;
+    transcriptPeek?: string | null;
+  };
   communications: Array<{
     id: string;
     channel: Channel;
@@ -773,7 +781,20 @@ function LeadCard({ lead }: { lead: AILead }) {
   );
 }
 
-function AudioCard({ audio }: { audio: AILead['audio'] }) {
+// Sprint 62.P1 demo hotfix — exported so /demo/ai-leads (DemoAILeads.tsx) can
+// embed real audio playback for showcase leads. The full type lives in this
+// module; we re-export the input shape so callers don't need to know AILead.
+export type AILeadAudio = AILead['audio'];
+
+export function AudioCard({ audio }: { audio: AILead['audio'] }) {
+  // Sprint 62.P1 demo hotfix — three honest UX states:
+  //   • playable   : URL есть AND available !== false → render <audio> player + open link
+  //   • unavailable: URL есть but available === false → render disabled placeholder +
+  //                  helpful hint that recordings aren't bundled on this instance
+  //   • no_audio   : url отсутствует → старый «нет записи» disabled state
+  // Old responses without `available` field default to playable (back-compat).
+  const playable = Boolean(audio.url) && audio.available !== false;
+  const hasUrl = Boolean(audio.url);
   return (
     <div className="rounded-md border border-ai/25 bg-ai/8 p-4">
       <div className="flex items-center justify-between gap-3">
@@ -782,7 +803,7 @@ function AudioCard({ audio }: { audio: AILead['audio'] }) {
           <div className="text-sm font-semibold text-primary mt-1 truncate">{audio.label}</div>
           <div className="text-xs text-muted mt-1">{formatDuration(audio.durationSec)}</div>
         </div>
-        {audio.url ? (
+        {playable ? (
           <a
             href={audio.url}
             target="_blank"
@@ -798,15 +819,35 @@ function AudioCard({ audio }: { audio: AILead['audio'] }) {
           </button>
         )}
       </div>
-      {audio.url ? (
+      {playable ? (
         <audio controls preload="none" className="mt-3 w-full h-9" src={audio.url}>
           Запись недоступна в этом браузере.
         </audio>
       ) : (
-        <div className="mt-4 h-8 flex items-center gap-1">
-          {Array.from({ length: 28 }).map((_, i) => (
-            <span key={i} className="w-1 rounded-full bg-ai/35" style={{ height: `${8 + ((i * 7) % 20)}px` }} />
-          ))}
+        <>
+          <div className="mt-4 h-8 flex items-center gap-1">
+            {Array.from({ length: 28 }).map((_, i) => (
+              <span key={i} className="w-1 rounded-full bg-ai/20" style={{ height: `${8 + ((i * 7) % 20)}px` }} />
+            ))}
+          </div>
+          {hasUrl && audio.available === false && (
+            <p className="mt-3 text-[11px] text-muted leading-relaxed">
+              Аудиофайл не загружен в этот инстанс.{' '}
+              <span className="text-secondary">Положите файлы записей в&nbsp;
+                <code className="font-mono text-[10px]">web/public/demo-assets/recordings/</code>
+                {' '}или задайте&nbsp;
+                <code className="font-mono text-[10px]">AI_LEADS_RECORDINGS_BASE_URL</code>.
+              </span>
+            </p>
+          )}
+        </>
+      )}
+      {audio.transcriptPeek && (
+        <div className="mt-3 rounded-md border border-hairline bg-canvas/40 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mb-1">
+            О чём был разговор
+          </div>
+          <p className="text-xs text-secondary leading-relaxed">{audio.transcriptPeek}</p>
         </div>
       )}
     </div>

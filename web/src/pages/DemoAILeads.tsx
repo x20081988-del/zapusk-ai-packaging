@@ -1,18 +1,92 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Radio, PhoneCall, MessageSquare, UserCheck, Sparkles, Flame, Clock, Wallet,
-  Headphones, ShieldCheck, ChevronRight, Play, MessageCircle, Target, ExternalLink,
+  Radio, PhoneCall, MessageSquare, UserCheck, Sparkles, Flame, Wallet,
+  Clock, ShieldCheck, ChevronRight, ExternalLink, Target, Headphones,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { EmptyState } from '../components/ui/EmptyState';
+import { api } from '../lib/api';
+import { AudioCard, type AILeadAudio } from './AILeads';
 
 // Sprint 26 — отдельная демо-витрина AI-лидов. Главснаб как образцовый кейс.
-// Чёткое позиционирование: это пример, не ваши лиды. Не вызываем /api/ai-leads,
-// рендерим хардкодом showcase-данные. Ссылка «Запустить у себя» ведёт в
-// продакшен-флоу /ai-leads.
+// Sprint 62.P1 demo hotfix — раньше страница была hardcoded JSX и кнопки
+// «Прослушать запись» / «Открыть транскрипт» были декоративными. Теперь:
+//   • Hero / KPI / Guarantee остаются маркетинговыми блоками.
+//   • Список лидов подтягивается с /api/ai-leads/showcase (всегда демо-набор,
+//     11 синтетических лидов без PII — Sprint 35 P1 их санитизировал).
+//   • Каждая запись отрисовывается через тот же AudioCard, что и в /ai-leads,
+//     с честным «недоступно на этом инстансе», если .wav файлов нет.
+//   • При клике на лид показывается AudioCard с inline <audio controls>,
+//     плюс summary разговора и следующий шаг.
+
+interface ShowcaseLead {
+  id: string;
+  status: 'HOT' | 'NEW' | 'WAITING' | 'CONTACTED';
+  receivedAt: string;
+  title: string;
+  investor: {
+    name: string;
+    phone: string;
+    checkRange: string;
+    decisionWindow: string;
+    profile: string;
+  };
+  tags?: string[];
+  aiSummary: string;
+  whatHappened: {
+    summary: string;
+    interest: string;
+    objections: string[];
+    sent: string[];
+    nextStep: string;
+  };
+  audio: AILeadAudio;
+}
+
+interface ShowcaseDashboard {
+  leads: ShowcaseLead[];
+  kpis: {
+    totalLeads: number;
+    activeToday: number;
+    avgCheck: string;
+    callsToday: number;
+    messagesSent: number;
+  };
+}
+
 export default function DemoAILeads() {
+  const [data, setData] = useState<ShowcaseDashboard | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    api.get<ShowcaseDashboard>('/api/ai-leads/showcase')
+      .then((res) => {
+        if (!alive) return;
+        setData(res);
+        // auto-expand первый HOT lead
+        const firstHot = res.leads.find((l) => l.status === 'HOT');
+        setSelectedId(firstHot?.id ?? res.leads[0]?.id ?? null);
+        setError(null);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setError(err instanceof Error ? err.message : 'unknown');
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const leads = data?.leads ?? [];
+  const selected = leads.find((l) => l.id === selectedId) ?? leads[0] ?? null;
+
   return (
     <AppLayout
       title="Демо AI-лиды · Главснаб"
@@ -25,6 +99,7 @@ export default function DemoAILeads() {
       }
     >
       <div className="space-y-6">
+        {/* Hero — маркетинговый блок, не data-driven */}
         <Card padded accent="ai" className="overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(35,214,176,0.14),transparent_30%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center gap-4">
@@ -47,81 +122,146 @@ export default function DemoAILeads() {
           </div>
         </Card>
 
+        {/* KPI grid — из реальных showcase-данных */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <KpiCard icon={<Radio size={16} />} label="Активные лиды" value="12" tone="ai" />
-          <KpiCard icon={<PhoneCall size={16} />} label="Звонков за сутки" value="43" tone="zapusk" />
-          <KpiCard icon={<MessageSquare size={16} />} label="Сообщений отправлено" value="128" tone="zapusk" />
-          <KpiCard icon={<UserCheck size={16} />} label="Квалифицированных" value="7" tone="ai" />
+          <KpiCard
+            icon={<Radio size={16} />}
+            label="Активные лиды"
+            value={loading ? '…' : String(data?.kpis.totalLeads ?? 0)}
+            tone="ai"
+          />
+          <KpiCard
+            icon={<PhoneCall size={16} />}
+            label="Звонков за сутки"
+            value={loading ? '…' : String(data?.kpis.callsToday ?? 0)}
+            tone="zapusk"
+          />
+          <KpiCard
+            icon={<MessageSquare size={16} />}
+            label="Сообщений отправлено"
+            value={loading ? '…' : String(data?.kpis.messagesSent ?? 0)}
+            tone="zapusk"
+          />
+          <KpiCard
+            icon={<UserCheck size={16} />}
+            label="Квалифицированных"
+            value={loading ? '…' : String(data?.kpis.activeToday ?? 0)}
+            tone="ai"
+          />
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
+          {/* Main column — реальный список лидов + детали выбранного */}
           <div className="space-y-4">
+            {/* Список лидов */}
             <Card padded>
-              <CardHeader title="Горячий лид · Главснаб" subtitle="Состояние, как у работающего проекта" action={<StatusBadge tone="danger" dot>HOT</StatusBadge>} />
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-                <LeadFact icon={<Wallet size={13} />} label="Чек" value="от 1 млн ₽" />
-                <LeadFact icon={<Clock size={13} />} label="Решение" value="1 месяц" />
-                <LeadFact icon={<Target size={13} />} label="Профиль" value="Частный инвестор" />
-              </div>
-              <div className="rounded-md border border-ai/25 bg-ai/8 p-4 flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-grad-ai text-canvas flex items-center justify-center shadow-ai-glow shrink-0">
-                  <Headphones size={15} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-primary">AI-звонок · 7 минут</div>
-                  <p className="text-xs text-secondary mt-1 leading-relaxed">
-                    Инвестор подтвердил интерес. Запрашивает финансовую модель и one-pager.
-                    Возражения по горизонту окупаемости сняты примерами других проектов.
-                  </p>
-                  <div className="flex gap-2 mt-3">
-                    <Button size="sm" variant="ai" iconLeft={<Play size={12} />}>Прослушать запись</Button>
-                    <Button size="sm" variant="secondary" iconLeft={<MessageCircle size={12} />}>Открыть транскрипт</Button>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                <Block label="Что произошло" body="AI-агент представил Главснаб, обсудил доходность и горизонт. Инвестор сравнил с похожим кейсом в нише и сам предложил следующий шаг." />
-                <Block label="Следующий шаг" body="Менеджер высылает финмодель + one-pager. Назначен звонок-знакомство с фаундером через 2 дня." />
-              </div>
+              <CardHeader
+                title="Демо-лиды"
+                subtitle={`${leads.length} разговоров · кликните для деталей и записи`}
+              />
+              {loading && (
+                <div className="text-sm text-muted py-8 text-center">Загрузка демо-данных…</div>
+              )}
+              {error && !loading && (
+                <EmptyState
+                  icon={<Headphones size={20} />}
+                  title="Не удалось загрузить showcase"
+                  description={`Ошибка: ${error}. Проверьте, что endpoint /api/ai-leads/showcase отвечает.`}
+                />
+              )}
+              {!loading && !error && leads.length === 0 && (
+                <EmptyState
+                  icon={<Headphones size={20} />}
+                  title="Showcase пуст"
+                  description="Серверный seed mockLeads() ничего не вернул. Проверьте aiLeadsService."
+                />
+              )}
+              {!loading && !error && leads.length > 0 && (
+                <ul className="space-y-2">
+                  {leads.map((lead) => (
+                    <li key={lead.id}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(lead.id)}
+                        className={`w-full text-left rounded-md border px-3 py-2.5 transition-all ${
+                          selectedId === lead.id
+                            ? 'border-ai/45 bg-ai/10 shadow-ai-glow'
+                            : 'border-hairline bg-canvas/40 hover:border-ai/30'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <StatusBadge tone={lead.status === 'HOT' ? 'danger' : lead.status === 'NEW' ? 'ai' : 'neutral'} dot>
+                            {lead.status}
+                          </StatusBadge>
+                          <span className="text-sm font-semibold text-primary truncate">{lead.investor.name}</span>
+                          <span className="text-[11px] text-muted ml-auto shrink-0">{relTime(lead.receivedAt)}</span>
+                        </div>
+                        <p className="text-xs text-secondary leading-snug line-clamp-2">{lead.aiSummary}</p>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Card>
 
-            <Card padded>
-              <CardHeader title="Поток коммуникаций" subtitle="AI ведёт несколько каналов одновременно" />
-              <div className="space-y-2">
-                <Channel channel="AI-звонок" tone="ai" status="Закрыт"   summary="Инвестор согласился получить материалы. Чек до 2 млн ₽." />
-                <Channel channel="Telegram" tone="zapusk" status="Ответили"   summary="Инвестор задал вопрос про юридическую структуру сделки." />
-                <Channel channel="WhatsApp" tone="ai" status="Доставлено"   summary="AI отправил тизер и финансовую модель." />
-                <Channel channel="Follow-up" tone="zapusk" status="Назначен" summary="Через 2 дня — звонок-знакомство с фаундером." />
-              </div>
-            </Card>
+            {/* Детали выбранного — здесь и проигрывается аудио */}
+            {selected && (
+              <Card padded>
+                <CardHeader
+                  title={`Разговор · ${selected.investor.name}`}
+                  subtitle="Запись AI-звонка и контекст разговора"
+                  action={
+                    <StatusBadge tone={selected.status === 'HOT' ? 'danger' : 'neutral'} dot>
+                      {selected.status}
+                    </StatusBadge>
+                  }
+                />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                  <LeadFact icon={<Wallet size={13} />} label="Чек" value={selected.investor.checkRange} />
+                  <LeadFact icon={<Clock size={13} />} label="Срок решения" value={selected.investor.decisionWindow} />
+                  <LeadFact icon={<Target size={13} />} label="Профиль" value={selected.investor.profile} />
+                </div>
+                {/* Sprint 62.P1 hotfix — здесь и происходит inline-проигрывание */}
+                <AudioCard audio={selected.audio} />
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  <Block label="Что произошло" body={selected.whatHappened.summary} />
+                  <Block label="Следующий шаг" body={selected.whatHappened.nextStep} />
+                </div>
+                {selected.whatHappened.objections.length > 0 && (
+                  <div className="mt-3 rounded-md border border-warning/25 bg-warning/8 px-3 py-2 text-xs text-warning">
+                    Возражение: {selected.whatHappened.objections.join(' ')}
+                  </div>
+                )}
+                {selected.whatHappened.sent.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <span className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mr-1">Отправлено:</span>
+                    {selected.whatHappened.sent.map((s) => (
+                      <StatusBadge key={s} tone="neutral">{s}</StatusBadge>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )}
           </div>
 
+          {/* Sidebar — маркетинговая часть, не data-driven */}
           <aside className="space-y-4">
             <Card padded accent="ai">
               <CardHeader title="AI работает сейчас" subtitle="Демо-режим: поток лидов в реальном времени" />
               <div className="space-y-3">
-                <LiveStatus icon={<PhoneCall size={14} />} label="AI-прозвон базы" value="43 звонка сегодня" active />
-                <LiveStatus icon={<MessageSquare size={14} />} label="Мессенджеры" value="128 сообщений" active />
-                <LiveStatus icon={<UserCheck size={14} />} label="Квалификация" value="7 активных лидов" active />
-                <LiveStatus icon={<Flame size={14} />} label="Горячие лиды" value="1 ждёт ответа" active />
+                <LiveStatus icon={<PhoneCall size={14} />} label="AI-прозвон базы" value={`${data?.kpis.callsToday ?? 0} звонков сегодня`} active />
+                <LiveStatus icon={<MessageSquare size={14} />} label="Мессенджеры" value={`${data?.kpis.messagesSent ?? 0} сообщений`} active />
+                <LiveStatus icon={<UserCheck size={14} />} label="Квалификация" value={`${data?.kpis.activeToday ?? 0} активных лидов`} active />
+                <LiveStatus icon={<Flame size={14} />} label="Горячие лиды" value={`${leads.filter((l) => l.status === 'HOT').length} ждут ответа`} active />
               </div>
             </Card>
 
             <Card padded accent="zapusk">
               <CardHeader title="Гарантия замены" subtitle="Не релевантный лид — не считается" />
               <div className="space-y-2 text-xs text-secondary">
-                <div className="flex items-start gap-2">
-                  <ShieldCheck size={12} className="text-zapusk-400 mt-0.5 shrink-0" />
-                  Меняем лид, если инвестор оказался не профильным.
-                </div>
-                <div className="flex items-start gap-2">
-                  <ShieldCheck size={12} className="text-zapusk-400 mt-0.5 shrink-0" />
-                  3 попытки контакта на каждого инвестора.
-                </div>
-                <div className="flex items-start gap-2">
-                  <ShieldCheck size={12} className="text-zapusk-400 mt-0.5 shrink-0" />
-                  Каждый разговор сохраняется и доступен в кабинете.
-                </div>
+                <GuaranteeLine text="Меняем лид, если инвестор оказался не профильным." />
+                <GuaranteeLine text="3 попытки контакта на каждого инвестора." />
+                <GuaranteeLine text="Каждый разговор сохраняется и доступен в кабинете." />
               </div>
             </Card>
 
@@ -138,6 +278,21 @@ export default function DemoAILeads() {
       </div>
     </AppLayout>
   );
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────
+
+function relTime(iso: string): string {
+  try {
+    const diffMin = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60_000));
+    if (diffMin < 1) return 'только что';
+    if (diffMin < 60) return `${diffMin} мин назад`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH} ч назад`;
+    return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
+  } catch {
+    return iso;
+  }
 }
 
 function KpiCard({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone: 'ai' | 'zapusk' }) {
@@ -177,18 +332,6 @@ function Block({ label, body }: { label: string; body: string }) {
   );
 }
 
-function Channel({ channel, tone, status, summary }: { channel: string; tone: 'ai' | 'zapusk'; status: string; summary: string }) {
-  return (
-    <div className={`flex items-start gap-3 rounded-md border ${tone === 'ai' ? 'border-ai/25 bg-ai/6' : 'border-zapusk/25 bg-zapusk/6'} px-3 py-2.5`}>
-      <span className={`text-[10px] font-semibold uppercase tracking-[0.1em] ${tone === 'ai' ? 'text-ai-glow' : 'text-zapusk-400'} shrink-0`}>{channel}</span>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-primary font-medium">{status}</div>
-        <div className="text-[11px] text-secondary leading-snug mt-0.5">{summary}</div>
-      </div>
-    </div>
-  );
-}
-
 function LiveStatus({ icon, label, value, active }: { icon: React.ReactNode; label: string; value: string; active?: boolean }) {
   return (
     <div className="flex items-start gap-2">
@@ -200,6 +343,15 @@ function LiveStatus({ icon, label, value, active }: { icon: React.ReactNode; lab
         </div>
         <div className="text-xs text-primary mt-0.5">{value}</div>
       </div>
+    </div>
+  );
+}
+
+function GuaranteeLine({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-2">
+      <ShieldCheck size={12} className="text-zapusk-400 mt-0.5 shrink-0" />
+      {text}
     </div>
   );
 }
