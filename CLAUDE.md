@@ -36,6 +36,13 @@ For project context (what the app is, how it works, current architecture), read 
 
    When in doubt: `AI_PROVIDER=openai` (or `anthropic`) for any environment a real user can reach. `render.yaml` must ship a real provider value as the default.
 
+5b. **Model config — single source of truth (Sprint 62.P1).** Backend reads OPENAI_MODEL_* / ANTHROPIC_MODEL_* from `server/.env` (local) or the Render dashboard (prod). Root `/.env` is NOT read by the backend — never put live config there.
+   - `PromptTemplate.model` only overrides the model for **transcription routes** (`realtime_transcription` template). For every other feature (sales_assistant.*, brief.*, packaging.*) it is **informational** — runtime uses `OPENAI_MODEL_MAIN` / `OPENAI_MODEL_FAST`. The UI shows a warning when an admin sets template.model on a non-transcription template.
+   - Invalid model names (e.g. `gpt-5.5`) NO LONGER silently fall back to mock. The AI client throws `AIModelConfigError(502, 'model_not_found')` and the user sees an explicit error. Mock fallback is only used for transient errors (timeouts, 5xx) and for `AI_PROVIDER=mock` / missing key.
+   - To inspect what model actually answers a feature right now: `GET /api/admin/ai/active-models` (ADMIN/MANAGER) or `npm run env:doctor` from the project root.
+   - Every AI call emits `[ai/model-resolved] feature=… provider=… route=… finalModel=… source=… envVar=…` — greppable for ops.
+   - `DEMO_FAST_AI_MODE=true` switches `sales_assistant.prepare` from MAIN (gpt-4.1) to FAST (gpt-4o-mini) for snappier live demos. Default OFF.
+
 6. **Don't run destructive DB commands without asking.** `prisma migrate reset`, dropping tables, manual SQL — confirm with the user. `prisma migrate dev` for additive changes is fine.
 
 7. **Respect existing endpoint contracts.** Routes documented in [AGENTS.md](AGENTS.md) under `## API surface` are used by the web client; do not change request/response shapes without updating both sides in the same change.

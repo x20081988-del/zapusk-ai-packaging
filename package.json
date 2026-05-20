@@ -16,6 +16,8 @@
     "db:migrate": "npm --prefix server run db:migrate",
     "db:seed": "npm --prefix server run db:seed",
     "db:reset": "npm --prefix server run db:reset",
+    "db:doctor": "npm --prefix server run db:doctor",
+    "env:doctor": "npm --prefix server run env:doctor",
     "smoke:transcript": "node scripts/transcript-aggregation-smoke.mjs",
     "smoke:project-knowledge": "npx --prefix server tsx scripts/project-knowledge-smoke.ts",
     "benchmark:retrieval": "npx --prefix server tsx server/src/scripts/retrievalBenchmark.ts",

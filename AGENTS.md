@@ -132,9 +132,53 @@ GET    /api/reviews/project/:projectId
 DELETE /api/reviews/:id
 
 GET    /api/admin/projects
+GET    /api/admin/health/details                  ADMIN/MANAGER — disk, model env, integrations
+GET    /api/admin/ai/active-models                ADMIN/MANAGER — per-feature model resolution table (Sprint 62.P1)
 ```
 
 All `/api/*` routes (except `/api/auth/login`) require `x-user-email` header.
+
+### AI model configuration (Sprint 62.P1)
+
+Single source of truth for which model answers each feature:
+
+| Source                          | Where                                | Read by backend?                |
+| ------------------------------- | ------------------------------------ | ------------------------------- |
+| `server/.env`                   | local backend dev                    | YES (via `dotenv/config`)       |
+| Render dashboard env            | production runtime                   | YES (overrides server/.env)     |
+| root `/.env`                    | repo root                            | **NO — never read; gitignored** |
+| `web/.env`                      | Vite SPA                             | YES, but only `VITE_*` vars     |
+| `PromptTemplate.model` (DB)     | admin UI                             | Only for `realtime_transcription` |
+
+Runtime model resolution chain (per AI call):
+
+```
+template.model (only if route honors it — see below)
+   → env.OPENAI_MODEL_<MAIN|FAST|REALTIME|TRANSCRIBE>
+      → hard default in env.ts ('gpt-4o' / 'gpt-4o-mini' / …)
+```
+
+Per-feature route table:
+
+| Feature                            | Route     | Env var                          | Template override?       |
+| ---------------------------------- | --------- | -------------------------------- | ------------------------ |
+| `sales_assistant.prepare`          | main¹     | `OPENAI_MODEL_MAIN`              | NO (informational)       |
+| `sales_assistant.analyze`          | main      | `OPENAI_MODEL_MAIN`              | NO (informational)       |
+| `sales_assistant.analyze_fast`     | fast      | `OPENAI_MODEL_FAST`              | NO (informational)       |
+| `realtime.transcription`           | realtime  | `OPENAI_MODEL_REALTIME_TRANSCRIBE` | **YES**                |
+| `transcription` (file upload)      | transcribe| `OPENAI_MODEL_TRANSCRIBE`        | **YES**                  |
+| `brief.generate` / `regenerate`    | main      | `OPENAI_MODEL_MAIN`              | NO                       |
+| `classification` / `metadata`      | fast      | `OPENAI_MODEL_FAST`              | NO                       |
+
+¹ `DEMO_FAST_AI_MODE=true` switches prepare to fast route (gpt-4o-mini) for live demos.
+
+Diagnostics:
+- `npm run env:doctor` — safe env summary + suspicious model detection (e.g. `gpt-5.5`).
+- `npm run db:doctor` — read-only DB structure check.
+- `GET /api/admin/ai/active-models` — per-feature live resolution + last ledger entry.
+- Every AI call logs `[ai/model-resolved] feature=… provider=… route=… finalModel=… source=… envVar=…`.
+
+When upstream returns `model_not_found` / 404 / `invalid_model`, the AI client throws `AIModelConfigError(502)` — NO silent mock fallback for misconfigured model names.
 
 ## What is already implemented
 

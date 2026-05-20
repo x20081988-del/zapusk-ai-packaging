@@ -44,6 +44,22 @@ const OUTPUT_TYPE_OPTIONS = [
   ...Object.entries(OUTPUT_TYPE_UI).map(([value, meta]) => ({ value, label: meta.label })),
 ];
 
+// Sprint 62.P1 — which template keys actually honor template.model at runtime.
+// Keep in sync with:
+//   • server/src/routes/realtime.ts:resolveTranscriptionModel
+//   • server/src/services/openaiTranscribe.ts (file upload транскрипция)
+// All other keys (sales_gpt, sales_assistant.prepare_meeting, brief.*, …) read
+// model from env.OPENAI_MODEL_MAIN / _FAST and IGNORE template.model. The UI
+// shows a warning so admins don't think they're tuning a knob that isn't wired.
+const TEMPLATE_MODEL_HONORED_KEYS = new Set<string>([
+  'realtime_transcription',
+]);
+
+function isTemplateModelHonored(key: string | null | undefined): boolean {
+  if (!key) return false;
+  return TEMPLATE_MODEL_HONORED_KEYS.has(key.trim());
+}
+
 export default function Templates() {
   const [templates, setTemplates] = useState<PromptTemplate[] | null>(null);
   const [current, setCurrent] = useState<PromptTemplate | null>(null);
@@ -243,6 +259,23 @@ export default function Templates() {
                 value={draft.model ?? ''}
                 onChange={(e) => setDraft({ ...draft, model: e.target.value || null })}
               />
+              {/* Sprint 62.P1 — honest warning about template.model behavior.
+                  Today the field is only respected by the realtime_transcription
+                  template (live + file upload транскрипция). For sales_gpt /
+                  brief / packaging оно ignored at runtime — model берётся из
+                  OPENAI_MODEL_MAIN / _FAST. До починки в Sprint 63 это
+                  ожидаемое поведение, но founder/admin должен это видеть. */}
+              {!isTemplateModelHonored(draft.key) && draft.model && draft.model.trim().length > 0 && (
+                <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  <strong className="font-semibold">⚠ Эта модель сейчас не применяется.</strong>{' '}
+                  Поле «Конкретная модель» работает только для transcription
+                  шаблонов (realtime_transcription). Для остальных runtime
+                  читает <code className="font-mono">OPENAI_MODEL_MAIN</code> /
+                  <code className="font-mono">OPENAI_MODEL_FAST</code> из env.
+                  Реальную модель можно посмотреть в{' '}
+                  <a href="/admin" className="underline">Admin → /api/admin/ai/active-models</a>.
+                </div>
+              )}
             </div>
 
             <Textarea

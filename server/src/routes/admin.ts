@@ -9,6 +9,7 @@ import { generateInviteToken, signToken } from '../authCrypto.js';
 import { recordAudit } from '../lib/audit.js';
 import { env, aiProviderStatus } from '../env.js';
 import { isFtsAvailable } from '../services/knowledgeFts.js';
+import { resolveModel, type AIProvider, type AIModelRoute } from '../ai/client.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -552,11 +553,29 @@ adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res
       provider: status.provider,
       openaiKeyConfigured: openaiConfigured,
       anthropicKeyConfigured: anthropicConfigured,
-      openaiModelMain: env.OPENAI_MODEL_MAIN,
       realProviderEnabled: status.realProviderEnabled,
       warning: status.warning,
       warningSeverity: status.warningSeverity,
       allowMockInProduction: status.allowMockInProduction,
+      // Sprint 62.P1 — full model matrix, not just MAIN. Founder/ops should
+      // be able to answer "which model answers feature X?" without backend
+      // access. API keys are never returned here.
+      models: {
+        openaiModelMain: env.OPENAI_MODEL_MAIN,
+        openaiModelFast: env.OPENAI_MODEL_FAST,
+        openaiModelRealtime: env.OPENAI_MODEL_REALTIME,
+        openaiModelTranscribe: env.OPENAI_MODEL_TRANSCRIBE,
+        openaiModelRealtimeTranscribe: env.OPENAI_MODEL_REALTIME_TRANSCRIBE,
+        anthropicModelMain: env.ANTHROPIC_MODEL_MAIN,
+        anthropicModelFast: env.ANTHROPIC_MODEL_FAST,
+      },
+      flags: {
+        demoFastAiMode: env.DEMO_FAST_AI_MODE,
+        aiLogUsage: env.AI_LOG_USAGE,
+        enforceRealProvider: status.enforceRealProvider,
+      },
+      // Back-compat: keep the flat field so existing dashboards keep working.
+      openaiModelMain: env.OPENAI_MODEL_MAIN,
     },
     integrations: {
       openai: openaiConfigured,
@@ -565,5 +584,222 @@ adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res
       lovable: lovableConfigured,
     },
     knowledgeFts: isFtsAvailable(),
+  });
+});
+
+// Sprint 62.P1 — Active models inspector.
+//
+// Single endpoint that answers "which model actually answers feature X right
+// now?" Maps each known AI feature to (a) the env-resolved model, (b) the
+// PromptTemplate.model override (if applicable to that route), (c) the most
+// recent AiRequestLedger entry (so you can see the LAST real model that ran,
+// including mock fallbacks).
+//
+// usesTemplateOverride is the truthy bit that catches the "I edited
+// template.model and nothing changed" footgun — it's true ONLY for the two
+// transcription features. For sales-assistant / brief / packaging, the field
+// in the UI is informational.
+//
+// Read-only. ADMIN/MANAGER/SUPER_ADMIN.
+interface FeatureCatalogEntry {
+  feature: string;             // AiRequestLedger.feature
+  label: string;               // Human-readable name (ru)
+  provider: AIProvider;
+  route: AIModelRoute;
+  templateKey: string | null;  // Linked PromptTemplate.key, if any
+  usesTemplateOverride: boolean; // Does the code actually pass template.model?
+  notes?: string;
+}
+
+const ACTIVE_MODELS_CATALOG: FeatureCatalogEntry[] = [
+  {
+    feature: 'sales_assistant.prepare',
+    label: 'Подготовка к встрече',
+    provider: 'openai',
+    route: 'main',
+    templateKey: 'sales_assistant.prepare_meeting',
+    usesTemplateOverride: false,
+    notes: 'Sprint 62.P1 — DEMO_FAST_AI_MODE=true переводит на route=fast.',
+  },
+  {
+    feature: 'sales_assistant.analyze',
+    label: 'Глубокий анализ разговора',
+    provider: 'openai',
+    route: 'main',
+    templateKey: 'sales_gpt',
+    usesTemplateOverride: false,
+    notes: 'template.model — informational; модель из OPENAI_MODEL_MAIN.',
+  },
+  {
+    feature: 'sales_assistant.analyze_fast',
+    label: 'Быстрые подсказки в реальном времени',
+    provider: 'openai',
+    route: 'fast',
+    templateKey: 'sales_gpt',
+    usesTemplateOverride: false,
+    notes: 'Hard guard timeout 8s — fast tier обязателен.',
+  },
+  {
+    feature: 'realtime.transcription',
+    label: 'Live транскрипция (WebRTC)',
+    provider: 'openai',
+    route: 'realtime',
+    templateKey: 'realtime_transcription',
+    usesTemplateOverride: true,
+    notes: 'template.model override РАБОТАЕТ (realtime.ts:resolveTranscriptionModel).',
+  },
+  {
+    feature: 'transcription',
+    label: 'Транскрипция загруженных файлов',
+    provider: 'openai',
+    route: 'realtime', // OPENAI_MODEL_TRANSCRIBE lives in a separate field; handled below.
+    templateKey: 'realtime_transcription',
+    usesTemplateOverride: true,
+    notes: 'Использует env.OPENAI_MODEL_TRANSCRIBE (отдельная от REALTIME).',
+  },
+  {
+    feature: 'brief.generate',
+    label: 'Сборка брифа',
+    provider: 'openai',
+    route: 'main',
+    templateKey: null,
+    usesTemplateOverride: false,
+  },
+  {
+    feature: 'brief.regenerate',
+    label: 'Пересборка брифа',
+    provider: 'openai',
+    route: 'main',
+    templateKey: null,
+    usesTemplateOverride: false,
+  },
+  {
+    feature: 'classification',
+    label: 'Классификация / metadata',
+    provider: 'openai',
+    route: 'fast',
+    templateKey: null,
+    usesTemplateOverride: false,
+  },
+];
+
+adminRoutes.get('/ai/active-models', requireRole(['admin', 'MANAGER']), async (_req, res) => {
+  const provider = env.AI_PROVIDER;
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  // Pre-fetch the templates referenced by the catalog so we make one DB call.
+  const templateKeys = Array.from(new Set(
+    ACTIVE_MODELS_CATALOG.map((e) => e.templateKey).filter((k): k is string => Boolean(k)),
+  ));
+  const templates = templateKeys.length
+    ? await prisma.promptTemplate.findMany({
+        where: { key: { in: templateKeys } },
+        select: { key: true, model: true, active: true, version: true },
+      })
+    : [];
+  const templatesByKey = new Map(templates.map((t) => [t.key, t]));
+
+  const rows = await Promise.all(ACTIVE_MODELS_CATALOG.map(async (entry) => {
+    // Effective provider — if AI_PROVIDER=mock, all real routes are mocked
+    // but we still want to show what WOULD be used. Report `provider` as
+    // the catalog default; flag effectiveProvider as 'mock' when relevant.
+    const effectiveProvider: AIProvider = provider === 'mock' ? 'mock' : entry.provider;
+    const resolved = resolveModel(effectiveProvider, entry.route);
+
+    // Special case: file upload transcription uses OPENAI_MODEL_TRANSCRIBE
+    // (NOT OPENAI_MODEL_REALTIME). Override the resolved bundle so the row
+    // shows the correct env var and value.
+    let envVar = resolved.envVar;
+    let model = resolved.model;
+    let source = resolved.source;
+    if (entry.feature === 'transcription' && effectiveProvider === 'openai') {
+      envVar = 'OPENAI_MODEL_TRANSCRIBE';
+      model = env.OPENAI_MODEL_TRANSCRIBE;
+      source = process.env.OPENAI_MODEL_TRANSCRIBE && process.env.OPENAI_MODEL_TRANSCRIBE.trim()
+        ? 'env'
+        : 'fallback';
+    }
+    if (entry.feature === 'realtime.transcription' && effectiveProvider === 'openai') {
+      envVar = 'OPENAI_MODEL_REALTIME_TRANSCRIBE';
+      model = env.OPENAI_MODEL_REALTIME_TRANSCRIBE;
+      source = process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE && process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE.trim()
+        ? 'env'
+        : 'fallback';
+    }
+
+    const tpl = entry.templateKey ? templatesByKey.get(entry.templateKey) : null;
+    const templateModel = tpl?.model ?? null;
+
+    // If the route actually honors template.model AND template.model is set,
+    // declare source=template + adopt the template value as the final model.
+    let finalSource: string = source;
+    let finalModel: string = model;
+    if (entry.usesTemplateOverride && templateModel && templateModel.trim()) {
+      finalSource = 'template';
+      finalModel = templateModel.trim();
+    }
+
+    // Pull the most recent ledger row for this feature (last 7 days) to see
+    // what model actually answered last time. fallbackUsed=true means the
+    // upstream failed and we returned mock — useful canary.
+    let lastLedger: {
+      model: string; provider: string; success: boolean; fallbackUsed: boolean;
+      errorCode: string | null; createdAt: Date;
+    } | null = null;
+    try {
+      lastLedger = await prisma.aiRequestLedger.findFirst({
+        where: { feature: entry.feature, createdAt: { gte: since } },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          model: true, provider: true, success: true, fallbackUsed: true,
+          errorCode: true, createdAt: true,
+        },
+      });
+    } catch {
+      lastLedger = null;
+    }
+
+    return {
+      feature: entry.feature,
+      label: entry.label,
+      provider: effectiveProvider,
+      route: entry.route,
+      finalModel,
+      source: finalSource,
+      envVar,
+      templateKey: entry.templateKey,
+      templateModel,
+      usesTemplateOverride: entry.usesTemplateOverride,
+      templateActive: tpl?.active ?? null,
+      templateVersion: tpl?.version ?? null,
+      lastLedger: lastLedger
+        ? {
+            model: lastLedger.model,
+            provider: lastLedger.provider,
+            success: lastLedger.success,
+            fallbackUsed: lastLedger.fallbackUsed,
+            errorCode: lastLedger.errorCode,
+            at: lastLedger.createdAt.toISOString(),
+          }
+        : null,
+      notes: entry.notes ?? null,
+    };
+  }));
+
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    aiProvider: provider,
+    rows,
+    legend: {
+      source: {
+        env: 'OPENAI_MODEL_*/ANTHROPIC_MODEL_* set in process.env',
+        fallback: 'env var unset — hardcoded default in env.ts',
+        template: 'PromptTemplate.model override (works only for transcription routes)',
+        mock: 'AI_PROVIDER=mock — no upstream call',
+      },
+      usesTemplateOverride:
+        'true only for transcription routes. For other features, PromptTemplate.model is informational.',
+    },
   });
 });

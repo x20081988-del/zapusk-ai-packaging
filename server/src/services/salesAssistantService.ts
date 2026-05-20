@@ -1828,11 +1828,16 @@ export async function prepareForMeeting(input: PrepareInput): Promise<MeetingPla
     'Собери MeetingPlan строго по схеме.',
   ].filter(Boolean).join('\n');
 
+  // Sprint 62.P1 — DEMO_FAST_AI_MODE feature flag. Default OFF. When ON, the
+  // meeting-prep step uses the FAST model route (gpt-4o-mini) to keep live
+  // demos snappy. Plan quality drops slightly; latency drops ~3-5x. The flag
+  // is read at call time so toggling Render env + restart is enough.
+  const prepareRoute = env.DEMO_FAST_AI_MODE ? 'fast' : 'main';
   const ai = await aiClient.generateJson({
     system: promptDecision.system,
     user,
     feature: 'sales_assistant.prepare',
-    modelRoute: 'main',
+    modelRoute: prepareRoute,
     maxTokens: 1_800,
     temperature: 0.35,
     jsonSchema: {

@@ -154,6 +154,18 @@ export const env = {
   PROJECT_CONTEXT_LAYER_ENABLED: process.env.PROJECT_CONTEXT_LAYER_ENABLED !== 'false',
   PROJECT_KB_AUTO_INGEST_ENABLED: process.env.PROJECT_KB_AUTO_INGEST_ENABLED !== 'false',
   PROJECT_FINANCE_BOOST_ENABLED: process.env.PROJECT_FINANCE_BOOST_ENABLED !== 'false',
+
+  // Sprint 62.P1 — safe demo-speed feature flag. Default OFF (no behavioral
+  // change). When DEMO_FAST_AI_MODE=true, sales_assistant.prepare runs on
+  // the FAST model route (gpt-4o-mini) instead of MAIN (gpt-4.1). This
+  // trades plan quality for ~3-5x speed on the meeting-prep step, which
+  // is the "AI is thinking too long" complaint during live demos.
+  //
+  // Intentionally NOT changing analyze/analyze-fast: analyze-fast is
+  // already on FAST, analyze is the deep post-call read where quality wins.
+  // Only prepare is affected because it's the one users wait for in real
+  // time during a live demo.
+  DEMO_FAST_AI_MODE: truthy(process.env.DEMO_FAST_AI_MODE),
 };
 
 export const isProd = env.NODE_ENV === 'production';

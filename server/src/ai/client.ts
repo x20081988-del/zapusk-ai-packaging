@@ -156,6 +156,67 @@ export function isAIGuardrailError(err: unknown): err is AIGuardrailError {
   return err instanceof AIGuardrailError || (err instanceof Error && err.name === 'AIGuardrailError');
 }
 
+// Sprint 62.P1 — Hard error for misconfigured model name (e.g. `gpt-5.5`).
+// Previously, OpenAI/Anthropic returning 404/model_not_found landed in the
+// generic catch in completeAI, which silently returned a mockResult. To the
+// founder it looked like AI answered; in reality every call was mocked and
+// only AiRequestLedger.success=false revealed the truth.
+//
+// Now, the catch detects this class of upstream error and throws
+// AIModelConfigError(502) instead. Mock fallback is still allowed for
+// transient errors (timeouts, 5xx) and for AI_PROVIDER=mock / missing key —
+// those are explicitly safe degradations. Misconfigured model is not.
+//
+// Extends AIGuardrailError so existing `isAIGuardrailError` checks in route
+// handlers (salesAssistant.ts, brief.ts, prompts.ts) catch it automatically.
+export class AIModelConfigError extends AIGuardrailError {
+  provider: AIProvider;
+  model: string;
+  upstreamCode: string;
+
+  constructor(provider: AIProvider, model: string, upstreamCode: string) {
+    super('model_not_found', 502);
+    this.name = 'AIModelConfigError';
+    this.provider = provider;
+    this.model = model;
+    this.upstreamCode = upstreamCode;
+  }
+}
+
+export function isAIModelConfigError(err: unknown): err is AIModelConfigError {
+  return err instanceof AIModelConfigError || (err instanceof Error && err.name === 'AIModelConfigError');
+}
+
+// Heuristic: did the upstream API tell us the model itself is wrong?
+// Covers:
+//   • OpenAI: HTTP 404 with `code: "model_not_found"` (most common)
+//   • OpenAI: HTTP 400 with body containing "model" + "does not exist" / "not found"
+//   • Anthropic: HTTP 404 with `error.type: "not_found_error"` referencing a model
+//
+// Anything outside this whitelist (timeouts, 5xx, network) still falls back
+// to mock — those are transient and the user is better served by a mock card
+// than a hard failure.
+function isInvalidModelError(err: unknown): boolean {
+  const status = errorStatus(err);
+  const raw =
+    (err as { code?: unknown; type?: unknown } | null)?.code ??
+    (err as { type?: unknown } | null)?.type ??
+    '';
+  const codeStr = String(raw).toLowerCase();
+  if (codeStr === 'model_not_found' || codeStr === 'invalid_model') return true;
+
+  const msgRaw = (err as { message?: unknown } | null)?.message;
+  const msg = typeof msgRaw === 'string' ? msgRaw.toLowerCase() : '';
+
+  if (status === 404 && /model/.test(msg)) return true;
+  // OpenAI sometimes returns 400 invalid_request_error for placeholder names
+  // like 'gpt-5.5'. Look for explicit model-name failure phrasing.
+  if (status === 400 && /model/.test(msg) && /(does not exist|not found|invalid|unknown)/.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
 export const aiClient = {
   generate(opts: AICallOptions): Promise<AIResult> {
     return completeAI({ ...opts, asJSON: false });
@@ -189,7 +250,14 @@ export async function aiComplete(opts: AICallOptions): Promise<AIResult> {
 async function completeAI(opts: AICallOptions): Promise<AIResult> {
   const prepared = prepareCall(opts);
   const provider = env.AI_PROVIDER;
-  const model = modelFor(provider, prepared.modelRoute);
+  const resolved = resolveModel(provider, prepared.modelRoute);
+  const model = resolved.model;
+
+  // Sprint 62.P1 — structured pre-flight log. One line per AI call BEFORE
+  // the upstream request fires, so even if the call hangs or times out, ops
+  // can grep logs and see what model was supposed to answer. No prompts,
+  // no API keys.
+  logModelResolved(prepared, provider, resolved);
 
   await enforceGuardrails(prepared, provider, model);
 
@@ -235,6 +303,37 @@ async function completeAI(opts: AICallOptions): Promise<AIResult> {
     const code = safeErrorCode(err);
     const timeoutHit = isTimeoutError(err);
     recordBreakerResult(provider, false, timeoutHit, code);
+
+    // Sprint 62.P1 — invalid model name → hard error, NOT silent mock.
+    // Detected via 404/model_not_found / 400 invalid_request_error mentioning
+    // the model. We still want to record the ledger failure (so the admin
+    // endpoint shows the bad attempt), but we surface the failure to the
+    // caller instead of returning a plausible-looking mock answer.
+    if (isInvalidModelError(err)) {
+      const msg = err instanceof Error ? err.message.slice(0, 200) : 'unknown';
+      console.error(
+        `[ai/model-error] feature=${prepared.feature} provider=${provider} model=${model} ` +
+        `upstreamCode=${code} source=${resolved.source} envVar=${resolved.envVar ?? '-'} ` +
+        `message="${msg}"`,
+      );
+      const usage = {
+        provider,
+        feature: prepared.feature,
+        model,
+        latencyMs: 0,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedCostUsd: null,
+        success: false,
+        errorCode: code,
+        timeoutHit: false,
+      };
+      logUsage(usage);
+      recordAiRequestLedger(prepared, usage, null, false).catch(() => {});
+      throw new AIModelConfigError(provider, model, code);
+    }
+
     console.warn(`[ai] provider=${provider} feature=${prepared.feature} model=${model} failed code=${code}; using mock fallback`);
     const usage = {
       provider,
@@ -261,6 +360,21 @@ async function completeAI(opts: AICallOptions): Promise<AIResult> {
   }
 
   return mockResult(prepared, provider !== 'mock');
+}
+
+// Sprint 62.P1 — single structured log line for every AI call. Format chosen
+// to be greppable: `[ai/model-resolved]` prefix, then key=value pairs.
+// Deliberately omits prompts and API keys.
+function logModelResolved(
+  prepared: PreparedCall,
+  provider: AIProvider,
+  resolved: ResolvedModel,
+): void {
+  const line =
+    `[ai/model-resolved] feature=${prepared.feature} provider=${provider} ` +
+    `route=${prepared.modelRoute} finalModel=${resolved.model} ` +
+    `source=${resolved.source} envVar=${resolved.envVar ?? '-'}`;
+  console.log(line);
 }
 
 function prepareCall(opts: AICallOptions): PreparedCall {
@@ -489,6 +603,49 @@ function modelFor(provider: AIProvider, route: AIModelRoute): string {
   }
   if (provider === 'anthropic') return env.ANTHROPIC_MODEL;
   return 'mock-v1';
+}
+
+// Sprint 62.P1 — Inspectable model resolution for logs / admin endpoint.
+// Returns the env var name and the resolution source ('env' if process.env
+// was actually set, 'fallback' if it falls through to the hard default in
+// env.ts). `template` is NOT possible here because aiClient.* does not
+// currently accept a per-call model override — sales-assistant routes always
+// resolve through env. For the transcription override flow, see
+// realtime.ts:resolveTranscriptionModel.
+export type AIModelSource = 'env' | 'fallback' | 'mock';
+
+export interface ResolvedModel {
+  model: string;
+  source: AIModelSource;
+  envVar: string | null;
+}
+
+export function resolveModel(provider: AIProvider, route: AIModelRoute): ResolvedModel {
+  if (provider === 'mock') {
+    return { model: 'mock-v1', source: 'mock', envVar: null };
+  }
+  const finalModel = modelFor(provider, route);
+  const envVar = envVarNameFor(provider, route);
+  // process.env returns undefined when the var is not set. env.ts has
+  // hardcoded defaults like 'gpt-4o' for _MAIN; distinguish those from
+  // explicit operator config so the doctor + admin endpoint can tell
+  // "we're running on the hardcoded default" vs "set in Render".
+  const rawSet = envVar ? process.env[envVar] : undefined;
+  const source: AIModelSource = rawSet && rawSet.trim() ? 'env' : 'fallback';
+  return { model: finalModel, source, envVar };
+}
+
+function envVarNameFor(provider: AIProvider, route: AIModelRoute): string | null {
+  if (provider === 'openai') {
+    if (route === 'fast') return 'OPENAI_MODEL_FAST';
+    if (route === 'realtime') return 'OPENAI_MODEL_REALTIME';
+    return 'OPENAI_MODEL_MAIN';
+  }
+  if (provider === 'anthropic') {
+    if (route === 'fast') return 'ANTHROPIC_MODEL_FAST';
+    return 'ANTHROPIC_MODEL_MAIN';
+  }
+  return null;
 }
 
 async function withRetry<T>(call: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {

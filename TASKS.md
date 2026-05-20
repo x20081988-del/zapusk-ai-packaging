@@ -2,11 +2,60 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-18 (Sprint 62.P0: Project Materials Flow — Source Materials vs AI-generated Materials + AI Context Visibility).
+Last updated: 2026-05-20 (Sprint 62.P1: AI Model Source of Truth + Demo Speed Diagnostics).
 
 ---
 
-## Completed (this sprint — Sprint 62.P0 Project Materials Flow 2026-05-18)
+## Completed (this sprint — Sprint 62.P1 AI Model Source of Truth 2026-05-20)
+
+**Why this sprint**
+Audit показал, что про модели одновременно говорят 4 источника (Render env, server/.env, root /.env, PromptTemplate.model), а из UI/API нельзя понять, какая модель отвечает на конкретную фичу. Чувствовалось как «AI ведёт себя странно, скорость плавает» — на самом деле prepare/analyze идут на gpt-4.1 (heavy), а analyze-fast на gpt-4o-mini, и команда об этом не знала.
+
+**Что сделано**
+- **Root /.env neutralized.** Файл лежал с `OPENAI_MODEL_MAIN=gpt-5.5` (несуществующая модель) + exposed OpenAI key. Backend его НЕ читает, но он путал команду. Заменён на безопасный комментарий "DO NOT USE — backend reads server/.env". Файл в .gitignore — не коммитим.
+- **Hard error for invalid model.** `client.ts` теперь распознаёт OpenAI/Anthropic 404 `model_not_found` / 400 `invalid_model` и бросает `AIModelConfigError(502, 'model_not_found')` вместо тихого fallback'а в mock. Mock fallback допустим только для AI_PROVIDER=mock, missing key, transient errors (timeouts/5xx). До этого `gpt-5.5` молча превращался в mock answer без warning'а UI.
+- **Structured `[ai/model-resolved]` log.** Один лог-line на каждый AI call с `feature`, `provider`, `route`, `finalModel`, `source` (env/fallback/template/mock), `envVar`. Без prompts, без keys. Greppable.
+- **`GET /api/admin/ai/active-models`.** Новый endpoint (ADMIN/MANAGER) — per-feature таблица: для каждой фичи (sales_assistant.prepare/analyze/analyze_fast, realtime.transcription, transcription, brief.generate, classification) показывает provider, route, finalModel, source, envVar, templateKey, templateModel, **usesTemplateOverride** (true только для transcription), и lastLedger (что реально отвечало в последний раз).
+- **`/api/admin/health/details` расширен.** Возвращает все 7 моделей (`OPENAI_MODEL_MAIN/FAST/REALTIME/TRANSCRIBE/REALTIME_TRANSCRIBE`, `ANTHROPIC_MODEL_MAIN/FAST`) + флаги. Old `openaiModelMain` сохранён для back-compat.
+- **`DEMO_FAST_AI_MODE` flag.** Default OFF. Когда ON, `sales_assistant.prepare` переходит с MAIN на FAST route (gpt-4o-mini вместо gpt-4.1). Не трогает analyze/realtime. Безопасный demo-speed switch.
+- **UI honesty warning.** В `web/src/pages/Templates.tsx` для не-transcription шаблонов с непустым `model` показывается warning: «Эта модель сейчас не применяется. Поле работает только для transcription шаблонов. Реальную модель — в /api/admin/ai/active-models».
+- **`npm run env:doctor`.** Печатает безопасный summary: cwd, NODE_ENV, AI_PROVIDER, model env vars + source (env/fallback), API key length, root .env warning, suspicious model detection (`gpt-5.5` → ⚠), effective per-feature model table. Не печатает ключи.
+- **`npm run db:doctor`.** Read-only check 9 critical structures (Sprint 48 columns, AiRequestLedger, IdempotencyKey, seed integrity, ADMIN user). Exit 1 если drift. Не модифицирует ничего.
+- **Удалены debug one-off скрипты:** `resetAdminPassword.ts`, `probeSchema.ts` (security/cruft). Оставлены: `applyFullSchemaDrift.ts` (документированный recovery tool), новые `dbDoctor.ts` / `envDoctor.ts`.
+
+**Какие файлы изменены**
+- `server/src/ai/client.ts` (+~110 lines: AIModelConfigError, isInvalidModelError, resolveModel, [ai/model-resolved] log, model_not_found branch)
+- `server/src/env.ts` (+DEMO_FAST_AI_MODE flag)
+- `server/src/routes/admin.ts` (+~190 lines: /ai/active-models endpoint, expanded health/details)
+- `server/src/services/salesAssistantService.ts` (+5 lines: DEMO_FAST_AI_MODE route switch in prepareForMeeting)
+- `web/src/pages/Templates.tsx` (+~25 lines: isTemplateModelHonored helper + UI warning)
+- `server/src/scripts/envDoctor.ts` (new, ~180 lines)
+- `server/src/scripts/dbDoctor.ts` (new, ~165 lines)
+- `package.json` (+env:doctor, db:doctor scripts at root + server)
+- `server/package.json` (same)
+- `.env` (neutralized — repo root only; gitignored, never committed)
+- `TASKS.md`, `CLAUDE.md`, `AGENTS.md` (docs)
+
+**Не сделано (Variant A — намеренно отложено в Sprint 63)**
+- template.model для sales_gpt / brief / packaging — runtime по-прежнему игнорирует. UI теперь говорит правду. Под починку нужен separate sprint с tests.
+- per-feature env vars (OPENAI_MODEL_FEATURE_PREPARE и т.д.) — не делали, MAIN/FAST/REALTIME достаточно с DEMO_FAST_AI_MODE.
+- admin UI для active-models — endpoint готов, web-page нет. Founder вызывает curl или смотрит JSON в браузере.
+
+**Verification**
+- `( cd server && npx tsc --noEmit )` → pass
+- `( cd web && npx tsc --noEmit )` → pass
+- `npm run build` → pass
+- `npm run env:doctor` → корректно показал actual config (см. final report)
+- `npm run db:doctor` → 9/9 pass
+
+**Deploy risk**
+- NIL. Сегодня без push. Изменения backwards-compatible: existing routes / API contracts не тронуты, новые endpoint только добавляют возможности. UI warning виден только админам с template.model заполненным для не-transcription шаблонов.
+
+---
+
+## Completed (history)
+
+### Sprint 62.P0 Project Materials Flow 2026-05-18
 
 **Что сделано**
 - Раздел «Материалы проекта» пересобран в понятный workspace: отдельно видны исходные материалы проекта, AI-контекст и AI-сгенерированные материалы.

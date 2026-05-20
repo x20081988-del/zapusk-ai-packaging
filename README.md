@@ -112,13 +112,23 @@ Log in with any email (MVP single-user dev mode). Open the seeded demo "Венс
 
 `server/src/ai/client.ts` is the backend AI gateway. Services call `aiClient.generate()`, `aiClient.generateJson()` or the backward-compatible `aiComplete()` wrapper; routes and business services do not talk to the OpenAI SDK directly.
 
-Provider is selected with `AI_PROVIDER` (`openai` / `anthropic` / `mock`). OpenAI uses the Responses API by default and falls back to one isolated legacy chat-completions adapter only if the installed SDK runtime does not expose `responses.create`. If a real provider is selected but the key is missing, the model is unavailable, quota is exhausted, or another provider error happens, the gateway logs a safe error code and returns the deterministic mock fallback so the product stays usable.
+Provider is selected with `AI_PROVIDER` (`openai` / `anthropic` / `mock`). OpenAI uses the Responses API by default and falls back to one isolated legacy chat-completions adapter only if the installed SDK runtime does not expose `responses.create`.
+
+Mock fallback policy (Sprint 62.P1):
+
+- If the API key is missing or the provider circuit breaker is open, the gateway returns mock and logs `missing_api_key` / `provider_degraded`.
+- If upstream returns a transient error (timeout, 5xx, network), the gateway returns mock and logs the safe error code.
+- If upstream returns `model_not_found` / 400 `invalid_model` / 404 referencing the model, the gateway throws `AIModelConfigError(502)` — **NO silent mock fallback**. Production must surface the misconfiguration loudly.
 
 Model routing:
 
-- `OPENAI_MODEL_MAIN` — investment packaging, brief generation/regeneration, reviews/regenerate flows, strategy/narrative, sales assistant analysis.
-- `OPENAI_MODEL_FAST` — summaries, classifications, metadata extraction, small cleanup tasks.
-- `OPENAI_MODEL_REALTIME` — reserved for future realtime audio streaming abstraction; not used by the current UI.
+- `OPENAI_MODEL_MAIN` — investment packaging, brief generation/regeneration, reviews/regenerate flows, strategy/narrative, sales assistant analysis & meeting prep.
+- `OPENAI_MODEL_FAST` — summaries, classifications, metadata extraction, sales_assistant.analyze_fast (live hints), small cleanup tasks.
+- `OPENAI_MODEL_REALTIME` — OpenAI Realtime API streaming (ephemeral session secret minting).
+- `OPENAI_MODEL_REALTIME_TRANSCRIBE` — live WebRTC transcription model (default: `gpt-4o-transcribe`).
+- `OPENAI_MODEL_TRANSCRIBE` — server-side transcription of uploaded audio files.
+
+To inspect which model is currently answering which feature, hit `GET /api/admin/ai/active-models` (ADMIN/MANAGER) or run `npm run env:doctor` locally.
 
 JSON flows use strict parsing in services; Sales Assistant additionally asks OpenAI for a structured `json_schema` response. When `AI_LOG_USAGE=true`, logs include provider, feature, model, latency, token counts if available, estimated cost as `null` when not available, success/failure and safe error code. Prompts, project data and API keys are not logged.
 
@@ -140,14 +150,21 @@ AI_PROVIDER=mock npm start
 # OpenAI production: server-side secrets only.
 AI_PROVIDER=openai
 OPENAI_API_KEY=...
-OPENAI_MODEL_MAIN=gpt-5.5
+OPENAI_MODEL_MAIN=gpt-4.1
 OPENAI_MODEL_FAST=gpt-4o-mini
 OPENAI_MODEL_REALTIME=gpt-4o-realtime-preview
+OPENAI_MODEL_REALTIME_TRANSCRIBE=gpt-4o-transcribe
+OPENAI_MODEL_TRANSCRIBE=gpt-4o-transcribe
 AI_LOG_USAGE=true
 AI_MAX_REQUESTS_PER_USER_PER_DAY=500
 AI_MAX_REQUESTS_PER_PROJECT_PER_DAY=2000
 AI_MAX_COST_USD_PER_DAY=50
 AI_MAX_TIMEOUT_MS=30000
+
+# Sprint 62.P1 — safe demo-speed switch. OFF by default.
+# When ON, sales_assistant.prepare uses OPENAI_MODEL_FAST (gpt-4o-mini)
+# instead of MAIN (gpt-4.1). 3-5x faster, slightly lower plan quality.
+DEMO_FAST_AI_MODE=false
 ```
 
 If Render logs show `http_401`, check the API key. If they show `http_403` or `http_429`, check model access, billing/quota and rate limits. If the selected model is unavailable, the gateway logs the model name and safe error code, then returns mock fallback rather than failing silently.
@@ -282,9 +299,12 @@ npm start
 | `CORS_ORIGIN`     | Не используется в single-service. Для split-deploy — URL фронта.        | `*`                            |
 | `AI_PROVIDER`     | `openai` / `anthropic` / `mock`. По умолчанию `mock`.                   | `openai`                       |
 | `OPENAI_API_KEY`  | OpenAI ключ. **Только на сервере**, никогда не в FE и логах.             | секрет                         |
-| `OPENAI_MODEL_MAIN` | Основная модель для брифов, packaging, regenerate/review, sales analysis. | `gpt-5.5`                    |
-| `OPENAI_MODEL_FAST` | Быстрая модель для summaries/classifications/metadata.                 | `gpt-4o-mini`                  |
-| `OPENAI_MODEL_REALTIME` | Модель для будущего realtime audio streaming. Сейчас только env/abstraction. | `gpt-4o-realtime-preview` |
+| `OPENAI_MODEL_MAIN` | Основная модель для брифов, packaging, regenerate/review, sales analysis + meeting prep. | `gpt-4.1`                    |
+| `OPENAI_MODEL_FAST` | Быстрая модель для summaries/classifications/metadata + live hints (sales_assistant.analyze_fast). | `gpt-4o-mini`                  |
+| `OPENAI_MODEL_REALTIME` | Модель Realtime API (ephemeral session secret). | `gpt-4o-realtime-preview`         |
+| `OPENAI_MODEL_REALTIME_TRANSCRIBE` | Live WebRTC транскрипция. Может быть override'нута `PromptTemplate.model` шаблона `realtime_transcription`. | `gpt-4o-transcribe` |
+| `OPENAI_MODEL_TRANSCRIBE` | Server-side транскрипция загруженных аудио. | `gpt-4o-transcribe`          |
+| `DEMO_FAST_AI_MODE` | Sprint 62.P1. `true` переводит `sales_assistant.prepare` на FAST модель — для быстрых demo. Default `false`. | `false` |
 | `AI_LOG_USAGE`    | Безопасные usage-логи без prompt/API key: provider, feature, model, latency, tokens, error code. | `true` |
 | `AI_MAX_REQUESTS_PER_USER_PER_DAY` | Дневной лимит AI-запросов на пользователя; превышение → `429`. | `500` |
 | `AI_MAX_REQUESTS_PER_PROJECT_PER_DAY` | Дневной лимит AI-запросов на проект; превышение → `429`. | `2000` |
