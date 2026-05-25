@@ -346,7 +346,7 @@ export default function ProjectCockpit() {
         <InvestmentJourney
           project={project}
           jobs={jobs}
-          options={{ meetingsCount, leadsLaunched }}
+          options={{ meetingsCount, leadsLaunched, reviews }}
           onChooseTrack={() => setTrackPickerOpen(true)}
         />
       </div>

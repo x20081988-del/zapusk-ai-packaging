@@ -420,6 +420,152 @@ async function seedDemoArchetype(userId: string, d: DemoProject) {
   } catch (err) {
     console.warn(`[seed] prompts for ${d.name} skipped:`, err instanceof Error ? err.message : err);
   }
+
+  // Sprint 62.P3 demo showcase — Luce Silva — выводим этот demo-проект в
+  // состояние «полностью упакованного showcase»: все packaging-задачи
+  // закрыты командой ZAPUSK AI, brief'у заполнены все категории, юр.
+  // упаковка отмечена как готовая, заведены условия сделки. AI-лиды
+  // НЕ запускаются автоматически — UI должен показывать «Готов к запуску
+  // AI-лидов» (это next-step). Защита isDemo=true: для clients-проектов
+  // с тем же именем upgrade не сработает (см. ранний refusal-check).
+  if (d.name === 'Luce Silva') {
+    try {
+      await seedLuceSilvaShowcase(project.id);
+    } catch (err) {
+      console.warn(`[seed] luce silva showcase upgrade failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+}
+
+// Sprint 62.P3 demo showcase upgrade. Idempotent: повторный seed просто
+// перепишет статусы — состояние «всё готово» восстанавливается на каждом
+// deploy. Никаких deletes; только updates / inserts с защитой от дублей.
+async function seedLuceSilvaShowcase(projectId: string): Promise<void> {
+  // 1) Project-level: status='ready' + investmentTrack 'llc_share' (чтобы
+  //    в журней появились все 6 этапов, включая legal с правильными items).
+  await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      status: 'ready',
+      investmentTrack: 'llc_share',
+    },
+  });
+
+  // 2) Brief: очищаем missingData / missingByCategory чтобы все категории
+  //    были «закрыты». Бизнес-контент (businessSummary, monetization, …)
+  //    остаётся из DEMO_PROJECTS — мы только подчищаем «остались вопросы».
+  const cleanedMissingByCategory = {
+    financial: [], market: [], team: [], deal: [], unit_econ: [], risks: [],
+  };
+  await prisma.projectBrief.update({
+    where: { projectId },
+    data: {
+      missingData: JSON.stringify([]),
+      missingByCategory: JSON.stringify(cleanedMissingByCategory),
+      // Несколько готовых ответов интервью — чтобы hasInterview=true в UI.
+      interviewAnswers: JSON.stringify([
+        { question: 'Подтверждённые бронирования на первый сезон?', answer: 'Зафиксировано 12 предзаказов; цель — 50 к открытию сезона.', category: 'finance', savedAt: new Date().toISOString() },
+        { question: 'Партнёрства с event-агентствами', answer: 'Подписаны соглашения о намерениях с 4 ключевыми event-агентствами Москвы.', category: 'market', savedAt: new Date().toISOString() },
+        { question: 'Структура сделки и владения', answer: 'ООО с распределением долей 51/49, корпоративное соглашение готово.', category: 'deal', savedAt: new Date().toISOString() },
+        { question: 'CAPEX-смета и календарь оплат', answer: 'Детальная смета 66 млн ₽ согласована, оплаты по этапам строительства.', category: 'finance', savedAt: new Date().toISOString() },
+        { question: 'Команда операционного управления', answer: 'Шеф-повар, event-директор, sales-менеджер и админ — закреплены.', category: 'team', savedAt: new Date().toISOString() },
+      ]),
+    },
+  });
+
+  // 3) InvestorTerms: финальные условия сделки (видны в карточке проекта
+  //    и в инвестиционном предложении).
+  await prisma.investorTerms.upsert({
+    where: { projectId },
+    create: {
+      projectId,
+      amount: 66_000_000,
+      equityPercent: 49,
+      valuation: 135_000_000,
+      instrument: 'equity',
+      useOfFunds: 'Площадка и конструкции (40%), кухня и инженерия (25%), благоустройство (15%), маркетинг и продажи (15%), резерв (5%)',
+      exitStrategy: 'Дивиденды до 70% прибыли до окупаемости, далее дивидендная модель + опция выкупа доли через 3 сезона.',
+      expectedReturn: 'Целевой возврат x4 за 3 сезона при базовой загрузке.',
+      payback: '1-2 сезона',
+    },
+    update: {
+      amount: 66_000_000,
+      equityPercent: 49,
+      valuation: 135_000_000,
+      instrument: 'equity',
+      useOfFunds: 'Площадка и конструкции (40%), кухня и инженерия (25%), благоустройство (15%), маркетинг и продажи (15%), резерв (5%)',
+      exitStrategy: 'Дивиденды до 70% прибыли до окупаемости, далее дивидендная модель + опция выкупа доли через 3 сезона.',
+      expectedReturn: 'Целевой возврат x4 за 3 сезона при базовой загрузке.',
+      payback: '1-2 сезона',
+    },
+  });
+
+  // 4) PackagingJobs: помечаем все существующие задачи проекта как
+  //    «succeeded + completedBy», чтобы UI журней показывал «готово».
+  //    completedBy = «Команда ZAPUSK AI» — UI это видит как закрытую задачу.
+  await prisma.packagingJob.updateMany({
+    where: { projectId },
+    data: {
+      status: 'succeeded',
+      completedBy: 'Команда ZAPUSK AI',
+      completedAt: new Date(),
+    },
+  });
+
+  // 5) Legal artefactReviews: создаём approved-отзывы для items
+  //    юридической упаковки. UI buildLegalStage (Sprint 62.P3) использует
+  //    их, чтобы маркировать items как «готово».
+  const legalItemKeys = ['legal_structure', 'llc_agreement', 'sale_contracts', 'legal_dd'];
+  for (const itemKey of legalItemKeys) {
+    const existing = await prisma.artefactReview.findFirst({
+      where: { projectId, artefactKind: 'legal', artefactKey: itemKey },
+    });
+    const reviewData = {
+      artefactKind: 'legal',
+      artefactKey: itemKey,
+      artefactId: null,
+      score: 5,
+      comment: 'Юридический блок подготовлен и подтверждён командой Zapusk AI.',
+      approved: true,
+      needsRework: false,
+      reviewer: 'Команда ZAPUSK AI',
+    };
+    if (existing) {
+      await prisma.artefactReview.update({
+        where: { id: existing.id },
+        data: { ...reviewData, archivedAt: null },
+      });
+    } else {
+      await prisma.artefactReview.create({
+        data: { projectId, ...reviewData },
+      });
+    }
+  }
+
+  // 6) Brief artefact review — отметить сам brief как принятый.
+  const existingBriefReview = await prisma.artefactReview.findFirst({
+    where: { projectId, artefactKind: 'brief', artefactKey: 'brief' },
+  });
+  const briefReviewData = {
+    artefactKind: 'brief',
+    artefactKey: 'brief',
+    artefactId: null,
+    score: 5,
+    comment: 'Бриф собран, согласован, готов для AI-лидов.',
+    approved: true,
+    needsRework: false,
+    reviewer: 'Команда ZAPUSK AI',
+  };
+  if (existingBriefReview) {
+    await prisma.artefactReview.update({
+      where: { id: existingBriefReview.id },
+      data: { ...briefReviewData, archivedAt: null },
+    });
+  } else {
+    await prisma.artefactReview.create({
+      data: { projectId, ...briefReviewData },
+    });
+  }
 }
 
 // Sprint 25 — helper для bootstrap-аккаунтов.

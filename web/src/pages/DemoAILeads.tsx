@@ -156,8 +156,8 @@ export default function DemoAILeads() {
             {/* Список лидов */}
             <Card padded>
               <CardHeader
-                title="Демо-лиды"
-                subtitle={`${leads.length} разговоров · кликните для деталей и записи`}
+                title="Список квалифицированных AI-лидов"
+                subtitle={`${leads.length} разговоров с AI-прозвона · кликните для прослушивания записи и контекста`}
               />
               {loading && (
                 <div className="text-sm text-muted py-8 text-center">Загрузка демо-данных…</div>
@@ -178,28 +178,48 @@ export default function DemoAILeads() {
               )}
               {!loading && !error && leads.length > 0 && (
                 <ul className="space-y-2">
-                  {leads.map((lead) => (
-                    <li key={lead.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(lead.id)}
-                        className={`w-full text-left rounded-md border px-3 py-2.5 transition-all ${
-                          selectedId === lead.id
-                            ? 'border-ai/45 bg-ai/10 shadow-ai-glow'
-                            : 'border-hairline bg-canvas/40 hover:border-ai/30'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 mb-1">
-                          <StatusBadge tone={lead.status === 'HOT' ? 'danger' : lead.status === 'NEW' ? 'ai' : 'neutral'} dot>
-                            {lead.status}
-                          </StatusBadge>
-                          <span className="text-sm font-semibold text-primary truncate">{lead.investor.name}</span>
-                          <span className="text-[11px] text-muted ml-auto shrink-0">{relTime(lead.receivedAt)}</span>
-                        </div>
-                        <p className="text-xs text-secondary leading-snug line-clamp-2">{lead.aiSummary}</p>
-                      </button>
-                    </li>
-                  ))}
+                  {leads.map((lead, idx) => {
+                    // Sprint 62.P3 demo showcase — leads с именем «Лид №N» получают
+                    // выделенную карточку с большим серийным номером, чтобы создать
+                    // ощущение «вот поток обработанных AI-инвесторов».
+                    const isNumberedDemo = /^Лид\s*№\s*\d+/i.test(lead.investor.name);
+                    const numberMatch = lead.investor.name.match(/№\s*(\d+)/);
+                    const leadNumber = numberMatch ? numberMatch[1] : String(idx + 1);
+                    return (
+                      <li key={lead.id}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(lead.id)}
+                          className={`w-full text-left rounded-md border px-3 py-2.5 transition-all ${
+                            selectedId === lead.id
+                              ? 'border-ai/45 bg-ai/10 shadow-ai-glow'
+                              : isNumberedDemo
+                                ? 'border-ai/30 bg-ai/5 hover:border-ai/45'
+                                : 'border-hairline bg-canvas/40 hover:border-ai/30'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 mb-1">
+                            {isNumberedDemo && (
+                              <span
+                                className="inline-flex items-center justify-center w-8 h-8 rounded-md bg-grad-ai text-canvas font-bold text-sm shadow-ai-glow shrink-0"
+                                title={`Лид №${leadNumber}`}
+                              >
+                                №{leadNumber}
+                              </span>
+                            )}
+                            <StatusBadge tone={lead.status === 'HOT' ? 'danger' : lead.status === 'NEW' ? 'ai' : 'neutral'} dot>
+                              {lead.status}
+                            </StatusBadge>
+                            <span className="text-sm font-semibold text-primary truncate">
+                              {isNumberedDemo ? 'Квалифицированный AI-лид' : lead.investor.name}
+                            </span>
+                            <span className="text-[11px] text-muted ml-auto shrink-0">{relTime(lead.receivedAt)}</span>
+                          </div>
+                          <p className="text-xs text-secondary leading-snug line-clamp-2">{lead.aiSummary}</p>
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </Card>

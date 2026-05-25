@@ -277,7 +277,11 @@ export interface ProjectBrief {
 export interface ArtefactReview {
   id: string;
   projectId: string;
-  artefactKind: 'prompt' | 'document' | 'brief';
+  // Sprint 62.P3 — добавлен 'legal' для отметок готовности юридических items
+  // (legal_structure, llc_agreement, sale_contracts, legal_dd, и т.д.).
+  // UI buildLegalStage использует review.approved=true чтобы маркировать
+  // item как «готово».
+  artefactKind: 'prompt' | 'document' | 'brief' | 'legal';
   artefactKey: string;
   artefactId: string | null;
   score: number;

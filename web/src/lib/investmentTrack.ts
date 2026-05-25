@@ -1,4 +1,4 @@
-import type { Project, InvestmentTrack, PackagingJob } from './api';
+import type { Project, InvestmentTrack, PackagingJob, ArtefactReview } from './api';
 
 // Sprint 21 + Sprint 28 — «Путь привлечения инвестиций».
 //
@@ -140,6 +140,10 @@ export interface JourneyOptions {
   meetingsCount?: number;
   /** Sprint 28: запущена ли AI-лидогенерация (из /api/ai-leads.mode === 'live'). */
   leadsLaunched?: boolean;
+  /** Sprint 62.P3: artefactReviews для маркировки legal items как «готово».
+   *  buildLegalStage смотрит на review.approved=true с artefactKind='legal'
+   *  и artefactKey совпадающим с item.id. */
+  reviews?: ArtefactReview[];
 }
 
 /**
@@ -314,12 +318,19 @@ function buildPackagingStage(ctx: Context): Stage {
   };
 }
 
-function buildLegalStage(track: InvestmentTrack, _ctx: Context): Stage | null {
+function buildLegalStage(track: InvestmentTrack, ctx: Context): Stage | null {
   if (track === 'packaging_only') return null;
 
   // Sprint 28: legal_structure больше НЕ дефолтится в «в_работе». Без явных
   // условий — `не_начато`. Stage-gating сделает её `заблокировано`, пока
   // packaging не готово.
+  // Sprint 62.P3 — если для item существует ArtefactReview с artefactKind='legal'
+  // + artefactKey=item.id + approved=true, item помечается как «готово».
+  // Это позволяет команде Zapusk AI закрывать юридические задачи без отдельной
+  // packaging-job машины.
+  const legalStatus = (itemKey: string): ItemStatus =>
+    ctx.legalApproved.has(itemKey) ? 'готово' : 'не_начато';
+
   const items: StageItem[] = [];
 
   items.push({
@@ -327,44 +338,44 @@ function buildLegalStage(track: InvestmentTrack, _ctx: Context): Stage | null {
     title: 'Структура сделки',
     hint: 'Юрист готовит описание формата привлечения и распределения долей.',
     by: 'юрист',
-    status: 'не_начато',
+    status: legalStatus('legal_structure'),
   });
 
   if (track === 'shareholding' || track === 'pre_ipo') {
     items.push(
-      { id: 'shares_issue', title: 'Выпуск акций', hint: 'Решение об эмиссии, проспект, регистрация.', by: 'юрист', status: 'не_начато' },
-      { id: 'registrar', title: 'Регистратор', hint: 'Договор с регистратором, ведение реестра акционеров.', by: 'юрист', status: 'не_начато' },
-      { id: 'shareholder_agreement', title: 'Акционерное соглашение', hint: 'Условия между фаундерами и инвесторами.', by: 'юрист', status: 'не_начато' },
+      { id: 'shares_issue', title: 'Выпуск акций', hint: 'Решение об эмиссии, проспект, регистрация.', by: 'юрист', status: legalStatus('shares_issue') },
+      { id: 'registrar', title: 'Регистратор', hint: 'Договор с регистратором, ведение реестра акционеров.', by: 'юрист', status: legalStatus('registrar') },
+      { id: 'shareholder_agreement', title: 'Акционерное соглашение', hint: 'Условия между фаундерами и инвесторами.', by: 'юрист', status: legalStatus('shareholder_agreement') },
     );
   }
 
   if (track === 'llc_share') {
     items.push(
-      { id: 'llc_agreement', title: 'Корпоративное соглашение', hint: 'Соглашение участников ООО, правила голосования и выходов.', by: 'юрист', status: 'не_начато' },
-      { id: 'sale_contracts', title: 'Договоры купли-продажи доли', hint: 'Шаблон договора для каждого инвестора.', by: 'юрист', status: 'не_начато' },
-      { id: 'legal_dd', title: 'Legal due diligence', hint: 'Проверка чистоты юрлица перед сделкой.', by: 'юрист', status: 'не_начато' },
+      { id: 'llc_agreement', title: 'Корпоративное соглашение', hint: 'Соглашение участников ООО, правила голосования и выходов.', by: 'юрист', status: legalStatus('llc_agreement') },
+      { id: 'sale_contracts', title: 'Договоры купли-продажи доли', hint: 'Шаблон договора для каждого инвестора.', by: 'юрист', status: legalStatus('sale_contracts') },
+      { id: 'legal_dd', title: 'Юридический due diligence', hint: 'Проверка чистоты юрлица перед сделкой.', by: 'юрист', status: legalStatus('legal_dd') },
     );
   }
 
   if (track === 'convertible') {
     items.push(
-      { id: 'term_sheet', title: 'Term Sheet', hint: 'Условия конвертации, дисконт, cap.', by: 'юрист', status: 'не_начато' },
-      { id: 'loan_docs', title: 'Договор займа', hint: 'Подписываемый шаблон для инвестора.', by: 'юрист', status: 'не_начато' },
-      { id: 'convert_logic', title: 'Логика конвертации / возврата', hint: 'Триггеры, проценты, условия выкупа.', by: 'юрист', status: 'не_начато' },
+      { id: 'term_sheet', title: 'Term Sheet', hint: 'Условия конвертации, дисконт, cap.', by: 'юрист', status: legalStatus('term_sheet') },
+      { id: 'loan_docs', title: 'Договор займа', hint: 'Подписываемый шаблон для инвестора.', by: 'юрист', status: legalStatus('loan_docs') },
+      { id: 'convert_logic', title: 'Логика конвертации / возврата', hint: 'Триггеры, проценты, условия выкупа.', by: 'юрист', status: legalStatus('convert_logic') },
     );
   }
 
   if (track === 'safe') {
     items.push(
-      { id: 'safe_form', title: 'Форма SAFE', hint: 'Шаблон договора SAFE под российскую юрисдикцию.', by: 'юрист', status: 'не_начато' },
-      { id: 'safe_conversion', title: 'Условия конвертации', hint: 'Триггер: следующий раунд / выход / дата.', by: 'юрист', status: 'не_начато' },
+      { id: 'safe_form', title: 'Форма SAFE', hint: 'Шаблон договора SAFE под российскую юрисдикцию.', by: 'юрист', status: legalStatus('safe_form') },
+      { id: 'safe_conversion', title: 'Условия конвертации', hint: 'Триггер: следующий раунд / выход / дата.', by: 'юрист', status: legalStatus('safe_conversion') },
     );
   }
 
   if (track === 'pre_ipo') {
     items.push(
-      { id: 'audit', title: 'Финансовый аудит', hint: 'Подготовка отчётности под публичное размещение.', by: 'аналитик', status: 'не_начато' },
-      { id: 'corporate_docs', title: 'Корпоративные документы', hint: 'Устав, кодекс, политики раскрытия.', by: 'юрист', status: 'не_начато' },
+      { id: 'audit', title: 'Финансовый аудит', hint: 'Подготовка отчётности под публичное размещение.', by: 'аналитик', status: legalStatus('audit') },
+      { id: 'corporate_docs', title: 'Корпоративные документы', hint: 'Устав, кодекс, политики раскрытия.', by: 'юрист', status: legalStatus('corporate_docs') },
     );
   }
 
@@ -477,6 +488,8 @@ interface Context {
   hasMeetings: boolean;
   hasLeadsRunning: boolean;
   jobs: PackagingJob[];
+  /** Sprint 62.P3 — approved legal artefact reviews keyed by artefactKey. */
+  legalApproved: Set<string>;
 }
 
 function deriveContext(project: Project, jobs: PackagingJob[], options: JourneyOptions): Context {
@@ -494,6 +507,13 @@ function deriveContext(project: Project, jobs: PackagingJob[], options: JourneyO
   const filesCount = project.files?.length ?? 0;
   const jobsCount = jobs.length;
 
+  // Sprint 62.P3 — Set of legal item keys that the team marked as approved.
+  // Used by buildLegalStage to flip items from default «не_начато» → «готово».
+  const legalApproved = new Set<string>();
+  for (const r of options.reviews ?? []) {
+    if (r.artefactKind === 'legal' && r.approved) legalApproved.add(r.artefactKey);
+  }
+
   return {
     isBrandNew: !brief && filesCount === 0 && jobsCount === 0,
     hasBasicProjectData,
@@ -503,6 +523,7 @@ function deriveContext(project: Project, jobs: PackagingJob[], options: JourneyO
     hasMeetings: (options.meetingsCount ?? 0) > 0,
     hasLeadsRunning: options.leadsLaunched ?? false,
     jobs,
+    legalApproved,
   };
 }
 
