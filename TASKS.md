@@ -2,7 +2,174 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-20 (Sprint 62.P1: AI Model Source of Truth + Demo Speed Diagnostics).
+Last updated: 2026-05-25 (Sprint 62.P3: Luce Silva showcase + numbered demo leads + accordion UI).
+
+---
+
+## Completed (this sprint — Sprint 62.P3 Luce Silva showcase + demo leads UI 2026-05-25)
+
+**Why this sprint**
+Founder сообщил, что демо ai-call leads пропали из раздела «Демо AI-Лиды», а проект Luce Silva (его публичная демо-ссылка) выглядит как сырой draft. Нужно довести проект `cmparw2i30002mbr7bnqv3g78` до полной упаковки, добавить 3 реальных AI-call записи в showcase, и сделать список лидов визуально как «поток обработанных инвесторов».
+
+**Что сделано**
+
+### P0 — Demo AI-leads: возвращение реальных записей (commit `055bdca`)
+- Корень: Sprint 35 P1 заменил `aicallscloud.ru` URL'ы на локальные стабы `/demo-assets/recordings/<uuid>.wav`, но .wav файлов так и не залили → UI показывал broken `<audio>` 404. Founder говорил «разговоры пропали».
+- Добавлено `audio.available: boolean` + `audio.transcriptPeek: string | null` в shape `AILead.audio`.
+- Resolver cascade `resolveRecording(uuid, externalUrl?)`: env `AI_LEADS_RECORDINGS_BASE_URL` → local file → seed.audioUrl → disabled.
+- Backend сканит `web/public/demo-assets/recordings/` при boot, кеширует Set наличных UUID'ов.
+- Добавлен new endpoint `GET /api/ai-leads/showcase` — always demo dataset, без `workspaceStatus`-gate (Sprint 35 anti-bypass на основном `/api/ai-leads/` остался). Этот endpoint используется `/demo/ai-leads`.
+- AudioCard в `AILeads.tsx` теперь рендерит 3 честных UX-состояния: playable / unavailable (с подсказкой «положите файлы в .../recordings/ или задайте AI_LEADS_RECORDINGS_BASE_URL») / no_audio.
+- `DemoAILeads.tsx` переписан с hardcoded JSX на функциональный fetch + AudioCard.
+
+### P0.1 — Identity-masked playable demo leads (commit `055bdca` итерация 2)
+- Founder предоставил 9 cured aicallscloud.ru URL'ов. Все имена замаскированы: «Анатолий» → «Инвестор А.», «Виктор Николаевич» → «Инвестор Б.», и т.д. Телефоны: «скрыто для Демо». Текстовые поля очищены от ФИО и компании («Магнит» → «крупный ритейлер»).
+- Audio playable 9/9 через `https://aicallscloud.ru/api/process-record-url?recordUrl=<uuid>.wav` (public endpoint, `content-type: audio/mpeg`).
+
+### Sprint 62.P2 — русификация AI-output + UI терминов (commit `f0a34e7`)
+- **Двухслойная защита от English jargon в Russian-first UI:**
+  1. **Prompt-level directive** в `salesAssistantPrompt.ts` + `conversationAnalysisService.ts`: explicit «🇷🇺 ЯЗЫК ОТВЕТА — только русский» блок с glossary forbidden English терминов → Russian замен. Whitelist для acronyms (KPI/ROI/LTV/CAC/MRR/ARR/GMV/EBITDA/P&L/SPIN/B2B/B2C/SaaS/NDA) и имён продуктов.
+  2. **Post-processor safety net** (`server/src/lib/russianizer.ts`): 22-rule case-insensitive regex map, применяется через `russianizeDeep()` к каждой string-leaf AI-card перед отдачей клиенту. Word-bounded с lat/cyr lookarounds, idempotent, case-preserving.
+- Glossary: next step → следующий шаг, value proposition → ценностное предложение, elevator pitch → краткий питч, implication question → вопрос о последствиях, perceived value → воспринимаемая ценность, cashflow → денежный поток, opex breakdown → структура операционных расходов, follow-up → повторное касание, retention → удержание клиентов, recurring revenue → повторяющаяся выручка, AI conversation → AI-диалог, onboarding → подключение, one-pager → ванпейджер, landing page → посадочная страница, pitch deck → инвестиционная презентация, pain point → болевая точка, dissatisfaction → неудовлетворённость, closing → закрытие сделки, wedding-агентства → свадебные агентства, wedding-площадки → свадебные площадки.
+- Hardcoded UI strings правлены в `aiProviders.ts` (7 OUTPUT_TYPE_UI лейблов), `format.ts` (2 PROMPT_KIND_LABELS), `assistantOutcomes.ts`, `AILeads.tsx` (3 строки), `ConversationAnalysis.tsx` («Summary встречи» → «Итоги встречи»), `AdminLearning.tsx` (3 строки), `AddToKnowledgeBaseButton.tsx`.
+- AI fallback / heuristic строки в `salesAssistantService.ts` (8 строк), `aiLeadsService.ts`, `salesSessionService.ts`, `genericHintGuard.ts`, `mock.ts` русифицированы.
+
+### Sprint 62.P3 — Luce Silva showcase для seed-managed Luce Silva (commit `b803eaf`)
+- Новый helper `seedLuceSilvaShowcase(projectId)` в `server/src/seed.ts`. Запускается после `seedDemoArchetype` для seed-managed Luce Silva (защитный gate `isDemo=true`). Идемпотентный.
+- Применяемое состояние:
+  - `project.status='ready'`, `investmentTrack='llc_share'`
+  - `ProjectBrief.missingData=[]`, `missingByCategory=all-empty`
+  - `ProjectBrief.interviewAnswers` populated с 5 representative ответами
+  - `InvestorTerms` upsert: 66M ₽ / 49% / equity / payback 1-2 сезона / x4 за 3 сезона / dividends до 70%
+  - Все `PackagingJob` для проекта bulk-marked `status='succeeded'` + `completedBy='Команда ZAPUSK AI'` + `completedAt=now`
+  - `ArtefactReview` upserted approved=true для `legal_structure` / `llc_agreement` / `sale_contracts` / `legal_dd` / `brief`
+- `ArtefactReview.artefactKind` union расширен с 'legal'. `buildLegalStage` теперь читает `ctx.legalApproved.has(item.id)` чтобы flip-нуть items в «готово».
+- AI-leads stage остаётся «не_начато» — explicit founder requirement (остановиться на готовности к запуску).
+
+### Sprint 62.P3 — 3 numbered demo AI-call leads (commit `b803eaf`)
+- 3 новых seed-лида в `mockLeads()` в `aiLeadsService.ts`, появляются первыми на `/demo/ai-leads`:
+  - Лид №1 — recording `cd2e594f-de27-4358-aa33-f3026010057f` через public aicallscloud.ru
+  - Лид №2 — recording `d2a0bb2c-…02` локально в `web/public/demo-assets/recordings/<uuid>.mp3` (3.6 MB)
+  - Лид №3 — recording `d3a0bb2c-…03` локально (1.4 MB)
+- `DemoAILeads.tsx` визуально подсвечивает leads с именем `^Лид\s*№\s*\d+/i` через AI-gradient бейдж + tinted background.
+
+### Sprint 62.P3 — Targeted Luce Silva showcase для customer-owned project (commit `4a20f32`)
+- Founder указал, что его публичная демо-ссылка — это `cmparw2i30002mbr7bnqv3g78` (isDemo=false, customer-owned). Seed-managed isDemo=true Luce Silva — это отдельный проект, не виден через эту ссылку.
+- Новый constant `EXTRA_LUCE_SILVA_SHOWCASE_IDS = ['cmparw2i30002mbr7bnqv3g78']` в `seed.ts`.
+- После DEMO_PROJECTS loop iterate EXTRA_LUCE_SILVA_SHOWCASE_IDS: defensive `name === 'Luce Silva'` check, skip if not found / wrong name. Применяет `seedLuceSilvaShowcase(id)` к конкретному ID.
+- `seedLuceSilvaShowcase` refactored для robustness на customer-проектах без brief'а:
+  - `ProjectBrief.upsert` (если brief'а нет, создаём из `DEMO_PROJECTS` Luce Silva данных)
+  - 4b) Stub-`PackagingJob` для каждого outputType (pitch_deck, pitch_structure, financial_model, calculator, landing, one_pager, faq, ai_visibility_report), если такой outputType ещё не существует в проекте. Без stub'ов journey UI показывал packaging items как «не_начато».
+- `isDemo` НЕ меняется (иначе скрылся бы из обычной аудитории согласно Sprint 24).
+
+### Sprint 62.P3 — Numbered all leads + inline accordion UI (commits `81e7941`, `70c98a9`)
+- Founder feedback #1: «пронумеруй все лиды а не только первые 3». Раньше только 3 «Лид №N» seed получали AI-gradient бейдж. Теперь все 12 карточек в `DemoAILeads.tsx` имеют №1..№12 (через `idx+1` или parsed number).
+- Founder feedback #2: «карточка лида должна открываться сразу под кнопкой лида, не внизу списка всех лидов». Деталь теперь рендерится **inline под нажатой кнопкой** (accordion-pattern). Re-клик схлопывает (`setSelectedId(null)`). Клик по другой → предыдущая закрывается, новая раскрывается. Кнопка визуально стыкуется с деталью через `rounded-b-none` + shared border + `shadow-ai-glow`. `aria-expanded={isOpen}` на кнопке для accessibility.
+- Bottom-stand-alone «Детали выбранного» Card убрана. Detail content (LeadFact / AudioCard / Что произошло / Следующий шаг / Возражение / Отправлено) сохранён, просто re-parented под button.
+
+**Какие файлы изменены**
+- `server/src/seed.ts` (+EXTRA_LUCE_SILVA_SHOWCASE_IDS + seedLuceSilvaShowcase + Stub PackagingJob + brief upsert)
+- `server/src/services/aiLeadsService.ts` (+filesystem cache + AI_LEADS_RECORDINGS_BASE_URL env override + resolveRecording cascade + AudioMeta extended + 3 numbered leads at top)
+- `server/src/routes/aiLeads.ts` (+`GET /api/ai-leads/showcase` endpoint)
+- `server/src/ai/salesAssistantPrompt.ts` + `conversationAnalysisService.ts` (+ language directive)
+- `server/src/lib/russianizer.ts` (NEW: 22-rule regex post-processor + russianizeDeep helper)
+- `server/src/services/salesAssistantService.ts` (russianizeDeep wired on return paths + 8 jargon strings fixed)
+- `server/src/services/salesSessionService.ts` (3 jargon strings)
+- `server/src/services/aiLeadsService.ts` (cashflow/follow-up/next step)
+- `server/src/lib/genericHintGuard.ts` (own guard rule)
+- `server/src/ai/mock.ts` (mockBrief value proposition / retention)
+- `web/src/pages/AILeads.tsx` (AudioCard 3 honest states + export AudioCard + AILeadAudio + 3 hardcoded UI strings)
+- `web/src/pages/DemoAILeads.tsx` (full rewrite: fetch /showcase + accordion + №N badges + русские лейблы)
+- `web/src/pages/ConversationAnalysis.tsx` («Summary встречи» → «Итоги встречи»)
+- `web/src/pages/AdminLearning.tsx` (3 строки)
+- `web/src/pages/ProjectCockpit.tsx` (передаёт reviews state в buildInvestmentJourney options)
+- `web/src/lib/api.ts` (`ArtefactReview.artefactKind` union +`'legal'`)
+- `web/src/lib/investmentTrack.ts` (`deriveContext.legalApproved` + `buildLegalStage` reads it)
+- `web/src/lib/aiProviders.ts` (7 OUTPUT_TYPE_UI лейблов)
+- `web/src/lib/format.ts` (2 PROMPT_KIND_LABELS)
+- `web/src/lib/assistantOutcomes.ts` (1 строка)
+- `web/src/components/ui/AddToKnowledgeBaseButton.tsx` (1 строка)
+- `web/public/demo-assets/recordings/d2a0bb2c-…02.mp3` (NEW, 3.6 MB demo audio)
+- `web/public/demo-assets/recordings/d3a0bb2c-…03.mp3` (NEW, 1.4 MB demo audio)
+- `web/public/demo-assets/recordings/README.md` (NEW: resolver cascade docs + safety notes about audio content)
+- `server/src/scripts/verifyLuceSilvaShowcase.ts` (NEW: read-only check)
+
+**Verification**
+- `( cd server && npx tsc --noEmit )` → pass
+- `( cd web && npx tsc --noEmit )` → pass
+- `npm run build` → pass (latest bundle: `index-DKBXV29y.js`)
+- `npm run smoke:project-knowledge` → pass (включая 23 generic-hint assertions)
+- `npm run smoke:transcript` → pass
+- `npm run replay` → pass (ALL SCENARIOS)
+- `npm run regression:realcalls` → pass (4/4 datasets)
+- Production verify (после каждого deploy):
+  - `/health` ok, env=production, realProviderEnabled=true
+  - `/api/ai-leads/showcase` → 12 leads, 12/12 `audio.available=true`, нет forbidden jargon в JSON
+  - `cmparw2i30002mbr7bnqv3g78` → status=ready, investmentTrack=llc_share, 8 PackagingJob succeeded+completedBy, InvestorTerms заполнен, brief.missingData=[], 5 interviewAnswers
+  - 4 regression smokes pass (auth/demo 403, uploads 404, projects unauth 401, sales-assistant analyze unauth 401)
+
+**Deploy risk**
+- Sprint 62.P2 (русификация): nil. Pure translation layer, idempotent, JSON enum-значения не тронуты, API contracts сохранены.
+- Sprint 62.P3 (Luce Silva + leads): low. Safety gate `isDemo=true` для seed-managed projects + name-check для EXTRA IDs. Seed идемпотентный, никаких миграций / DB-schema изменений. UI правки чисто presentation-layer.
+- ⚠ Audio content not redacted: backend отдаёт raw URL'ы — голоса инвесторов слышны как есть. Founder owns content safety review перед публичной демонстрацией.
+
+**Что НЕ запущено намеренно**
+- AI-лиды для seed-managed Luce Silva + `cmparw2i30002mbr7bnqv3g78` — stage «не_начато» (следующий manual step = клик founder'а на `/ai-leads` → Запустить).
+- Реальные AI-каналы (звонки/мессенджеры через `/api/ai-leads/`) — НЕ активированы.
+- Другие customer-проекты Luce Silva (cmpkv6rs8, cmp8hctfp, cmp8gwnfm) — НЕ тронуты.
+- `isDemo` flag на customer-проекте `cmparw2i…` — НЕ изменён (иначе скрылся бы из аудитории согласно Sprint 24 visibility rules).
+
+---
+
+## Completed (this sprint — Sprint 62.P1 Demo Stability Hotfix 2026-05-22)
+
+**Why this hotfix**
+Founder сообщил, что демо ломается по двум UX-критичным причинам: (1) транскрипция появляется слишком долго («ничего не происходит 10 секунд, потом всё сразу»); (2) подсказки AI выглядят как placeholder («Что ж, предлагаю коротко пройтись по проекту…») даже когда manual context + live transcript уже есть.
+
+**Что сделано (commit `912f77c`)**
+
+### P0.1 — Realtime transcript speed (server/src/routes/realtime.ts)
+- VAD `silence_duration_ms` снижен с 1200 → 900ms (perception ~300ms быстрее на finals)
+- VAD `threshold` снижен с 0.5 → 0.45 (catch quieter mid-sentence speech)
+- Оба env-tunable без redeploy: `OPENAI_REALTIME_VAD_SILENCE_MS` (allowed 400-2000) и `OPENAI_REALTIME_VAD_THRESHOLD` (allowed 0..1). Rollback-path: вернуть `=1200` / `=0.5` через Render env.
+- Новый log `[transcription/demo-latency] traceId=… vadSilenceMs=… threshold=… prefixPaddingMs=…` на каждой session create.
+
+### P0.1b — Interim visibility (web/src/pages/SalesAssistant.tsx)
+- Interim transcript теперь `text-secondary italic opacity-90` (был `text-muted italic` — почти невидимый). Тот же размер шрифта что и finals. Первые слова видны ~1-2 сек после начала речи.
+
+### P0.2 — Context-used observability
+- Новый log `[sales-assistant/context-used]` на каждый `/analyze` + `/analyze-fast` handler entry. Поля: `manualChars`/`finalChars`/`interimChars`/`transcriptChars`/`recentContextChars`/`adviceHistoryItems`/`hasPrevAdvice`.
+- Schema `analyzeSchema` расширен optional `payloadStats: { manualChars, finalChars, interimChars }` field (back-compat: legacy clients не сломаются).
+- Client (`SalesAssistant.tsx`) теперь шлёт `payloadStats` в оба `/analyze` и `/analyze-fast` request bodies.
+
+### P0.3 — Generic-hint guard (server/src/lib/genericHintGuard.ts NEW)
+- `isGenericDemoHint(text)` — regex set, catches placeholder phrases: `/коротко.*проект/`, `/пройтись.*проект/`, `/по\s+сути\s+проект/`, `/что\s+ж.{0,20}предлага/`, `/предлагаю\s+коротко/`, `/давайте\s+коротко/`, `/быстро\s+(?:обсуд|пройт|расскаж|объясн)/`.
+- `buildAntiGenericGuard(hasContext)` — prompt-level directive когда `transcript+context >= 30 chars`: явно запрещает generic openers, перечисляет паттерны, требует context-specific вопрос.
+- `rewriteGenericHint(card, opts)` — post-AI safety net. Если AI всё-таки вернул placeholder + context substantive → переписывает `mainQuestion` + `backupQuestions` на context-aware fallback («Уточните у инвестора: какой формат участия ему ближе — финансовый или стратегический?»). Idempotent.
+- Wired в `analyzeSalesTurn` (full path) и `analyzeSalesTurnFast` (fast path). Логирует `[sales-assistant/generic-hint-rewritten] feature=… reason=generic_demo_hint_with_context oldMainQuestion="…"` при срабатывании.
+
+### P0.6 — Regression tests (scripts/project-knowledge-smoke.ts)
+- +23 assertions в новых секциях #17 (`isGenericDemoHint` — 5 positive + 5 negative + 4 edge) и #18 (`rewriteGenericHint` — generic+context rewrite / no-context pass-through / idempotency / CoreCard suggestedPhrase mirroring).
+
+**Какие файлы изменены**
+- `server/src/routes/realtime.ts` (VAD tuning + demo-latency log)
+- `server/src/routes/salesAssistant.ts` (context-used log + payloadStats schema)
+- `server/src/services/salesAssistantService.ts` (prompt guard wired + rewrite wiring)
+- `web/src/pages/SalesAssistant.tsx` (interim visibility + payloadStats в client)
+- `server/src/lib/genericHintGuard.ts` (NEW: detector + rewriter + fallback)
+- `scripts/project-knowledge-smoke.ts` (+тесты #17, #18)
+
+**Verification**
+- server + web tsc pass
+- npm run build pass
+- smoke:project-knowledge pass (23 new assertions)
+- smoke:transcript, replay, regression:realcalls — pass
+
+**Deploy risk**
+- Low. VAD change — самое sensitive место; instant rollback через `OPENAI_REALTIME_VAD_SILENCE_MS=1200` в Render env без redeploy.
+- Generic-hint rewrite — 10 negative tests для false-positives.
+- `DEMO_FAST_AI_MODE` остаётся OFF by default — operator-only opt-in.
+- No migrations, no DB changes, no API key changes.
 
 ---
 
