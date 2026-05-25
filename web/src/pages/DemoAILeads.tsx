@@ -85,7 +85,10 @@ export default function DemoAILeads() {
   }, []);
 
   const leads = data?.leads ?? [];
-  const selected = leads.find((l) => l.id === selectedId) ?? leads[0] ?? null;
+  // Sprint 62.P3 — accordion-pattern: каждая карточка лида раскрывается
+  // inline под кнопкой. Поэтому отдельный `selected` для bottom-detail Card
+  // больше не нужен — состояние selectedId хранится напрямую и читается
+  // внутри map(). Auto-expand первого HOT лида на mount сохранён в useEffect.
 
   return (
     <AppLayout
@@ -188,14 +191,16 @@ export default function DemoAILeads() {
                     const numberMatch = lead.investor.name.match(/№\s*(\d+)/);
                     const leadNumber = numberMatch ? numberMatch[1] : String(idx + 1);
                     const displayName = isExplicitNumbered ? 'Квалифицированный AI-лид' : lead.investor.name;
+                    const isOpen = selectedId === lead.id;
                     return (
                       <li key={lead.id}>
                         <button
                           type="button"
-                          onClick={() => setSelectedId(lead.id)}
+                          onClick={() => setSelectedId(isOpen ? null : lead.id)}
+                          aria-expanded={isOpen}
                           className={`w-full text-left rounded-md border px-3 py-2.5 transition-all ${
-                            selectedId === lead.id
-                              ? 'border-ai/45 bg-ai/10 shadow-ai-glow'
+                            isOpen
+                              ? 'border-ai/45 bg-ai/10 shadow-ai-glow rounded-b-none'
                               : 'border-ai/20 bg-ai/5 hover:border-ai/40'
                           }`}
                         >
@@ -216,60 +221,46 @@ export default function DemoAILeads() {
                           </div>
                           <p className="text-xs text-secondary leading-snug line-clamp-2">{lead.aiSummary}</p>
                         </button>
+                        {/* Sprint 62.P3 — раскрывающаяся deталь прямо под нажатой
+                            кнопкой лида: «accordion»-pattern. Привязана к
+                            isOpen=selectedId===lead.id. Клик по той же кнопке
+                            закрывает деталь (setSelectedId(null)). */}
+                        {isOpen && (
+                          <div
+                            id={`lead-detail-${lead.id}`}
+                            className="rounded-b-md border border-t-0 border-ai/45 bg-canvas/60 px-4 py-4 shadow-ai-glow"
+                          >
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                              <LeadFact icon={<Wallet size={13} />} label="Чек" value={lead.investor.checkRange} />
+                              <LeadFact icon={<Clock size={13} />} label="Срок решения" value={lead.investor.decisionWindow} />
+                              <LeadFact icon={<Target size={13} />} label="Профиль" value={lead.investor.profile} />
+                            </div>
+                            <AudioCard audio={lead.audio} />
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                              <Block label="Что произошло" body={lead.whatHappened.summary} />
+                              <Block label="Следующий шаг" body={lead.whatHappened.nextStep} />
+                            </div>
+                            {lead.whatHappened.objections.length > 0 && (
+                              <div className="mt-3 rounded-md border border-warning/25 bg-warning/8 px-3 py-2 text-xs text-warning">
+                                Возражение: {lead.whatHappened.objections.join(' ')}
+                              </div>
+                            )}
+                            {lead.whatHappened.sent.length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-1.5">
+                                <span className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mr-1">Отправлено:</span>
+                                {lead.whatHappened.sent.map((s) => (
+                                  <StatusBadge key={s} tone="neutral">{s}</StatusBadge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </li>
                     );
                   })}
                 </ul>
               )}
             </Card>
-
-            {/* Детали выбранного — здесь и проигрывается аудио */}
-            {selected && (() => {
-              // Sprint 62.P3 — порядковый номер выбранного лида для заголовка
-              // карточки разговора. Совпадает с номером в списке слева.
-              const selectedIdx = leads.findIndex((l) => l.id === selected.id);
-              const selNumberMatch = selected.investor.name.match(/№\s*(\d+)/);
-              const selectedLeadNumber = selNumberMatch ? selNumberMatch[1] : String(selectedIdx + 1);
-              const selectedIsExplicit = /^Лид\s*№\s*\d+/i.test(selected.investor.name);
-              const selectedDisplayName = selectedIsExplicit ? 'Квалифицированный AI-лид' : selected.investor.name;
-              return (
-              <Card padded>
-                <CardHeader
-                  title={`Лид №${selectedLeadNumber} · ${selectedDisplayName}`}
-                  subtitle="Запись AI-звонка и контекст разговора"
-                  action={
-                    <StatusBadge tone={selected.status === 'HOT' ? 'danger' : 'neutral'} dot>
-                      {selected.status}
-                    </StatusBadge>
-                  }
-                />
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-                  <LeadFact icon={<Wallet size={13} />} label="Чек" value={selected.investor.checkRange} />
-                  <LeadFact icon={<Clock size={13} />} label="Срок решения" value={selected.investor.decisionWindow} />
-                  <LeadFact icon={<Target size={13} />} label="Профиль" value={selected.investor.profile} />
-                </div>
-                {/* Sprint 62.P1 hotfix — здесь и происходит inline-проигрывание */}
-                <AudioCard audio={selected.audio} />
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                  <Block label="Что произошло" body={selected.whatHappened.summary} />
-                  <Block label="Следующий шаг" body={selected.whatHappened.nextStep} />
-                </div>
-                {selected.whatHappened.objections.length > 0 && (
-                  <div className="mt-3 rounded-md border border-warning/25 bg-warning/8 px-3 py-2 text-xs text-warning">
-                    Возражение: {selected.whatHappened.objections.join(' ')}
-                  </div>
-                )}
-                {selected.whatHappened.sent.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    <span className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold mr-1">Отправлено:</span>
-                    {selected.whatHappened.sent.map((s) => (
-                      <StatusBadge key={s} tone="neutral">{s}</StatusBadge>
-                    ))}
-                  </div>
-                )}
-              </Card>
-              );
-            })()}
           </div>
 
           {/* Sidebar — маркетинговая часть, не data-driven */}
