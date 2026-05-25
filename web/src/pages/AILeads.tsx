@@ -602,7 +602,7 @@ function BriefingAnalyzer({
               <Sparkles size={15} />
             </div>
             <div>
-              <div className="text-sm font-semibold text-primary">AI conversation</div>
+              <div className="text-sm font-semibold text-primary">AI-диалог</div>
               <p className="text-xs text-secondary mt-1 leading-relaxed">
                 Я изучил материалы проекта. Ответьте на недостающие вопросы голосом, текстом или файлом.
               </p>
@@ -646,8 +646,8 @@ function KpiGrid({ dashboard }: { dashboard: AILeadsDashboard }) {
       <KpiCard label="Получено лидов" value={dashboard.kpis.totalLeads} icon={<Users size={15} />} />
       <KpiCard label="Активных сегодня" value={dashboard.kpis.activeToday} icon={<Flame size={15} />} tone="danger" />
       <KpiCard label="Средний чек" value={dashboard.kpis.avgCheck} icon={<Wallet size={15} />} tone="zapusk" />
-      <KpiCard label="AI calls today" value={dashboard.kpis.callsToday} icon={<PhoneCall size={15} />} tone="ai" />
-      <KpiCard label="AI messages sent" value={dashboard.kpis.messagesSent} icon={<MessageSquare size={15} />} tone="success" />
+      <KpiCard label="AI-звонков за сутки" value={dashboard.kpis.callsToday} icon={<PhoneCall size={15} />} tone="ai" />
+      <KpiCard label="AI-сообщений отправлено" value={dashboard.kpis.messagesSent} icon={<MessageSquare size={15} />} tone="success" />
     </div>
   );
 }

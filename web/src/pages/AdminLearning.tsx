@@ -28,7 +28,7 @@ type OutcomeType =
   | 'lost' | 'ghosted' | 'no_decision' | 'bad_fit';
 
 const OUTCOME_LABELS: Record<OutcomeType, string> = {
-  follow_up_sent: 'Follow-up',
+  follow_up_sent: 'Повторное касание',
   next_meeting_booked: 'Встреча',
   investor_requested_docs: 'Запросил доки',
   investor_interested: 'Интерес',
@@ -44,7 +44,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   failed_sale: 'Неуспешная',
   objection: 'Возражение',
   qualification: 'Квалификация',
-  follow_up: 'Follow-up',
+  follow_up: 'Повторное касание',
   legal_question: 'Юр. вопрос',
   financial_question: 'Финансовый вопрос',
   project_presentation: 'Презентация',
@@ -179,7 +179,7 @@ export default function AdminLearning() {
 
   return (
     <AppLayout
-      title="Learning Dashboard"
+      title="Панель обучения AI"
       action={
         <div className="flex items-center gap-2">
           <Link to="/admin">

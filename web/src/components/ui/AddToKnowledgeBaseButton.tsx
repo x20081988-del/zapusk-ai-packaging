@@ -20,7 +20,7 @@ const SOURCE_TYPES = [
   { value: 'failed_sale', label: 'Неуспешная продажа' },
   { value: 'objection', label: 'Возражение' },
   { value: 'qualification', label: 'Квалификация' },
-  { value: 'follow_up', label: 'Follow-up' },
+  { value: 'follow_up', label: 'Повторное касание' },
   { value: 'deal_case', label: 'Кейс сделки' },
   { value: 'manager_script', label: 'Скрипт менеджера' },
   { value: 'meeting_recording', label: 'Запись встречи' },

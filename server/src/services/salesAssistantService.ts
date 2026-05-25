@@ -33,6 +33,7 @@ import {
   rewriteGenericHint,
   isGenericDemoHint,
 } from '../lib/genericHintGuard.js';
+import { russianizeDeep } from '../lib/russianizer.js';
 
 // Sprint 34Б.2 — prompt-engineering должен быть управляемым слоем платформы.
 // `analyzeSalesTurn` теперь читает активный template `sales_gpt` из БД и
@@ -852,8 +853,12 @@ export async function analyzeSalesTurn(input: AnalyzeInput): Promise<AssistantCa
     );
   }
 
+  // Sprint 62.P2 — final pass: scrub English sales/finance jargon from every
+  // string field. Safety net after the prompt directive. Idempotent.
+  const russianizedCard = russianizeDeep(rewriteResult.card);
+
   return {
-    ...rewriteResult.card,
+    ...russianizedCard,
     source: ai.provider === 'mock' ? 'mock' : 'ai',
     provider: ai.provider,
     model: ai.model,
@@ -1095,7 +1100,8 @@ export async function analyzeSalesTurnFast(input: AnalyzeInput): Promise<FastAss
       `oldMainQuestion="${(overridden.mainQuestion ?? '').slice(0, 80)}"`,
     );
   }
-  return rewriteResult.card;
+  // Sprint 62.P2 — scrub English jargon from FAST card too.
+  return russianizeDeep(rewriteResult.card);
 }
 
 // Sprint 61 — старые loadProjectContext / loadProjectsContext удалены.
@@ -1248,10 +1254,10 @@ function defaultToneShift(tone: Tone, state: InvestorState): string {
     return 'Не аргументируй цифрами — сначала уточни, что именно вызывает сомнение.';
   }
   if (state === 'READY') {
-    return 'Пора мягко фиксировать next step — конкретный чек или дата.';
+    return 'Пора мягко фиксировать следующий шаг — конкретный чек или дата.';
   }
   if (state === 'ENGAGED' && tone !== 'CLOSE') {
-    return 'Можно переходить к более уверенному CONTROL tone.';
+    return 'Можно переходить к более уверенному, ведущему тону.';
   }
   return 'Держи текущий темп, не торопись с переходом.';
 }
@@ -1297,18 +1303,18 @@ function nullableString(raw: unknown): string | null {
 function defaultObjective(stage: SpinStage): string {
   switch (stage) {
     case 'S': return 'Раскрыть мотивацию и критерий принятия решения';
-    case 'P': return 'Найти конкретную dissatisfaction в текущем портфеле';
-    case 'I': return 'Усилить implication через упущенную возможность';
+    case 'P': return 'Найти конкретную неудовлетворённость в текущем портфеле';
+    case 'I': return 'Усилить эффект через упущенную возможность';
     case 'N': return 'Зафиксировать комфортный диапазон чека';
   }
 }
 
 function defaultDirection(stage: SpinStage): string {
   switch (stage) {
-    case 'S': return 'Двигаемся от знакомства к Problem';
-    case 'P': return 'Углубляем проблему и переходим в Implication';
-    case 'I': return 'Подводим к Need-Payoff и деньгам';
-    case 'N': return 'Закрепляем next step и дату следующей встречи';
+    case 'S': return 'Двигаемся от знакомства к проблеме';
+    case 'P': return 'Углубляем проблему и переходим к последствиям';
+    case 'I': return 'Подводим к выгоде и деньгам';
+    case 'N': return 'Закрепляем следующий шаг и дату следующей встречи';
   }
 }
 
@@ -1415,9 +1421,9 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
       'Что для вас будет показателем, что новая сделка реально закрыла этот вопрос?',
     ];
     selfSaleQuestions = [];
-    dealNextStep = 'Подвести к Need-Payoff: «такое решение для вас приоритет?»';
-    objective = 'Усилить implication через упущенную возможность';
-    direction = 'От признанного последствия — к выгоде и деньгам (I → N)';
+    dealNextStep = 'Подвести к выгоде: «такое решение для вас приоритет?»';
+    objective = 'Усилить эффект через упущенную возможность';
+    direction = 'От признанного последствия — к выгоде и деньгам';
     investorState = 'ENGAGED';
     conversationTemperature = 'HOT';
     momentum = 'POSITIVE';
@@ -1428,7 +1434,7 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
       'Если сейчас «продавать» — это убьёт ощущение, что он сам пришёл к решению.',
       'Слишком быстрый переход к деньгам может вызвать защиту.',
     ];
-    toneShiftGuidance = 'Удерживай CONTROL, но дай паузу — пусть он сам произнесёт следствие.';
+    toneShiftGuidance = 'Удерживай ведущий тон, но дай паузу — пусть он сам произнесёт следствие.';
   }
 
   if (hits(/сколько|какой возврат|какая доходность|когда вернёт|через сколько|чек|оценк|ирр|irr|x\d/)) {
@@ -1445,7 +1451,7 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
     miniPitch = 'Коротко: мы зашли в нишу X с дефицитом Y, базовый сценарий — окупаемость 2 сезона, x4 за 3 года. Сейчас закрываем раунд на N млн. Хотите посмотреть финмодель и обсудить, какой диапазон чека вам комфортен?';
     dealNextStep = 'Зафиксировать диапазон чека и дату следующей встречи';
     objective = 'Зафиксировать комфортный диапазон чека';
-    direction = 'От цифр — к фиксации next step и дате созвона';
+    direction = 'От цифр — к фиксации следующего шага и дате созвона';
     investorState = 'READY';
     conversationTemperature = 'HOT';
     momentum = 'POSITIVE';
@@ -1456,14 +1462,14 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
       'Если завалить цифрами и допущениями — он переключится в SKEPTICAL.',
       'Если уйти от прямого ответа — потеряешь доверие за один ход.',
     ];
-    toneShiftGuidance = 'Переходи в CLOSE: короткие, конкретные цифры и мягкий вопрос про диапазон чека.';
+    toneShiftGuidance = 'Переходи к закрытию: короткие, конкретные цифры и мягкий вопрос про диапазон чека.';
   }
 
   // Word-bound «потом» так, чтобы оно НЕ матчилось внутри «потому/потомок».
   if (hits(/подумаю|подумать|\bпотом\b|\bпозже\b|сейчас не готов/)) {
     objection = 'I will think';
     stage = 'P'; tone = 'CONTROL'; control = 'LOW'; engagement = 'disengaged'; confidence = 28;
-    situation = 'Инвестор уходит в «подумаю» — теряем контроль над next step.';
+    situation = 'Инвестор уходит в «подумаю» — теряем контроль над следующим шагом.';
     whatToDo = ['Не отпускай в неопределённость.', 'Уточни, что конкретно надо понять для решения.'];
     whatNotToDo = ['Не соглашайся с «подумаю» без конкретного списка вопросов.'];
     mainQuestion = 'Скажите, что именно вы хотите понять или проверить, чтобы принять решение?';
@@ -1473,9 +1479,9 @@ function heuristicCard(input: AnalyzeInput): CoreCard {
       'Когда вам комфортно вернуться к разговору — на этой неделе или на следующей?',
     ];
     dealNextStep = 'Получить от инвестора список конкретных открытых вопросов';
-    riskOrMissed = 'Без конкретики next step встреча закончится без продвижения сделки';
+    riskOrMissed = 'Без конкретики следующего шага встреча закончится без продвижения сделки';
     objective = 'Перевести «подумаю» в конкретный список вопросов и дату';
-    direction = 'От ухода — обратно в Problem и фиксированный follow-up';
+    direction = 'От ухода — обратно к проблеме и фиксированному повторному контакту';
     investorState = 'RATIONALIZING';
     conversationTemperature = 'COLD';
     momentum = 'NEGATIVE';
@@ -1667,11 +1673,11 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
       tone: 'CONTROL',
       spinGaps: defaultGapsFor(stage),
       situation: 'Проблема уже обозначена, теперь важно показать её последствия.',
-      whatToDo: ['Усиль implication через сценарий потерь.', 'Не дави, дай ему самому признать последствие.'],
+      whatToDo: ['Усиль эффект через сценарий потерь.', 'Не дави, дай ему самому признать последствие.'],
       whatNotToDo: ['Не уходи в продажу проекта раньше времени.'],
       mainQuestion: main,
       suggestedPhrase: main,
-      recommendation: 'Усиль implication через сценарий потерь.',
+      recommendation: 'Усиль эффект через сценарий потерь.',
       backupQuestions: [
         'Если ничего не менять — как это будет выглядеть через 2-3 года?',
         'Какой результат вы ожидали изначально и сколько до него сейчас не хватает?',
@@ -1721,7 +1727,7 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
       momentum: 'POSITIVE',
       emotionalState: 'Инвестор внутренне готов — пора оформить решение цифрами.',
       whyBehavior: 'Он уже принял эмоциональное «да», осталось получить безопасную форму для шага.',
-      momentumReason: 'Признание implication подняло температуру до HOT — окно для Close.',
+      momentumReason: 'Признание последствий подняло температуру до HOT — окно для закрытия сделки.',
       emotionalRisks: ['Если уйти в новые темы — окно закроется, придётся начинать заново.'],
       toneShiftGuidance: 'Переходи в CLOSE: короткий вопрос про чек, без дополнительных аргументов.',
     };
@@ -1747,7 +1753,7 @@ function avoidRepeatedAdvice(card: CoreCard, input: AnalyzeInput): CoreCard {
     dealNextStep: 'Назначить дату следующего контакта и критерии решения',
     nextStep: 'Назначить дату следующего контакта и критерии решения',
     conversationObjective: 'Зафиксировать дату следующего контакта и критерии решения',
-    conversationDirection: 'Закрепляем next step встречи и материалы',
+    conversationDirection: 'Закрепляем следующий шаг встречи и материалы',
     investorState: 'READY',
     conversationTemperature: 'HOT',
     momentum: 'POSITIVE',

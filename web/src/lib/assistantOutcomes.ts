@@ -72,7 +72,7 @@ export function archiveOutcome(id: string) {
 
 // Sprint 43 — лейблы для UI. Order = порядок отображения кнопок.
 export const OUTCOME_OPTIONS: Array<{ value: OutcomeType; label: string; tone: 'success' | 'warning' | 'danger' | 'neutral' | 'info' }> = [
-  { value: 'follow_up_sent',          label: 'Отправлен follow-up',     tone: 'info' },
+  { value: 'follow_up_sent',          label: 'Отправлено повторное касание', tone: 'info' },
   { value: 'next_meeting_booked',     label: 'Назначена встреча',       tone: 'success' },
   { value: 'investor_requested_docs', label: 'Запросил документы',      tone: 'info' },
   { value: 'investor_interested',     label: 'Инвестор заинтересован',  tone: 'success' },

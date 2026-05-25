@@ -60,15 +60,15 @@ export const TOOL_UI: Record<string, ToolUiMeta> = {
 };
 
 export const OUTPUT_TYPE_UI: Record<string, OutputTypeUiMeta> = {
-  investor_summary: { label: 'Investor Summary', description: 'Короткий продающий текст.', tone: 'ai' },
-  one_pager: { label: 'OnePager', description: 'Производная от landing.', tone: 'zapusk' },
-  pitch_deck: { label: 'Pitch Deck', description: 'PDF под скриншот.', tone: 'info' },
-  pitch_structure: { label: 'Структура pitch deck', description: 'Каркас слайдов и хук.', tone: 'info' },
-  landing: { label: 'Landing Page', description: 'Веб-страница проекта.', tone: 'zapusk' },
-  financial_model: { label: 'Financial Model', description: 'P&L, сценарии, IRR.', tone: 'success' },
-  calculator: { label: 'Investor Calculator', description: 'Производная от финмодели.', tone: 'success' },
+  investor_summary: { label: 'Резюме для инвестора', description: 'Короткий продающий текст.', tone: 'ai' },
+  one_pager: { label: 'Ванпейджер', description: 'Производная от посадочной страницы.', tone: 'zapusk' },
+  pitch_deck: { label: 'Инвестиционная презентация', description: 'PDF под скриншот.', tone: 'info' },
+  pitch_structure: { label: 'Структура презентации', description: 'Каркас слайдов и хук.', tone: 'info' },
+  landing: { label: 'Посадочная страница', description: 'Веб-страница проекта.', tone: 'zapusk' },
+  financial_model: { label: 'Финансовая модель', description: 'Прибыль/убытки, сценарии, доходность.', tone: 'success' },
+  calculator: { label: 'Инвестиционный калькулятор', description: 'Производная от финмодели.', tone: 'success' },
   faq: { label: 'FAQ для инвестора', description: 'Снятие возражений.', tone: 'ai' },
-  sales_assistant: { label: 'AI-ассистент продаж', description: 'Живой co-pilot для переговоров с инвестором.', tone: 'ai' },
+  sales_assistant: { label: 'AI-ассистент продаж', description: 'Живой AI-помощник для переговоров с инвестором.', tone: 'ai' },
   // Sprint 34Б.3 — русские лейблы для видимости в AI-поиске.
   ai_visibility_report: { label: 'Видимость в AI-поиске', description: 'Готовность к AI-поиску.', tone: 'ai' },
 };

@@ -2,6 +2,7 @@ import { prisma } from '../db.js';
 import { aiClient } from '../ai/client.js';
 import { transcribeAudio, type TranscriptionResult } from './deepgramClient.js';
 import { transcribeAudioOpenAI } from './openaiTranscribe.js';
+import { russianizeDeep } from '../lib/russianizer.js';
 
 // AI Conversation Intelligence — превращает запись разговора (или paste'нутый
 // transcript) в structured AI-feedback. Фокус — не на summary, а на «что
@@ -107,7 +108,7 @@ const SYSTEM = `Ты — AI Conversation Intelligence от Zapusk AI.
 
 Главное в анализе:
 1. **mistakes** — конкретные ошибки менеджера/фаундера. Не общие («продавайте лучше»), а конкретные:
-   «Вы начали продавать на этапе Situation», «Не задан implication question», «Не зафиксирован next step».
+   «Вы начали продавать на этапе знакомства», «Не задан вопрос о последствиях», «Не зафиксирован следующий шаг».
 2. **whatWorked** — что было сделано правильно, чтобы это закрепить.
 3. **investorConcerns** — на что инвестор реагировал негативно или сомнениями.
 4. **recommendedMaterials** — что инвестор сам попросил или что закроет его возражения.
@@ -116,8 +117,8 @@ const SYSTEM = `Ты — AI Conversation Intelligence от Zapusk AI.
 7. **aiScore** — общая оценка встречи 0..100. Реалистичная, не льстивая.
 8. **aiScoreBreakdown** — 6 метрик 0..100:
    - rapport: насколько менеджер выстроил контакт
-   - spin: насколько корректно прошёл SPIN-этапы
-   - nextStepFixation: зафиксировал ли конкретный next step
+   - spin: насколько корректно прошёл этапы SPIN
+   - nextStepFixation: зафиксировал ли конкретный следующий шаг
    - objectionHandling: как работал с возражениями (если были)
    - clarity: насколько чётко были донесены цифры и оффер
    - confidence: насколько уверенно вёл разговор
@@ -129,7 +130,18 @@ const SYSTEM = `Ты — AI Conversation Intelligence от Zapusk AI.
 
 Будь конкретен. Если инвестор задал прямой вопрос про деньги, а менеджер ушёл в питч — это ошибка, отметь.
 Если менеджер вернул контроль через уточняющий вопрос — это whatWorked, отметь.
-Стиль: язык опытного sales-коуча, без воды и штампов. Все списки — конкретные формулировки, не общие.
+Стиль: язык опытного коуча по продажам, без воды и штампов. Все списки — конкретные формулировки, не общие.
+
+🇷🇺 Язык ответа — только русский. Если хочешь использовать английский бизнес-термин — давай русский эквивалент:
+next step → следующий шаг; value proposition → ценностное предложение; elevator pitch → краткий питч;
+implication question → вопрос о последствиях; perceived value → воспринимаемая ценность;
+cashflow → денежный поток; follow-up → повторное касание; retention → удержание клиентов.
+Исключения (можно оставлять): KPI, ROI, LTV, CAC, MRR, ARR, GMV, P&L, EBITDA, SPIN, B2B, B2C, SaaS, NDA.
+Названия продуктов/каналов (Zoom, Telegram, WhatsApp, GitHub) — как есть.
+
+Внутри JSON enum-значения (spinStage S|P|I|N, sentiment, и т.п.) — оставляй на английском.
+Все строковые описания (summary, mistakes, whatWorked, followUpMessage, managerAdvice, и т.п.) — на русском.
+
 Верни строго JSON.`;
 
 export async function analyzeConversation(input: AnalyzeInput): Promise<ConversationAnalysisCard> {
@@ -180,7 +192,9 @@ export async function analyzeConversation(input: AnalyzeInput): Promise<Conversa
   }
 
   const breakdown = sanitizeBreakdown(parsed.aiScoreBreakdown);
-  return {
+  // Sprint 62.P2 — scrub English jargon (next step, value proposition, etc.)
+  // from string fields. Safety net after the prompt directive.
+  return russianizeDeep({
     summary: String(parsed.summary),
     spinStage: normalizeStage(parsed.spinStage),
     conversationQuality: clamp(parsed.conversationQuality, 0, 100, parsed.aiScore ?? 50),
@@ -199,7 +213,7 @@ export async function analyzeConversation(input: AnalyzeInput): Promise<Conversa
     provider: ai.provider,
     model: ai.model,
     fellBackToMock: ai.fellBackToMock,
-  };
+  });
 }
 
 // Public entry: handle audio buffer, URL, or pasted transcript → produce
@@ -359,7 +373,7 @@ function mockAnalysis(transcript: string, provider: 'openai' | 'anthropic' | 'mo
     whatWorked.push('Инвестор сам запросил материалы — buying signal');
   }
   if (has(/(?:следующ|давайте|вторник|пятниц|на этой неделе|созвон|встреч)/)) {
-    whatWorked.push('Зафиксирован конкретный next step');
+    whatWorked.push('Зафиксирован конкретный следующий шаг');
   } else {
     mistakes.push('Не зафиксирован следующий шаг — встреча закончилась без plan B');
   }

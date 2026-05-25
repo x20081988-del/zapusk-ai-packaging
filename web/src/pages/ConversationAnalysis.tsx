@@ -411,7 +411,7 @@ function ResultBlocks({ card }: { card: ConversationAnalysisCard }) {
   return (
     <>
       <Card padded>
-        <CardHeader title="Summary встречи" subtitle="Короткое резюме для быстрого скана" />
+        <CardHeader title="Итоги встречи" subtitle="Короткое резюме для быстрого скана" />
         <p className="text-sm text-primary leading-relaxed">{card.summary}</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
           <Field icon={<Sparkles size={12} className="text-ai-glow" />} label="Интерес инвестора" value={card.investorInterest} />

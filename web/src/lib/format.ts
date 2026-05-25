@@ -35,9 +35,9 @@ export function parseObj<T = Record<string, unknown>>(raw: string | null | undef
 
 export const PROMPT_KIND_LABELS: Record<string, { title: string; subtitle: string; accent: 'ai' | 'zapusk' }> = {
   investment_summary: { title: 'Краткое резюме для инвестора', subtitle: 'Описание сделки и доходности', accent: 'zapusk' },
-  one_pager:          { title: 'One-pager',          subtitle: 'Страница со сделкой и цифрами',  accent: 'zapusk' },
+  one_pager:          { title: 'Ванпейджер',          subtitle: 'Страница со сделкой и цифрами',  accent: 'zapusk' },
   pitch_structure:    { title: 'Инвестиционная презентация', subtitle: 'Структура презентации',          accent: 'zapusk' },
-  lovable_landing:    { title: 'Landing Page',    subtitle: 'Задание для инвестиционной посадочной страницы', accent: 'ai' },
+  lovable_landing:    { title: 'Посадочная страница',    subtitle: 'Задание для инвестиционной посадочной страницы', accent: 'ai' },
   lovable_pitch:      { title: 'Веб-презентация для инвестора', subtitle: 'Задание для интерактивной презентации', accent: 'ai' },
   cloud_design:       { title: 'PDF-презентация',   subtitle: 'Задание для PDF-презентации',     accent: 'ai' },
   financial:          { title: 'Финансовая модель',    subtitle: 'Задание для финансовой модели', accent: 'ai' },

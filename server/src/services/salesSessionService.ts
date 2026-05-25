@@ -178,7 +178,7 @@ function mockSummary(transcript: string, provider: 'openai' | 'mock' | 'anthropi
 
   const objections: string[] = [];
   if (has(/риск|опасн|сомнев/)) objections.push('Опасения по рискам — нужна конкретная защита капитала');
-  if (has(/подумаю|потом|позже|не сейчас/)) objections.push('Уход в «подумаю» — потеряли next step');
+  if (has(/подумаю|потом|позже|не сейчас/)) objections.push('Уход в «подумаю» — потеряли следующий шаг');
   if (has(/ликвидн|выйти|выход|возврат/)) objections.push('Вопросы по ликвидности и выходу инвестора');
   if (has(/дорого|чек большой|много/)) objections.push('Чек не комфортен — нужен меньший диапазон');
 
@@ -201,7 +201,7 @@ function mockSummary(transcript: string, provider: 'openai' | 'mock' | 'anthropi
   const checkRange = has(/(?:\d+[.,]?\d*)\s*(?:млн|миллион)/) ? 'обсуждали 1-5 млн ₽' : 'инвестор не назвал чек';
 
   const nextStep = tone === 'hot' ? 'Отправить договор и согласовать дату подписи'
-    : tone === 'warm' ? 'Отправить пакет материалов и follow-up через 2 дня'
+    : tone === 'warm' ? 'Отправить пакет материалов и повторное касание через 2 дня'
     : 'Зафиксировать причину остановки и решить, оставлять ли контакт в работе';
 
   const followUp = tone === 'hot'
@@ -227,7 +227,7 @@ function mockSummary(transcript: string, provider: 'openai' | 'mock' | 'anthropi
     investorType,
     tone,
     managerNote: tone === 'hot'
-      ? 'HOT-инвестор. Не задерживайте отправку материалов и не теряйте next step.'
+      ? 'HOT-инвестор. Не задерживайте отправку материалов и не теряйте следующий шаг.'
       : 'Поставьте напоминание на повторное касание через 3-5 дней. Зафиксируйте, что обсуждалось.',
     provider, model, fellBackToMock: fellBack,
   };
