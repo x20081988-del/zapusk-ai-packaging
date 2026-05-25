@@ -1,6 +1,19 @@
 import { prisma } from './db.js';
 import { SEED_TEMPLATES } from './services/templateSeeds.js';
 import { DEMO_PROJECTS, type DemoProject } from './services/demoSeeds.js';
+
+// Sprint 62.P3 — дополнительный список project IDs (НЕ name-based!), которые
+// тоже нужно довести до Luce Silva showcase-состояния. Используется когда у
+// founder'а есть собственный, customer-owned проект (isDemo=false), который
+// он хочет показывать как demo. seedLuceSilvaShowcase запустится строго по
+// этим ID после защитной проверки name='Luce Silva'.
+//
+// Внимание: это ПЕРЕЗАПИСЫВАЕТ реальные данные customer-проекта. Founder
+// явно подтвердил, что он принимает изменение брифа, InvestorTerms и
+// PackagingJob для каждого ID в этом списке.
+const EXTRA_LUCE_SILVA_SHOWCASE_IDS: string[] = [
+  'cmparw2i30002mbr7bnqv3g78',
+];
 import { env } from './env.js';
 import { generateAllPrompts } from './services/promptBuilders.js';
 import { resolveOrchestration } from './services/aiProviders.js';
@@ -344,6 +357,27 @@ async function main() {
     await seedDemoArchetype(user.id, d);
   }
 
+  // Sprint 62.P3 — apply showcase state to additional customer-owned project
+  // IDs (founder explicitly approved). Defensive: name must match 'Luce Silva'.
+  for (const id of EXTRA_LUCE_SILVA_SHOWCASE_IDS) {
+    try {
+      const proj = await prisma.project.findUnique({ where: { id } });
+      if (!proj) {
+        log(`extra showcase ID not found, skipping: ${id}`);
+        continue;
+      }
+      if (proj.name !== 'Luce Silva') {
+        log(`extra showcase ID ${id} has wrong name "${proj.name}" — skipping (expected «Luce Silva»)`);
+        continue;
+      }
+      log(`applying Luce Silva showcase to extra project id=${id} (isDemo=${proj.isDemo})...`);
+      await seedLuceSilvaShowcase(id);
+      log(`applied Luce Silva showcase to ${id}`);
+    } catch (err) {
+      console.warn(`[seed] extra showcase ${id} skipped:`, err instanceof Error ? err.message : err);
+    }
+  }
+
   log('done.');
 }
 
@@ -451,25 +485,41 @@ async function seedLuceSilvaShowcase(projectId: string): Promise<void> {
     },
   });
 
-  // 2) Brief: очищаем missingData / missingByCategory чтобы все категории
-  //    были «закрыты». Бизнес-контент (businessSummary, monetization, …)
-  //    остаётся из DEMO_PROJECTS — мы только подчищаем «остались вопросы».
+  // 2) Brief: очищаем missingData / missingByCategory + добавляем
+  //    interviewAnswers. Если brief'а ещё нет (например, customer-проект
+  //    в draft-состоянии) — создаём его из DEMO_PROJECTS Luce Silva
+  //    данных (демо-бизнес-контент).
   const cleanedMissingByCategory = {
     financial: [], market: [], team: [], deal: [], unit_econ: [], risks: [],
   };
-  await prisma.projectBrief.update({
+  const interviewAnswersJson = JSON.stringify([
+    { question: 'Подтверждённые бронирования на первый сезон?', answer: 'Зафиксировано 12 предзаказов; цель — 50 к открытию сезона.', category: 'finance', savedAt: new Date().toISOString() },
+    { question: 'Партнёрства с event-агентствами', answer: 'Подписаны соглашения о намерениях с 4 ключевыми event-агентствами Москвы.', category: 'market', savedAt: new Date().toISOString() },
+    { question: 'Структура сделки и владения', answer: 'ООО с распределением долей 51/49, корпоративное соглашение готово.', category: 'deal', savedAt: new Date().toISOString() },
+    { question: 'CAPEX-смета и календарь оплат', answer: 'Детальная смета 66 млн ₽ согласована, оплаты по этапам строительства.', category: 'finance', savedAt: new Date().toISOString() },
+    { question: 'Команда операционного управления', answer: 'Шеф-повар, event-директор, sales-менеджер и админ — закреплены.', category: 'team', savedAt: new Date().toISOString() },
+  ]);
+  const luceDemoBrief = DEMO_PROJECTS.find((p) => p.name === 'Luce Silva')?.brief;
+  await prisma.projectBrief.upsert({
     where: { projectId },
-    data: {
+    update: {
       missingData: JSON.stringify([]),
       missingByCategory: JSON.stringify(cleanedMissingByCategory),
-      // Несколько готовых ответов интервью — чтобы hasInterview=true в UI.
-      interviewAnswers: JSON.stringify([
-        { question: 'Подтверждённые бронирования на первый сезон?', answer: 'Зафиксировано 12 предзаказов; цель — 50 к открытию сезона.', category: 'finance', savedAt: new Date().toISOString() },
-        { question: 'Партнёрства с event-агентствами', answer: 'Подписаны соглашения о намерениях с 4 ключевыми event-агентствами Москвы.', category: 'market', savedAt: new Date().toISOString() },
-        { question: 'Структура сделки и владения', answer: 'ООО с распределением долей 51/49, корпоративное соглашение готово.', category: 'deal', savedAt: new Date().toISOString() },
-        { question: 'CAPEX-смета и календарь оплат', answer: 'Детальная смета 66 млн ₽ согласована, оплаты по этапам строительства.', category: 'finance', savedAt: new Date().toISOString() },
-        { question: 'Команда операционного управления', answer: 'Шеф-повар, event-директор, sales-менеджер и админ — закреплены.', category: 'team', savedAt: new Date().toISOString() },
-      ]),
+      interviewAnswers: interviewAnswersJson,
+    },
+    create: {
+      projectId,
+      version: 1,
+      businessSummary: luceDemoBrief?.businessSummary ?? 'Luce Silva — премиальная стеклянная оранжерея для свадеб.',
+      monetization: luceDemoBrief?.monetization ?? 'Средний чек около 725 тыс. ₽, прибыль с одной свадьбы около 500 тыс. ₽.',
+      keyMetrics: JSON.stringify(luceDemoBrief?.keyMetrics ?? {}),
+      investmentAsk: luceDemoBrief?.investmentAsk ?? '66 млн ₽ за 49%.',
+      strengths: JSON.stringify(luceDemoBrief?.strengths ?? []),
+      weaknesses: JSON.stringify(luceDemoBrief?.weaknesses ?? []),
+      missingData: JSON.stringify([]),
+      missingByCategory: JSON.stringify(cleanedMissingByCategory),
+      interviewAnswers: interviewAnswersJson,
+      napkin: JSON.stringify(luceDemoBrief?.napkin ?? {}),
     },
   });
 
@@ -511,6 +561,43 @@ async function seedLuceSilvaShowcase(projectId: string): Promise<void> {
       completedAt: new Date(),
     },
   });
+
+  // 4b) Stub-PackagingJobs для outputTypes, которых нет в проекте. Без них
+  //     UI buildPackagingStage показывает item «не_начато». Создаём
+  //     минимальные succeeded-jobs с осмысленным resultPreview для каждого
+  //     отсутствующего outputType, который ожидает journey UI.
+  const requiredOutputTypes: Array<{ outputType: string; templateKey: string; preview: string }> = [
+    { outputType: 'pitch_deck', templateKey: 'showcase.pitch_deck', preview: 'Инвестиционная презентация (PDF) собрана командой ZAPUSK AI.' },
+    { outputType: 'pitch_structure', templateKey: 'showcase.pitch_structure', preview: 'Структура слайдов инвестиционной презентации согласована.' },
+    { outputType: 'financial_model', templateKey: 'showcase.financial_model', preview: 'Финансовая модель (XLSX) — три сценария загрузки, окупаемость 1-2 сезона.' },
+    { outputType: 'calculator', templateKey: 'showcase.calculator', preview: 'Инвестиционный калькулятор готов: чек → доходность → срок возврата.' },
+    { outputType: 'landing', templateKey: 'showcase.landing', preview: 'Посадочная страница проекта опубликована.' },
+    { outputType: 'one_pager', templateKey: 'showcase.one_pager', preview: 'Ванпейджер для рассылки инвестору собран.' },
+    { outputType: 'faq', templateKey: 'showcase.faq', preview: 'FAQ инвестора — 12 вопросов с ответами.' },
+    { outputType: 'ai_visibility_report', templateKey: 'showcase.ai_visibility', preview: 'AI Discoverability отчёт: проект готов к поиску инвесторами через AI-каналы.' },
+  ];
+  const existingJobs = await prisma.packagingJob.findMany({
+    where: { projectId },
+    select: { outputType: true },
+  });
+  const existingOutputTypes = new Set(existingJobs.map((j) => j.outputType));
+  for (const job of requiredOutputTypes) {
+    if (existingOutputTypes.has(job.outputType)) continue;
+    await prisma.packagingJob.create({
+      data: {
+        projectId,
+        templateKey: job.templateKey,
+        provider: 'mock',
+        tool: 'showcase',
+        outputType: job.outputType,
+        status: 'succeeded',
+        prompt: 'Demo showcase placeholder (Sprint 62.P3).',
+        resultPreview: job.preview,
+        completedBy: 'Команда ZAPUSK AI',
+        completedAt: new Date(),
+      },
+    });
+  }
 
   // 5) Legal artefactReviews: создаём approved-отзывы для items
   //    юридической упаковки. UI buildLegalStage (Sprint 62.P3) использует
