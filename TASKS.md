@@ -2,11 +2,77 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-26 (Sprint 62.P4: disk maintenance guardrails for Render).
+Last updated: 2026-05-26 (Sprint 62.P5: prevent Anthropic bad_request during packaging seed).
 
 ---
 
-## Completed (this sprint — Sprint 62.P4 Disk Maintenance Guardrails 2026-05-26)
+## Completed (this sprint — Sprint 62.P5 Anthropic bad_request fix 2026-05-26)
+
+**Symptom**
+After Sprint 62.P4 deploy, prod boots OK but Render logs spam:
+```
+[claude] packaging.financial bad_request_error : Некорректный запрос к Anthropic.
+[claude] packaging.calculator_spec bad_request_error : Некорректный запрос к Anthropic.
+```
+Repeats per archetype (Венский ветер · Luce Silva · Планета 60) on every deploy.
+
+**Root cause analysis** (3 layered issues)
+1. **Orchestration registry** — `aiProviders.ts` hard-binds `financial` + `calculator_spec` to `provider: 'claude'`. `env.AI_PROVIDER=openai` does NOT influence the per-template orchestration. As long as `ANTHROPIC_API_KEY` is set on Render, `isClaudeConfigured()` returns true and seed dispatches to Claude.
+2. **Diagnostic blackbox** — `classifyError()` for 400 returns `code='bad_request_${sdkType}'` + a generic Russian message but DISCARDS the raw `sdkMessage`. We had no idea what Anthropic actually rejected (empty content? bad model? oversize prompt?).
+3. **Seed architecture** — `generateAllPrompts` synchronously dispatches every orchestrated template through the real provider on every `db:seed:prod` run. Expensive + flaky for production seeds that run on every Render deploy.
+
+**Fixes**
+
+### `server/src/ai/providers/claude.ts`
+- Pre-call structured log:
+  `[claude:request] feature=… model=… systemLen=… userLen=… maxTokens=… temperature=…`
+  Lets ops see request shape before the call fires.
+- Empty-content short-circuit: if `opts.user` is blank/whitespace, refuse with `empty_user_content` (Anthropic would 400 anyway). Cheaper, clearer.
+- Extended error log: extracts `status` / `sdkType` / `request_id` / `sdkMessage` (truncated 240 chars). New shape:
+  `[claude] FEATURE CODE model=… status=… sdkType=… requestId=… systemLen=… userLen=… maxTokens=…: MESSAGE | sdk: "…"`
+- No secrets logged (we never log the API key or full prompt body — only metadata + the 240-char sdk message which never contains keys per Anthropic docs).
+
+### `server/src/services/promptBuilders.ts`
+- New `GeneratePromptOptions { skipDispatch?: boolean }`.
+- `generatePrompt(projectId, kind, feedback?, opts?)` and `generateAllPrompts(projectId, opts?)` accept the flag.
+- When `skipDispatch=true`, the PackagingJob is created directly in `status='awaiting_manager'` with a manager-facing `resultPreview` («Материал готовится командой ZAPUSK AI…»). `dispatchToProvider` is NOT called. Result: zero LLM API calls in seed path.
+
+### `server/src/seed.ts`
+- Both `generateAllPrompts` calls (Венский ветер archetype + `seedDemoArchetype` for Luce Silva / Планета 60) now pass `{ skipDispatch: true }`.
+- Luce Silva showcase path (`seedLuceSilvaShowcase`) afterwards bulk-marks all packaging jobs `status='succeeded' + completedBy='Команда ZAPUSK AI'` — exact same final UI state as before, just without going through Claude.
+
+**Verification**
+- server tsc --noEmit pass
+- web tsc --noEmit pass
+- npm run build pass
+- `BOOTSTRAP_ADMIN_PASSWORD=admin12345 npm run db:seed` (local) — output shows:
+  ```
+  [packaging] seed-mode investment_summary → awaiting_manager (project=…)
+  [packaging] seed-mode financial → awaiting_manager (project=…)
+  [packaging] seed-mode calculator_spec → awaiting_manager (project=…)
+  …
+  ```
+  Zero `[claude]` log lines. Zero Anthropic SDK invocations during seed.
+- npm run smoke:project-knowledge — 23 generic-hint assertions still green
+- npm run smoke:transcript — pass
+- npm run replay — pass
+
+**Behavior unchanged**
+- Production UI flow for managers re-generating packaging artifacts (`/api/prompts/:id/generate/:kind` without `skipDispatch`) still hits Anthropic the same way as before.
+- Existing TEMPLATE_ORCHESTRATION map untouched — `financial` and `calculator_spec` still declared as `provider: 'claude'`. Manual UI re-runs from a manager work identically to before.
+- The bad_request fallback (`runClaudeJob` → `markAwaitingManager`) is still there. If Anthropic does return 400 from a manual run, it falls back to awaiting_manager gracefully — and now we see the actual sdk message in logs to debug it.
+
+**Deploy risk** — low. Seed-only behavioral change + observability improvements. No DB schema changes, no migrations, no API contract changes.
+
+**Какие файлы изменены**
+- `server/src/ai/providers/claude.ts` (+24 lines: pre-call log, empty-content gate, extended error log with sdkMessage/status/requestId)
+- `server/src/services/promptBuilders.ts` (+~35 lines: GeneratePromptOptions, skipDispatch short-circuit)
+- `server/src/seed.ts` (+2 lines: pass `{ skipDispatch: true }` to both generateAllPrompts call sites)
+- `TASKS.md` (this entry)
+
+---
+
+## Completed (Sprint 62.P4 Disk Maintenance Guardrails 2026-05-26)
 
 **Incident that triggered this**
 Production went 502 Bad Gateway. Render Logs showed:

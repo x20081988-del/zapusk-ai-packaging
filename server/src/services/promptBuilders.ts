@@ -149,7 +149,18 @@ function fillTemplate(body: string, ctx: BuiltContext): string {
   return body.replace(/\{\{(\w+)\}\}/g, (_m, key: string) => map[key] ?? `{{${key}}}`);
 }
 
-export async function generatePrompt(projectId: string, kind: PromptKind, feedback?: string) {
+export interface GeneratePromptOptions {
+  /**
+   * Sprint 62.P5 — when true, create the PackagingJob in 'awaiting_manager'
+   * status WITHOUT calling the provider (Claude/Lovable/etc). Used by seed
+   * to avoid hitting Anthropic on every deploy. Manager can still complete
+   * the task via /api/manager/packaging-tasks/:id/complete, or the seed can
+   * mark it succeeded directly (as the Luce Silva showcase does).
+   */
+  skipDispatch?: boolean;
+}
+
+export async function generatePrompt(projectId: string, kind: PromptKind, feedback?: string, opts?: GeneratePromptOptions) {
   const ctx = await buildContext(projectId);
   const template = await prisma.promptTemplate.findUnique({ where: { key: kind } });
   if (!template) throw new Error(`Template not found: ${kind}`);
@@ -184,6 +195,37 @@ export async function generatePrompt(projectId: string, kind: PromptKind, feedba
     : resolveOrchestration(kind);
 
   if (orchestration) {
+    // Sprint 62.P5 — seed-mode short-circuit. When opts.skipDispatch=true,
+    // we create the PackagingJob directly in 'awaiting_manager' status and
+    // skip dispatchToProvider entirely. This is what production seed does
+    // on every deploy: it eliminates the noisy bad_request_error from
+    // Anthropic calls (financial / calculator_spec) that were previously
+    // firing during `db:seed:prod`. The job still appears in /manager and
+    // a manager can complete it the same way as any other awaiting task.
+    if (opts?.skipDispatch) {
+      const seedPreview =
+        orchestration.provider === 'claude'
+          ? 'Материал готовится командой ZAPUSK AI (финмодель / калькулятор требует ручной сборки).'
+          : 'Материал готовится командой ZAPUSK AI.';
+      await prisma.packagingJob.create({
+        data: {
+          projectId,
+          templateId: template.id,
+          templateKey: template.key,
+          provider: orchestration.provider,
+          tool: orchestration.tool,
+          model: orchestration.model ?? null,
+          outputType: orchestration.outputType,
+          status: 'awaiting_manager',
+          prompt: body,
+          resultPreview: seedPreview,
+          generatedPromptId: generatedPrompt.id,
+        },
+      });
+      console.log(`[packaging] seed-mode ${kind} → awaiting_manager (project=${projectId.slice(0, 8)})`);
+      return generatedPrompt;
+    }
+
     // Sprint 17: создаём PackagingJob со status='queued', потом dispatch'им
     // на реальный provider client. Если ключа нет — provider возвращает mock
     // с понятным errorCode, и мы помечаем job 'mock'. Если call упал —
@@ -404,11 +446,11 @@ function withFeedbackHeader(body: string, feedback: string): string {
   ].join('\n');
 }
 
-export async function generateAllPrompts(projectId: string) {
+export async function generateAllPrompts(projectId: string, opts?: GeneratePromptOptions) {
   const results: Array<{ kind: PromptKind; version: number }> = [];
   for (const kind of ALL_PROMPT_KINDS) {
     try {
-      const created = await generatePrompt(projectId, kind);
+      const created = await generatePrompt(projectId, kind, undefined, opts);
       results.push({ kind, version: created.version });
     } catch (err) {
       console.warn(`[prompt] failed for ${kind}:`, err instanceof Error ? err.message : err);

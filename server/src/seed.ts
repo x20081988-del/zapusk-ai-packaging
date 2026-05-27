@@ -346,7 +346,13 @@ async function main() {
     try {
       // Generate fresh prompts from the (now richer) brief and the updated templates.
       // We deliberately do NOT call generateBrief here — the seed brief is the source of truth for demo.
-      await generateAllPrompts(demo.id);
+      // Sprint 62.P5 — skipDispatch:true: seed never dispatches to Anthropic
+      // / Lovable / Claude Design. Packaging jobs are created in
+      // 'awaiting_manager' status, eliminating the bad_request_error log
+      // noise and expensive LLM calls on every deploy. Managers complete
+      // jobs via the normal /manager flow; showcase seeds (Luce Silva) then
+      // bulk-mark them succeeded via seedLuceSilvaShowcase.
+      await generateAllPrompts(demo.id, { skipDispatch: true });
     } catch (err) {
       console.warn('[seed] demo prompt generation skipped:', err instanceof Error ? err.message : err);
     }
@@ -450,7 +456,10 @@ async function seedDemoArchetype(userId: string, d: DemoProject) {
   }
 
   try {
-    await generateAllPrompts(project.id);
+    // Sprint 62.P5 — same skipDispatch as the Венский ветер demo above.
+    // Prevents bad_request_error spam for financial / calculator_spec
+    // (Claude-orchestrated templates) on every seed run.
+    await generateAllPrompts(project.id, { skipDispatch: true });
   } catch (err) {
     console.warn(`[seed] prompts for ${d.name} skipped:`, err instanceof Error ? err.message : err);
   }

@@ -60,6 +60,25 @@ export async function claudeGenerateText(opts: ClaudeCallOptions): Promise<Claud
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const started = Date.now();
 
+  // Sprint 62.P5 — pre-call structured log so we can diagnose 400/422 etc
+  // when they fire. No secrets — only feature/model/lengths/maxTokens.
+  const systemLen = opts.system ? opts.system.length : 0;
+  const userLen = opts.user ? opts.user.length : 0;
+  console.log(
+    `[claude:request] feature=${opts.feature} model=${model} ` +
+    `systemLen=${systemLen} userLen=${userLen} maxTokens=${maxTokens} ` +
+    `temperature=${opts.temperature ?? 0.4}`,
+  );
+
+  // Sprint 62.P5 — refuse early if user content is empty/blank. Anthropic
+  // returns 400 invalid_request_error for empty messages content; better to
+  // short-circuit with an explicit code than log a confusing «bad_request».
+  if (!opts.user || !opts.user.trim()) {
+    const msg = 'Empty user content — refusing call (would 400 on Anthropic).';
+    console.warn(`[claude] ${opts.feature} empty_user_content: ${msg}`);
+    return mockResult('empty_user_content', msg);
+  }
+
   try {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
@@ -108,9 +127,22 @@ export async function claudeGenerateText(opts: ClaudeCallOptions): Promise<Claud
     };
   } catch (err) {
     const { code, message, transient } = classifyError(err);
-    // ВАЖНО: в console.warn НЕ кладём ключ или сырое сообщение SDK с auth-
-    // данными. classifyError() возвращает уже отчищенный errorMessage.
-    console.warn(`[claude] ${opts.feature} ${code} ${transient ? '(transient)' : ''}: ${message}`);
+    // Sprint 62.P5 — extended diagnostic context. SDK message is included
+    // (truncated) so we can see why Anthropic actually rejected the call.
+    // Anthropic API errors don't include the API key in their response body,
+    // and we never log the request body itself — only metadata.
+    const sdkErr = err as { status?: number; error?: { type?: string; message?: string; request_id?: string }; request_id?: string };
+    const requestId = sdkErr.request_id ?? sdkErr.error?.request_id ?? null;
+    const status = sdkErr.status ?? null;
+    const sdkType = sdkErr.error?.type ?? null;
+    const sdkMessage = (sdkErr.error?.message ?? '').slice(0, 240);
+    console.warn(
+      `[claude] ${opts.feature} ${code} ${transient ? '(transient) ' : ''}` +
+      `model=${model} status=${status ?? '-'} sdkType=${sdkType ?? '-'} ` +
+      `requestId=${requestId ?? '-'} systemLen=${systemLen} userLen=${userLen} ` +
+      `maxTokens=${maxTokens}: ${message}` +
+      (sdkMessage ? ` | sdk: "${sdkMessage}"` : ''),
+    );
     logUsage({
       provider: 'anthropic',
       feature: opts.feature,
