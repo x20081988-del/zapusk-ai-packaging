@@ -111,6 +111,18 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
   const modelSource: 'template' | 'env' | 'hard_fallback' =
     tpl.model?.trim() ? 'template' : (env.OPENAI_MODEL_REALTIME_TRANSCRIBE?.trim() ? 'env' : 'hard_fallback');
 
+  // Sprint 62.P9 — explicit pre-OpenAI bootstrap log. The existing
+  // `session issued` log (line ~311) only fires AFTER OpenAI returns OK.
+  // When ops debugs "what model is this session trying to use" they need
+  // the value BEFORE the upstream call, especially if OpenAI 502s. No
+  // secrets logged — only model/source/template metadata.
+  console.info(
+    `[realtime] session bootstrap traceId=${traceId} ` +
+    `model=${model} modelSource=${modelSource} ` +
+    `templateKey=${REALTIME_TEMPLATE_KEY} templateVersion=${tpl.version} ` +
+    `templateModelRaw="${tpl.model ?? ''}" envOverride="${env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? ''}"`,
+  );
+
   // Sprint 49 hotfix 4 — gpt-realtime-whisper не поддерживает transcription.prompt.
   // Решение про prompt принимаем здесь: если модель в whitelist'е — компактим
   // body шаблона до ≤1024 (hotfix 3) и кладём в transcription.prompt. Если
