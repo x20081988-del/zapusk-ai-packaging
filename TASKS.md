@@ -2,11 +2,96 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-25 (Sprint 62.P3: Luce Silva showcase + numbered demo leads + accordion UI).
+Last updated: 2026-05-26 (Sprint 62.P4: disk maintenance guardrails for Render).
 
 ---
 
-## Completed (this sprint — Sprint 62.P3 Luce Silva showcase + demo leads UI 2026-05-25)
+## Completed (this sprint — Sprint 62.P4 Disk Maintenance Guardrails 2026-05-26)
+
+**Incident that triggered this**
+Production went 502 Bad Gateway. Render Logs showed:
+```
+[snapshot] FAILED ... ENOSPC: no space left on device
+SqliteError: "database or disk is full"
+prisma.user.upsert() FAILED → seed crash → boot never finishes → 502
+```
+Root cause: `preDeploySnapshot.ts` kept 7 full DB copies and ran retention AFTER copy. When copy hit ENOSPC, retention never executed → snapshots accumulated → every subsequent deploy crashed the same way. Manual recovery via Render Shell took ~5 minutes (rm /var/data/snapshots/*.db + Manual Deploy).
+
+**Fixes — Sprint 62.P4 (commits `5113d50` + this sprint)**
+
+### Snapshot retention reorder (commit `5113d50`)
+- `SNAPSHOTS_KEEP` 7 → 3.
+- Retention runs BEFORE copyFile attempt (so old snapshots are deleted to free space first).
+- Free-disk pre-flight check: if free space < 2× DB size after retention, SKIP snapshot with loud warning instead of failing.
+- If copyFile partial-writes before ENOSPC, the half-written .db is `fs.unlink`-ed.
+
+### Disk inspector library (`server/src/lib/diskInspector.ts` NEW)
+Centralised read-only helpers shared by endpoint / script / boot warning / pre-deploy snapshot:
+- `resolveDbPath()`, `resolveDataDir()`, `resolveSnapshotsDir()`, `resolveUploadsDir()` — path resolution
+- `inspectDisk(mountPath)` — statfsSync wrapper, returns `{ totalBytes, freeBytes, usedBytes, usedPercent, freePercent, low }`. `low` flag = `freePercent < 25%`.
+- `inspectSnapshots(dir)` — count + total size + per-file metadata (name, size, mtime).
+- `inspectDir(dir)` — uploads dir (one level deep).
+- `buildDiskReport()` — full report assembled for the endpoint.
+- `fmtBytes(n)` — readable formatter.
+
+### Admin endpoint `GET /api/admin/system/disk`
+- ADMIN-only (via `requireRole(['admin'])` middleware that's already on the entire `/api/admin/*` router).
+- Returns full disk report: mount usage / db size / snapshots count + size / uploads count + size / warnings array.
+- Read-only — does NOT delete or rotate anything.
+
+### Maintenance script `npm run maintenance:disk`
+- Local: `npm run maintenance:disk` (tsx)
+- Prod: `npm run maintenance:disk:prod` (node dist) — runnable from Render Shell.
+- Flags:
+  - `--keep N` — keep newest N snapshots (default 3)
+  - `--uploads-stale N` — ALSO delete uploads files older than N days (opt-in, NOT default)
+  - `--dry-run` — preview without deleting
+- Output: `df -h`-style BEFORE/AFTER + per-file action log + freed-bytes summary.
+- Safe defaults: snapshots only, does NOT touch `prod.db`, does NOT touch uploads without explicit `--uploads-stale` flag.
+
+### Boot-time disk warning (`server/src/index.ts`)
+At every `app.listen()` callback, logs one line summarising the disk:
+```
+[disk] mount=/var/data total=1.00 GB used=750 MB (75%) free=250 MB (25%) · db=180 MB · snapshots=3 (540 MB) · uploads=42 files (60 MB)
+```
+If `low=true` (freePercent < 25%), additional `[disk] WARNING: low disk space on /var/data — 18% free (threshold 25%)` line. Non-fatal — boot continues. Founder/ops can set a Render log-search alert on `[disk] WARNING:` to catch next near-miss before users see 502.
+
+### Runbook in README
+Step-by-step recovery procedure for 502 + ENOSPC: open Render Shell → df/du → `npm run maintenance:disk:prod` (or raw rm) → Manual Deploy → verify via `/api/admin/system/disk`.
+
+**Какие файлы изменены**
+- `server/src/lib/diskInspector.ts` — NEW (read-only inspection lib, ~160 lines)
+- `server/src/scripts/maintenanceDisk.ts` — NEW (cleanup script with --keep / --uploads-stale / --dry-run, ~180 lines)
+- `server/src/scripts/preDeploySnapshot.ts` — retention BEFORE copy + free-disk pre-flight + partial-write cleanup
+- `server/src/routes/admin.ts` — `GET /api/admin/system/disk` endpoint
+- `server/src/index.ts` — boot-time disk log + low-disk WARNING
+- `server/package.json` — `maintenance:disk` + `maintenance:disk:prod` scripts
+- `package.json` (root) — `maintenance:disk` forwarder
+- `README.md` — `## Runbook: 502 Bad Gateway from Render (ENOSPC)` section
+
+**Verification**
+- server tsc --noEmit pass
+- web tsc --noEmit pass
+- npm run build pass
+- `npm run maintenance:disk -- --dry-run` (local) — runs cleanly, reports missing dirs gracefully
+- smoke:project-knowledge, smoke:transcript, replay — pass
+
+**Deploy risk**
+- Low. New endpoint is admin-only read-only. New script doesn't run automatically — opt-in. preDeploySnapshot.ts change is the same shape as before (process.exit(0) on any error) — deploy still continues if snapshot fails.
+- Manual recovery for the active 502: requires Render Shell access; documented step-by-step in README. Once disk is freed manually, this commit prevents recurrence.
+
+**Что НЕ делалось намеренно**
+- Auto-cleanup of stale uploads in `preDeploySnapshot.ts` — too risky to delete customer files automatically at boot. Requires `--uploads-stale` opt-in.
+- Pruning of AiRequestLedger / AuditEvent rows — separate TTL sprint when DB itself grows over budget.
+- Render disk size increase — operator decision (cost trade-off); doc points to it in the runbook.
+
+**Known followups (for next sprint if needed)**
+- TTL job for `AiRequestLedger` (delete rows older than 90 days?) — to keep `prod.db` itself bounded.
+- Log-search alert on `[disk] WARNING:` configured in Render (operator action, not code).
+
+---
+
+## Completed (Sprint 62.P3 Luce Silva showcase + demo leads UI 2026-05-25)
 
 **Why this sprint**
 Founder сообщил, что демо ai-call leads пропали из раздела «Демо AI-Лиды», а проект Luce Silva (его публичная демо-ссылка) выглядит как сырой draft. Нужно довести проект `cmparw2i30002mbr7bnqv3g78` до полной упаковки, добавить 3 реальных AI-call записи в showcase, и сделать список лидов визуально как «поток обработанных инвесторов».

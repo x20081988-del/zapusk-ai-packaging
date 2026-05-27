@@ -10,6 +10,7 @@ import { recordAudit } from '../lib/audit.js';
 import { env, aiProviderStatus } from '../env.js';
 import { isFtsAvailable } from '../services/knowledgeFts.js';
 import { resolveModel, type AIProvider, type AIModelRoute } from '../ai/client.js';
+import { buildDiskReport } from '../lib/diskInspector.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -585,6 +586,19 @@ adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res
     },
     knowledgeFts: isFtsAvailable(),
   });
+});
+
+// Sprint 62.P4 — disk inspector for ops. Surfaces /var/data usage so
+// founders/admins can see WHY the service might be crash-looping with ENOSPC
+// before opening Render Shell. Output mirrors npm run maintenance:disk but
+// available via HTTP (faster, no shell needed).
+//
+// ADMIN-only because it exposes mount paths + file counts. Read-only — does
+// NOT delete or rotate anything. Companion cleanup script is
+// scripts/maintenanceDisk.ts (`npm run maintenance:disk`).
+adminRoutes.get('/system/disk', requireRole(['admin']), (_req, res) => {
+  const report = buildDiskReport();
+  res.json(report);
 });
 
 // Sprint 62.P1 — Active models inspector.

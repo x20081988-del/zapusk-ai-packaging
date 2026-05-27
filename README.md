@@ -339,6 +339,57 @@ npm start
 5. **Постоянный AI-провайдер** — `AI_PROVIDER=openai` + `OPENAI_API_KEY` и OpenAI model env в секретах. Мониторинг usage через Render Logs.
 6. **CDN перед SPA** — Cloudflare / Fastly. Express отдаёт только `/api`.
 
+## Runbook: 502 Bad Gateway from Render (ENOSPC)
+
+If `https://zapusk-ai.tech` returns 502 and Render Events show **Instance failed: Exited with status 1**, the most common cause is disk full on `/var/data` (persistent volume on the Render service).
+
+Symptoms in Render Logs:
+```
+[snapshot] FAILED to copy /var/data/prod.db → /var/data/snapshots/...:
+   ENOSPC: no space left on device
+prisma:error Invalid `prisma.user.upsert()` invocation:
+   SqliteError: "database or disk is full"
+```
+
+Recovery (3 minutes):
+
+1. **Open Render Dashboard → service → Shell**.
+
+2. Inspect:
+   ```bash
+   df -h /var/data
+   du -sh /var/data/*
+   du -sh /var/data/snapshots/*.db | sort -h | tail -10
+   ```
+
+3. Run the maintenance script (rotates snapshots, keeps last 3):
+   ```bash
+   cd /opt/render/project/src/server
+   npm run maintenance:disk:prod
+   ```
+
+   Or, if `npm` is not on PATH in the shell, raw:
+   ```bash
+   node /opt/render/project/src/server/dist/scripts/maintenanceDisk.js
+   ```
+
+   Or, hardest fallback (deletes ALL snapshots):
+   ```bash
+   rm -f /var/data/snapshots/*.db
+   ```
+
+4. **Render Dashboard → Manual Deploy** (or wait for the next push to redeploy).
+
+5. After deploy is green, sanity-check:
+   ```
+   GET https://zapusk-ai.tech/api/admin/system/disk    # admin auth required
+   ```
+   `disk.low` must be `false` and `warnings` should be empty.
+
+Boot-time `[disk] WARNING: low disk space on /var/data` log line surfaces in Render Logs when `freePercent < 25%` — set up a log alert on that string to catch the next crash before users see 502.
+
+Snapshot retention is **3 newest** (was 7 before Sprint 62.P4) and runs **before** every copy attempt, so a single ENOSPC event no longer cascades into a permanent crash loop.
+
 ## AI-ready repo
 
 This repo is set up for multi-agent AI development. See:

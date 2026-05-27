@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { env, isProd, aiProviderStatus, assertAiProviderOnStartup } from './env.js';
+import { buildDiskReport, fmtBytes, LOW_DISK_THRESHOLD_PERCENT } from './lib/diskInspector.js';
 import { demoGuard } from './middleware/demoGuard.js';
 import { authedAndActive } from './middleware/workspaceAccess.js';
 import { authRoutes } from './routes/auth.js';
@@ -157,6 +158,43 @@ app.listen(env.PORT, () => {
   console.log(`[zapusk-api] env=${env.NODE_ENV} · isProd=${isProd} · demo=${env.DEMO_MODE} · ai=${env.AI_PROVIDER}`);
   console.log(`[zapusk-api] cwd=${process.cwd()}`);
   console.log(`[zapusk-api] running file dir=${here}`);
+
+  // Sprint 62.P4 — boot-time disk warning. Loud-fail on low /var/data
+  // so the founder sees it in Render Logs before the next ENOSPC crash
+  // (e.g. the 2026-05-26 incident). Non-fatal — boot continues.
+  try {
+    const report = buildDiskReport();
+    if (report.disk) {
+      const d = report.disk;
+      const sn = report.snapshots;
+      const upl = report.uploads;
+      console.log(
+        `[disk] mount=${d.mountPath} total=${fmtBytes(d.totalBytes)} ` +
+        `used=${fmtBytes(d.usedBytes)} (${d.usedPercent}%) ` +
+        `free=${fmtBytes(d.freeBytes)} (${d.freePercent}%) · ` +
+        `db=${fmtBytes(report.dbSizeBytes)} · ` +
+        `snapshots=${sn.count} (${fmtBytes(sn.totalBytes)})` +
+        (upl ? ` · uploads=${upl.fileCount} files (${fmtBytes(upl.totalBytes)})` : ''),
+      );
+      if (d.low) {
+        console.warn(
+          `[disk] WARNING: low disk space on ${d.mountPath} — ${d.freePercent}% free ` +
+          `(threshold ${LOW_DISK_THRESHOLD_PERCENT}%). ` +
+          `Run \`npm run maintenance:disk\` or rm /var/data/snapshots/*.db via Render Shell. ` +
+          `GET /api/admin/system/disk for full report.`,
+        );
+      }
+      for (const w of report.warnings) {
+        console.warn(`[disk] ${w}`);
+      }
+    } else {
+      console.log('[disk] inspection skipped (mount not available — local dev?)');
+    }
+  } catch (err) {
+    // Disk check must never crash boot.
+    console.warn('[disk] boot inspection failed:', err instanceof Error ? err.message : err);
+  }
+
   // Sprint 41 P0.1 — FTS5 lazy init. Не блокирует listen() — fire-and-forget.
   // Если FTS не работает (compile-time disabled или CREATE упал) — keyword
   // retrieval продолжает работать как раньше.

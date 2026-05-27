@@ -13,6 +13,8 @@
     "db:reset": "prisma migrate reset --force",
     "db:doctor": "tsx src/scripts/dbDoctor.ts",
     "env:doctor": "tsx src/scripts/envDoctor.ts",
+    "maintenance:disk": "tsx src/scripts/maintenanceDisk.ts",
+    "maintenance:disk:prod": "node dist/scripts/maintenanceDisk.js",
     "db:seed": "tsx src/seed.ts",
     "db:seed:prod": "node dist/seed.js",
     "db:seed:dev-reset": "tsx src/scripts/devReset.ts",
