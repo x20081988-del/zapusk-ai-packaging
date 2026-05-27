@@ -602,6 +602,14 @@ adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res
 //     latency + transcript length + sample. audioUrl must be a public
 //     URL the server can fetch (no auth).
 //
+// Sprint 62.P7 — recommended preset model values (kept in sync with
+// web/src/pages/Templates.tsx TRANSCRIPTION_MODEL_PRESETS):
+//   • gpt-4o-transcribe      — качество, по умолчанию
+//   • gpt-4o-mini-transcribe — быстрее, дешевле
+//   • whisper-1              — legacy / совместимость
+// The endpoint accepts any string in `model` field — callers may also test
+// custom model IDs (e.g. fine-tunes) by passing them directly.
+//
 // No mutations. Doesn't change PromptTemplate.model — pure read/test.
 const transcriptionTestSchema = z.object({
   mode: z.enum(['realtime', 'upload']),

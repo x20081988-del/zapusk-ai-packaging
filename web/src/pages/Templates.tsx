@@ -60,6 +60,22 @@ function isTemplateModelHonored(key: string | null | undefined): boolean {
   return TEMPLATE_MODEL_HONORED_KEYS.has(key.trim());
 }
 
+// Sprint 62.P7 — transcription model presets. Shown as a <datalist> for the
+// realtime_transcription template so admin doesn't have to memorise the names
+// (the regular «Инструмент» dropdown lists LLM tools, not transcription
+// models). Admin can also type a custom value — the input is still free-text.
+// Keep in sync with the cascade in:
+//   • server/src/routes/realtime.ts:resolveTranscriptionModel
+//   • server/src/services/openaiTranscribe.ts
+// All values verified against the OpenAI /v1/audio/transcriptions + /v1/realtime
+// API model lists (May 2026).
+const TRANSCRIPTION_MODEL_PRESETS: Array<{ value: string; label: string }> = [
+  { value: 'gpt-4o-transcribe',       label: 'gpt-4o-transcribe · качество, по умолчанию' },
+  { value: 'gpt-4o-mini-transcribe',  label: 'gpt-4o-mini-transcribe · быстрее, дешевле' },
+  { value: 'whisper-1',               label: 'whisper-1 · legacy / совместимость' },
+];
+const TRANSCRIPTION_PRESETS_DATALIST_ID = 'transcription-model-presets';
+
 export default function Templates() {
   const [templates, setTemplates] = useState<PromptTemplate[] | null>(null);
   const [current, setCurrent] = useState<PromptTemplate | null>(null);
@@ -253,12 +269,35 @@ export default function Templates() {
                   onChange={(e) => setDraft({ ...draft, outputType: e.target.value || null })}
                 />
               </div>
-              <Input
-                label="Конкретная модель (опционально)"
-                hint="Например: gpt-4.1-2025-04, claude-opus-2025. Если пусто — берём дефолт провайдера."
-                value={draft.model ?? ''}
-                onChange={(e) => setDraft({ ...draft, model: e.target.value || null })}
-              />
+              {/* Sprint 62.P7 — transcription templates get a datalist with
+                  preset transcription models (not LLM tools). Admin can pick
+                  from the list or type any custom value. */}
+              {isTemplateModelHonored(draft.key) ? (
+                <>
+                  <Input
+                    label="Конкретная модель транскрипции"
+                    hint="Выберите из списка ниже или впишите кастомную модель. Если пусто — будет использован OPENAI_MODEL_REALTIME_TRANSCRIBE из env (fallback: gpt-4o-transcribe)."
+                    value={draft.model ?? ''}
+                    onChange={(e) => setDraft({ ...draft, model: e.target.value || null })}
+                    list={TRANSCRIPTION_PRESETS_DATALIST_ID}
+                    placeholder="например, gpt-4o-transcribe"
+                  />
+                  <datalist id={TRANSCRIPTION_PRESETS_DATALIST_ID}>
+                    {TRANSCRIPTION_MODEL_PRESETS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </datalist>
+                </>
+              ) : (
+                <Input
+                  label="Конкретная модель (опционально)"
+                  hint="Например: gpt-4.1-2025-04, claude-opus-2025. Если пусто — берём дефолт провайдера."
+                  value={draft.model ?? ''}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value || null })}
+                />
+              )}
               {/* Sprint 62.P1 — honest warning about template.model behavior.
                   Today the field is only respected by the realtime_transcription
                   template (live + file upload транскрипция). For sales_gpt /
@@ -296,10 +335,16 @@ export default function Templates() {
                     fallback <code className="font-mono">gpt-4o-transcribe</code>.
                   </div>
                   <div>
-                    <strong className="text-primary">Допустимые модели:</strong>
+                    <strong className="text-primary">Допустимые модели</strong> (выбери из выпадающего списка
+                    выше или впиши кастомную):
                     {' '}<code className="font-mono">gpt-4o-transcribe</code> (качество, по умолчанию),
                     {' '}<code className="font-mono">gpt-4o-mini-transcribe</code> (скорость, дешевле),
                     {' '}<code className="font-mono">whisper-1</code> (старый, для совместимости).
+                    <br />
+                    <span className="text-muted">
+                      Список «Инструмент» сверху рассчитан на LLM-инструменты (GPT-4.1 / Claude / Lovable) —
+                      его для realtime transcription можно оставить как есть.
+                    </span>
                   </div>
                   <div className="text-muted">
                     Текстовый body этого шаблона — словарь терминов проекта. Он отправляется AI

@@ -2,11 +2,51 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-26 (Sprint 62.P6: transcription model selection observability).
+Last updated: 2026-05-26 (Sprint 62.P7: expose transcription models in template UI).
 
 ---
 
-## Completed (this sprint — Sprint 62.P6 Transcription model observability 2026-05-26)
+## Completed (this sprint — Sprint 62.P7 Transcription model presets in UI 2026-05-26)
+
+**Why this sprint**
+Sprint 62.P6 объяснил founder'у что поле «Конкретная модель» работает и в realtime, и в upload путях. Но в шаблоне `realtime_transcription` он не знал какие конкретно значения вписывать — выпадающий «Инструмент» в админке содержит только LLM-инструменты (GPT-4.1 / Claude Opus / Lovable Web / Claude Design PDF), а transcription-моделей (gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1) там нет. Поэтому неясно, какие значения тестировать.
+
+**Что сделано (commit `fix: expose transcription models in template UI`)**
+
+### Templates.tsx — отдельный datalist для transcription шаблонов
+- Новый константа `TRANSCRIPTION_MODEL_PRESETS` (gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1) с описаниями trade-offs.
+- Когда `isTemplateModelHonored(draft.key) === true` (т.е. key=realtime_transcription), поле «Конкретная модель» меняется:
+  - Label → «Конкретная модель транскрипции»
+  - Подключен `<datalist>` с пресетами — браузер показывает выпадающий список при фокусе
+  - Можно выбрать из списка ИЛИ вписать кастомное значение (free-text input не ограничен пресетами)
+  - Placeholder: «например, gpt-4o-transcribe»
+  - Hint: «Выберите из списка ниже или впишите кастомную модель. Если пусто — будет использован OPENAI_MODEL_REALTIME_TRANSCRIBE из env (fallback: gpt-4o-transcribe).»
+- Для не-transcription шаблонов сохранён обычный Input без datalist (warning «Эта модель сейчас не применяется» из Sprint 62.P1 остался).
+- Help-block из Sprint 62.P6 обновлён: упоминает что список «Инструмент» сверху рассчитан на LLM-инструменты и для realtime_transcription его можно оставить как есть.
+
+### admin.ts — комментарий с пресетами в test endpoint
+- `POST /api/admin/transcription/test` уже принимает любую строку в `model` field, теперь в комменте прописан рекомендованный список пресетов (тот же что в UI).
+- Никаких изменений в схеме — endpoint остался свободным от enum-ограничений (можно тестировать кастомные модели / fine-tunes).
+
+**Какие файлы изменены**
+- `web/src/pages/Templates.tsx` (+~35 lines: TRANSCRIPTION_MODEL_PRESETS, conditional Input/datalist, updated hint)
+- `server/src/routes/admin.ts` (+~9 lines: preset documentation in endpoint comment)
+- `TASKS.md` (this entry)
+
+**Verification**
+- web tsc / server tsc — pass
+- npm run build — pass (bundle changed only by Templates.tsx delta)
+- smoke:project-knowledge — pass (23 generic-hint assertions still green)
+- Existing `realtime_transcription` template: open in UI → field «Конкретная модель транскрипции» с datalist пресетов, при фокусе показывается выпадающий список. Можно сохранить либо выбор из пресета, либо кастомное значение. После сохранения `PromptTemplate.model` хранит ровно то значение, что было в input.
+- Следующий запрос к `/api/realtime/transcription-session` использует сохранённое значение через cascade resolveTranscriptionModel; в логах `modelSource=template`.
+
+**Что осталось как было**
+- `POST /api/admin/transcription/test` schema без enum-ограничения на `model` — admin может тестировать произвольные модели включая fine-tunes.
+- `<Select>` «Инструмент» в верхнем блоке формы не тронут — он остаётся для LLM tool registry (GPT-4.1 / Claude Opus / …), не для transcription моделей. Это разные концепции — tool registry в TOOL_UI vs модель транскрипции.
+
+---
+
+## Completed (Sprint 62.P6 Transcription model observability 2026-05-26)
 
 **Why this sprint**
 Founder открыл Templates → realtime_transcription → не понял какая модель реально управляет скоростью транскрипции, есть ли разница между realtime и upload, можно ли менять модель без redeploy. Существующий код (`realtime.ts` + `openaiTranscribe.ts`) уже использовал `PromptTemplate.model` для обоих путей, но UI ничего об этом не говорил.
