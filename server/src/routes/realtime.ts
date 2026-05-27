@@ -131,8 +131,19 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
   const promptSupported = supportsRealtimeTranscriptionPrompt(model);
   const built = promptSupported
     ? buildRealtimePrompt(tpl.body)
-    : { prompt: '', length: 0, trimmed: false };
+    : { prompt: '', length: 0, trimmed: false, strategy: 'empty' as const };
   const promptSkippedReason = promptSupported ? null : 'model_does_not_support_prompt';
+  // Sprint 62.P9.HOTFIX — log how the dictionary extractor handled the
+  // template body. If strategy !== 'dictionary-extracted' on a template that
+  // SHOULD have a glossary header, ops needs to know — the model is now
+  // running with a degraded biasing list.
+  if (promptSupported) {
+    console.info(
+      `[realtime] prompt-sanitised traceId=${traceId} ` +
+      `strategy=${built.strategy} promptLength=${built.length} ` +
+      `promptTrimmed=${built.trimmed} templateBodyLength=${tpl.body.length}`,
+    );
+  }
 
   // Sprint 49 hotfix 5 — gpt-realtime-whisper не принимает turn_detection.
   // Модель сама режет на сегменты по своей внутренней VAD-логике. Для

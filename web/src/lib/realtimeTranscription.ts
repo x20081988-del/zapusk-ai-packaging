@@ -7,6 +7,7 @@ import {
 } from './transcriptPipeline';
 import { createRealtimeTimingTrace, type RealtimeTimingTrace } from './realtimeTiming';
 import { reconcileTruncatedFinal } from './transcriptReconcile';
+import { detectPromptLeakage } from './promptLeakageFilter';
 
 // Sprint 49 — OpenAI Realtime live transcription через WebRTC.
 //
@@ -348,7 +349,27 @@ export async function startRealtimeTranscription(
               timing.mark('firstDelta', { deltaChars: msg.delta.length });
               phase('first_audio_received');
             }
-            interimBuffer += msg.delta;
+            // Sprint 62.P9.HOTFIX — prompt leakage guard on interim.
+            // OpenAI Realtime can echo `transcription.prompt` back as deltas
+            // when the prompt contains imperative prose. We sanitised the
+            // server-side prompt (realtimePrompt.ts → dictionary-only), but
+            // keep a client-side safety net: if the accumulated interim
+            // matches multiple prompt signatures, drop it and reset.
+            const candidate = interimBuffer + msg.delta;
+            const leakage = detectPromptLeakage(candidate);
+            if (leakage.detected) {
+              realtimeLog('prompt-leakage-detected', {
+                stage: 'interim',
+                hits: leakage.hits,
+                matchedSamples: leakage.matchedSamples,
+                candidateLen: candidate.length,
+              });
+              // Reset interim buffer so the UI clears any partial leak.
+              interimBuffer = '';
+              callbacks.onInterim('');
+              return;
+            }
+            interimBuffer = candidate;
             deltaCount++;
             callbacks.onInterim(interimBuffer);
           }
@@ -360,6 +381,24 @@ export async function startRealtimeTranscription(
           // interim-vs-final mutation diff (P0.3).
           const interimSnapshot = interimBuffer;
           interimBuffer = '';
+          // Sprint 62.P9.HOTFIX — leakage guard on final segments. Same
+          // check as the interim path. If OpenAI emitted the prompt back
+          // as a «completed» event (it CAN happen even when interim deltas
+          // were clean if the model decides to flush the whole context),
+          // we drop the segment entirely. callbacks.onFinal is NOT called.
+          if (rawTranscript.length) {
+            const finalLeak = detectPromptLeakage(rawTranscript);
+            if (finalLeak.detected) {
+              realtimeLog('prompt-leakage-detected', {
+                stage: 'final',
+                hits: finalLeak.hits,
+                matchedSamples: finalLeak.matchedSamples,
+                transcriptLen: rawTranscript.length,
+              });
+              callbacks.onInterim('');
+              return;
+            }
+          }
           if (rawTranscript.length) {
             // Sprint 62 P0 — first final segment milestone.
             if (finalSegmentCount === 0) {

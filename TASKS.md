@@ -2,11 +2,86 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-26 (Sprint 62.P8: transcription model test UI in template modal).
+Last updated: 2026-05-27 (Sprint 62.P9.HOTFIX: prompt leakage in live transcription).
 
 ---
 
-## Completed (this sprint — Sprint 62.P8 Transcription test UI 2026-05-26)
+## Completed (this sprint — Sprint 62.P9.HOTFIX Prompt leakage in live transcript 2026-05-27)
+
+**Prod incident**
+Founder открыл AI-ассистент → начал live прослушивание → в окне «Живая транскрипция» появился полный текст системного промпта из шаблона `realtime_transcription`:
+
+> «Ты — модуль точной русской транскрипции для AI-ассистента переговоров платформы ZAPUSK AI. - Язык: русский. Английские термины оставляй как есть (latin). - Не сокращай и не парафразируй — пиши то, что реально звучит… СЛОВАРЬ ТЕРМИНОВ И БИЗНЕС-ИМЁН (приоритет распознавания) - ZAPUSK AI, Zapusk, Запуск…»
+
+Голос этого НЕ произносил. Это leakage из `transcription.prompt` поля OpenAI Realtime API.
+
+**Root cause**
+OpenAI Realtime API spec для `session.audio.input.transcription.prompt`:
+> An optional text to guide the model's style or continue a previous audio segment.
+
+То есть **biasing context для следующего ввода**, не системный промпт. Когда туда попадает imperative prose («Ты — модуль...», «Не сокращай...»), модель воспринимает это как начало транскрипта и эхает обратно как «продолжение» — особенно при длинных паузах или silence в начале сессии.
+
+Sprint 49 hotfix 3 (`buildRealtimePrompt`) сжимал body до 1024 chars, но не отделял imperative prose от словаря. Весь body улетал к OpenAI как prompt.
+
+**Fix: 3-layer defense**
+
+### LAYER 1 — Server: sanitise prompt before sending to OpenAI
+`server/src/services/realtimePrompt.ts:buildRealtimePrompt` переписан:
+- Ищет заголовок словаря (СЛОВАРЬ / GLOSSARY / DICTIONARY / БИЗНЕС-ИМЁН / ТЕРМИНОВ / VOCABULARY)
+- `isDictionaryHeader` строгий: требует all-uppercase Russian core + no trailing period + matching pattern — чтобы bullet line «- Английские термины оставляй...» не триггерила (false positive в первом проходе фикса).
+- Берёт ТОЛЬКО строки ПОСЛЕ заголовка словаря. Imperative prose до него — отбрасывается.
+- Strip bullet markers (`-`, `•`, `·`, `—`, `–`, `*`) → flatten lines в comma-separated phrase list.
+- Если заголовок не найден (custom user templates) — fallback strategy `'bullet-only'`: берёт ТОЛЬКО bullet-list lines, drops imperative sentences.
+- Новый returned field `strategy: 'dictionary-extracted' | 'bullet-only' | 'empty'` для логов.
+
+`server/src/routes/realtime.ts` логирует:
+```
+[realtime] prompt-sanitised traceId=… strategy=dictionary-extracted promptLength=… promptTrimmed=… templateBodyLength=…
+```
+
+Verified в smoke #20: после sanitisation:
+- ✅ Промпт НЕ содержит «Ты — модуль», «Не сокращай», заголовков «ОСНОВНЫЕ ПРАВИЛА» / «СЛОВАРЬ ТЕРМИНОВ»
+- ✅ Промпт содержит glossary entries (ZAPUSK, IRR, P&L, …)
+- ✅ Sanitised prompt сам по себе НЕ триггерит leakage detector
+
+### LAYER 2 — Client: prompt-leakage detector
+Новый файл `web/src/lib/promptLeakageFilter.ts`:
+- `PROMPT_LEAKAGE_SIGNATURES` — 11 regex'ов для специфических prompt-фраз («Ты — модуль точной транскрипции», «СЛОВАРЬ ТЕРМИНОВ», «ОСНОВНЫЕ ПРАВИЛА», «платформы ZAPUSK AI», «AI-ассистента переговоров», «Английские термины оставляй», «Не сокращай / не парафразируй», «Сохраняй пунктуацию», «Если слышишь паузу», «приоритет распознавания»).
+- `detectPromptLeakage(text)` — flags chunk если 2+ сигнатуры матчатся в ≤200-char окне. Threshold 2 сделан намеренно консервативным: одиночное «ZAPUSK AI» в реальной речи инвестора не блокируется (нужна вторая corroborating signature).
+- Min length 40 chars — короткие фрагменты пропускаются.
+
+### LAYER 3 — Client: applied filter in delta + completed handlers
+`web/src/lib/realtimeTranscription.ts`:
+- В `delta` handler: candidate = interimBuffer + msg.delta → если detectPromptLeakage(candidate).detected → drop, reset interimBuffer, `callbacks.onInterim('')`, log `[transcription/realtime] prompt-leakage-detected stage=interim hits=N`.
+- В `completed` handler: если detectPromptLeakage(rawTranscript).detected → пропускаем сегмент целиком (callbacks.onFinal НЕ вызывается), log `[transcription/realtime] prompt-leakage-detected stage=final hits=N`.
+
+### Тесты (scripts/project-knowledge-smoke.ts)
+- **Section #19** (8 assertions) — detectPromptLeakage: catches full leaked body, ignores single «ZAPUSK AI» mention, ignores short fragments, ignores empty/null, ignores glossary-rich real speech.
+- **Section #20** (11 assertions) — buildRealtimePrompt: strategy detection, imperative-prose stripped, glossary preserved, sanitised prompt does NOT trigger its own detector, bullet-only fallback works, empty body handled.
+
+**Какие файлы изменены**
+- `server/src/services/realtimePrompt.ts` (+~70 lines: dictionary-extraction strategy, strict isDictionaryHeader, BuiltPrompt.strategy field)
+- `server/src/routes/realtime.ts` (+11 lines: `[realtime] prompt-sanitised` log + strategy in built fallback)
+- `web/src/lib/promptLeakageFilter.ts` (NEW, ~100 lines: detector + 11 signatures + filter wrapper)
+- `web/src/lib/realtimeTranscription.ts` (+~30 lines: delta + completed leakage gates)
+- `scripts/project-knowledge-smoke.ts` (+~70 lines: sections #19, #20 — 19 assertions total)
+- `TASKS.md` (this entry)
+
+**Verification**
+- server tsc / web tsc — pass
+- npm run build — pass
+- npm run smoke:project-knowledge — ✅ all 20 sections pass (incl. new 19 assertions)
+- npm run smoke:transcript — pass
+- npm run replay — pass
+
+**Deploy risk**
+- Low. Defensive layer over existing path. Even if LAYER 1 misses (custom template без СЛОВАРЬ header → bullet-only fallback), LAYER 2/3 catches the leak before UI.
+- False-positive risk: 2-hit threshold protects against single-word matches. Real speech containing «ZAPUSK AI» в одиночку НЕ блокируется. Speech containing двух+ специфических prompt-фраз (almost impossible in real conversation) — blocked. Smoke tests verify this.
+- Existing transcription flow unchanged for clean cases.
+
+---
+
+## Completed (Sprint 62.P8 Transcription test UI 2026-05-26)
 
 **Why this sprint**
 Sprint 62.P6 ввёл `POST /api/admin/transcription/test`, Sprint 62.P7 показал пресеты моделей в UI. Founder попросил кнопку «Тестировать модель» прямо в модалке шаблона, чтобы не дергать curl: выбрал модель → положил аудио URL → нажал → увидел latency / sample / source.

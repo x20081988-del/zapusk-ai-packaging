@@ -35,6 +35,8 @@ import { estimateTokens, profilePrompt } from '../server/src/services/promptBudg
 import { evaluateHallucination } from '../web/src/lib/transcriptHallucinationFilter.ts';
 import { reconcileTruncatedFinal } from '../web/src/lib/transcriptReconcile.ts';
 import { isAdviceAlreadySaid } from '../web/src/lib/adviceAlreadySaid.ts';
+import { detectPromptLeakage } from '../web/src/lib/promptLeakageFilter.ts';
+import { buildRealtimePrompt } from '../server/src/services/realtimePrompt.ts';
 import {
   isGenericDemoHint,
   rewriteGenericHint,
@@ -871,6 +873,98 @@ section('18. rewriteGenericHint post-processing');
   // Idempotency: rewriting an already-rewritten card is a no-op
   const r5 = rewriteGenericHint(r1.card, { hasContext: true });
   ok('idempotent: already-rewritten card stays unchanged', !r5.rewritten);
+}
+
+// ─── Test 19. Prompt leakage detector (Sprint 62.P9.HOTFIX) ───────────────
+//
+// Defends the live transcript against OpenAI Realtime echoing the
+// `transcription.prompt` template body back as transcript text.
+// Verified prod incident: founder saw full template body landed in the
+// live transcript pane during a real session.
+section('19. Prompt leakage detector (live transcript safety net)');
+{
+  // The actual leaked text from the prod incident (truncated).
+  const leaked =
+    'Ты — модуль точной русской транскрипции для AI-ассистента переговоров платформы ZAPUSK AI. - Язык: русский. ' +
+    'Английские термины оставляй как есть (latin). - Не сокращай и не парафразируй — пиши то, что реально звучит. ' +
+    'Сохраняй пунктуацию и регистр имён собственных. СЛОВАРЬ ТЕРМИНОВ И БИЗНЕС-ИМЁН (приоритет распознавания)';
+  const r1 = detectPromptLeakage(leaked);
+  ok('detects full leaked body', r1.detected, `hits=${r1.hits}`);
+  ok('reports at least 2 signature matches', r1.hits >= 2);
+
+  // Should NOT trigger on real investor speech that happens to mention SPIN or ZAPUSK once
+  const realSpeech =
+    'Здравствуйте, меня зовут Григорий, я обсуждаю инвестиции через платформу ZAPUSK AI с инвестором.';
+  const r2 = detectPromptLeakage(realSpeech);
+  ok('does NOT flag normal speech (single ZAPUSK mention)', !r2.detected, `hits=${r2.hits}`);
+
+  // Short fragments are skipped — too risky to flag on tiny chunks
+  const fragment = 'Ты — модуль';
+  const r3 = detectPromptLeakage(fragment);
+  ok('skips short fragments (< 40 chars)', !r3.detected, `reason=${r3.reason}`);
+
+  // Empty / null safety
+  ok('empty string: false', !detectPromptLeakage('').detected);
+  ok('null: false', !detectPromptLeakage(null).detected);
+  ok('undefined: false', !detectPromptLeakage(undefined).detected);
+
+  // A real long monologue from an investor about glossary terms should NOT trip
+  // multiple signatures (one «SPIN» reference, no «модуль точной», no «СЛОВАРЬ»)
+  const longSpeech =
+    'Я работаю по СПИН-методу, считаю что P&L важнее MRR на ранних стадиях. ' +
+    'Term sheet с pre-seed раундом мы уже обсудили на прошлой встрече.';
+  const r4 = detectPromptLeakage(longSpeech);
+  ok('does NOT flag glossary-rich real speech', !r4.detected, `hits=${r4.hits}`);
+}
+
+// ─── Test 20. buildRealtimePrompt dictionary extraction (Sprint 62.P9.HOTFIX) ─
+section('20. buildRealtimePrompt strips imperative prose');
+{
+  const fullBody =
+    'Ты — модуль точной русской транскрипции для AI-ассистента переговоров платформы ZAPUSK AI.\n\n' +
+    'ОСНОВНЫЕ ПРАВИЛА\n' +
+    '- Язык: русский. Английские термины оставляй как есть (latin).\n' +
+    '- Не сокращай и не парафразируй — пиши то, что реально звучит.\n' +
+    '- Сохраняй пунктуацию.\n\n' +
+    'СЛОВАРЬ ТЕРМИНОВ И БИЗНЕС-ИМЁН (приоритет распознавания)\n' +
+    '- ZAPUSK AI, Zapusk, Запуск, ЗАПУСК\n' +
+    '- DLFY, Dlfy, Делфи, Delphi, ДЛФИ\n' +
+    '- Главснаб, главснаб, Glavsnab\n' +
+    '- IRR, ROI, KPI, LTV, CAC, ARPU, MRR, ARR, P&L, NDA, MoM, YoY\n' +
+    '- pre-seed, seed, series A, серия A\n' +
+    '- инвестор, чек, доля, capex, opex, окупаемость, доходность';
+
+  const r1 = buildRealtimePrompt(fullBody);
+  ok('strategy=dictionary-extracted when body has glossary header', r1.strategy === 'dictionary-extracted',
+    `got strategy=${r1.strategy}`);
+  ok('prompt does NOT contain «Ты — модуль»', !/Ты\s+—\s+модул/iu.test(r1.prompt),
+    `prompt starts with: ${r1.prompt.slice(0, 60)}`);
+  ok('prompt does NOT contain «Не сокращай»', !/Не\s+сокращай/iu.test(r1.prompt));
+  ok('prompt contains glossary entries (ZAPUSK)', r1.prompt.includes('ZAPUSK'));
+  ok('prompt contains glossary entries (IRR)', r1.prompt.includes('IRR'));
+  ok('prompt length > 0', r1.length > 0);
+
+  // Reverse check: the sanitized prompt itself must NOT trip our own leakage
+  // detector. Otherwise we'd ban good transcripts that quote it back.
+  const r1Leak = detectPromptLeakage(r1.prompt);
+  ok('sanitized prompt does NOT itself trigger leakage detector', !r1Leak.detected,
+    `hits=${r1Leak.hits}`);
+
+  // No-header fallback: bullet-only extraction
+  const noHeaderBody =
+    'Это просто список:\n' +
+    '- alpha, beta, gamma\n' +
+    '- DLFY, Delphi\n' +
+    '- ZAPUSK';
+  const r2 = buildRealtimePrompt(noHeaderBody);
+  ok('strategy=bullet-only when no dictionary header', r2.strategy === 'bullet-only',
+    `got strategy=${r2.strategy}`);
+  ok('bullet-only result contains list items', r2.prompt.includes('alpha'));
+
+  // Empty body
+  const r3 = buildRealtimePrompt('');
+  ok('strategy=empty for empty body', r3.strategy === 'empty');
+  ok('empty body produces empty prompt', r3.prompt === '');
 }
 
 // ─── Final report ──────────────────────────────────────────────────────────
