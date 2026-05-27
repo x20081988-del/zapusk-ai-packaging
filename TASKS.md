@@ -2,11 +2,71 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-26 (Sprint 62.P7: expose transcription models in template UI).
+Last updated: 2026-05-26 (Sprint 62.P8: transcription model test UI in template modal).
 
 ---
 
-## Completed (this sprint — Sprint 62.P7 Transcription model presets in UI 2026-05-26)
+## Completed (this sprint — Sprint 62.P8 Transcription test UI 2026-05-26)
+
+**Why this sprint**
+Sprint 62.P6 ввёл `POST /api/admin/transcription/test`, Sprint 62.P7 показал пресеты моделей в UI. Founder попросил кнопку «Тестировать модель» прямо в модалке шаблона, чтобы не дергать curl: выбрал модель → положил аудио URL → нажал → увидел latency / sample / source.
+
+**Что сделано (commit `feat: add transcription model test UI`)**
+
+### `web/src/pages/Templates.tsx` — `TranscriptionTestBlock` компонент
+Рендерится внутри модалки шаблона ТОЛЬКО когда `isTemplateModelHonored(draft.key)` (т.е. `realtime_transcription`). Размещён сразу после поля «Конкретная модель» и перед «Текст задания».
+
+Состав блока:
+- Заголовок «Тест модели транскрипции» + endpoint badge
+- Mode toggle: Upload (аудио) / Realtime probe
+- Read-only preview текущей `draft.model` — берётся ЖИВО, без сохранения шаблона. Если пусто — подсказка «backend применит fallback».
+- Поле «URL аудио для теста» (только для mode=upload), pre-filled `https://aicallscloud.ru/api/process-record-url?recordUrl=cd2e594f-…f3026010057f.wav`
+- Кнопка «Тестировать модель» (AI-gradient)
+- Бейдж «быстрее предыдущего теста (−N ms)» если latency total ниже последнего теста в сессии
+- История результатов: последние 3 теста, новейший первым. Не персистится — чистая `useState`.
+
+Каждая карточка результата:
+- OK / ERROR статус (зелёный/красный)
+- `mode` + `effectiveModel` + бейдж `source` (override/template/env/hard_fallback)
+- `total ms` справа
+- Детали в зависимости от режима:
+  - upload: fetch ms, transcribe ms, audio KB, transcript chars, provider, envVar
+  - realtime: status, secret состояние (✓ minted / ✗ missing), envVar
+- `transcriptSample` ниже (если upload + ok) — 240 символов, чтобы founder видел качество
+- Error message при failure (truncated 400 chars)
+
+### Request shape
+Компонент шлёт через `api.post` (Bearer JWT автоматически из `auth` storage):
+```json
+{ "mode": "upload" | "realtime",
+  "model": "<draft.model если непусто>",
+  "audioUrl": "<если upload>",
+  "templateKey": "realtime_transcription" }
+```
+Если `draft.model` пусто — `model` field не отправляется, backend применит cascade fallback и вернёт `effectiveModel` + `source='env'|'hard_fallback'`.
+
+### Никаких backend изменений
+`POST /api/admin/transcription/test` существует с Sprint 62.P6 — UI просто подключается.
+
+**Какие файлы изменены**
+- `web/src/pages/Templates.tsx` (+200 lines: TranscriptionTestBlock + TestResultRow inline components, types, helper getTotalMs, import добавил Mic/Zap/AlertCircle/CheckCircle2)
+- `TASKS.md` (this entry)
+
+**Verification**
+- web tsc — pass
+- server tsc — pass (никаких изменений на бэкенде)
+- npm run build — pass
+- smoke:project-knowledge — pass
+- API client уже шлёт Authorization Bearer header через `getAuth().token` — admin-сессия из UI пройдёт сразу.
+
+**Что НЕ сделано намеренно**
+- Не сохраняем результат в БД — чистый diagnostic tool.
+- Не строим UI график latency over time — для quick A/B хватает «быстрее на N ms» badge.
+- Не добавляем UI для произвольного audioUrl history (только free-text input + дефолт).
+
+---
+
+## Completed (Sprint 62.P7 Transcription model presets in UI 2026-05-26)
 
 **Why this sprint**
 Sprint 62.P6 объяснил founder'у что поле «Конкретная модель» работает и в realtime, и в upload путях. Но в шаблоне `realtime_transcription` он не знал какие конкретно значения вписывать — выпадающий «Инструмент» в админке содержит только LLM-инструменты (GPT-4.1 / Claude Opus / Lovable Web / Claude Design PDF), а transcription-моделей (gpt-4o-transcribe / gpt-4o-mini-transcribe / whisper-1) там нет. Поэтому неясно, какие значения тестировать.

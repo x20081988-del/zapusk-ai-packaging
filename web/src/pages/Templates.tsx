@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileCode2, Plus, Trash2, Cpu, Wand2, Paperclip, Download, X as XIcon } from 'lucide-react';
+import { FileCode2, Plus, Trash2, Cpu, Wand2, Paperclip, Download, X as XIcon, Mic, Zap, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -358,6 +358,14 @@ export default function Templates() {
               )}
             </div>
 
+            {/* Sprint 62.P8 — inline test block for transcription templates.
+                Lets admin hit POST /api/admin/transcription/test without curl.
+                Uses LIVE draft.model so unsaved edits are testable. Keeps
+                last 3 results in component state — not persisted. */}
+            {isTemplateModelHonored(draft.key) && (
+              <TranscriptionTestBlock modelValue={draft.model ?? ''} />
+            )}
+
             <Textarea
               label="Текст задания"
               hint="Используйте {{project_name}}, {{raise_amount}}, {{equity}}, {{business_summary}}, {{strengths}}, {{weaknesses}}, {{missing_data}}, {{napkin}} и т.п."
@@ -527,6 +535,256 @@ function TemplateAttachmentsSection({ templateId }: { templateId: string }) {
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Sprint 62.P8 — TranscriptionTestBlock
+// ────────────────────────────────────────────────────────────────────────
+// Inline tester for /api/admin/transcription/test. Rendered inside the
+// realtime_transcription template modal. Uses LIVE draft.model so admin
+// can test new values BEFORE saving the template. Keeps last 3 results
+// in component state to compare latency between models — no DB writes.
+
+const DEMO_AUDIO_URL =
+  'https://aicallscloud.ru/api/process-record-url?recordUrl=cd2e594f-de27-4358-aa33-f3026010057f.wav';
+
+type TranscriptionMode = 'upload' | 'realtime';
+
+interface TranscriptionTestResult {
+  at: number;
+  ok: boolean;
+  mode: TranscriptionMode;
+  effectiveModel?: string;
+  source?: string;
+  envVar?: string;
+  // upload mode
+  latencyMs?: number | { fetch?: number; transcribe?: number; total?: number };
+  audioBytes?: number;
+  transcriptChars?: number;
+  transcriptSample?: string;
+  provider?: string;
+  // realtime mode
+  status?: number;
+  secretShape?: { hasClientSecret: boolean; expiresAt: number | null };
+  // common
+  error?: string;
+}
+
+function getTotalMs(r: TranscriptionTestResult): number | null {
+  if (typeof r.latencyMs === 'number') return r.latencyMs;
+  if (r.latencyMs && typeof r.latencyMs.total === 'number') return r.latencyMs.total;
+  return null;
+}
+
+function TranscriptionTestBlock({ modelValue }: { modelValue: string }) {
+  const [mode, setMode] = useState<TranscriptionMode>('upload');
+  const [audioUrl, setAudioUrl] = useState<string>(DEMO_AUDIO_URL);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [history, setHistory] = useState<TranscriptionTestResult[]>([]);
+
+  async function runTest() {
+    setLoading(true);
+    setErrorMsg(null);
+    try {
+      const body: { mode: TranscriptionMode; model?: string; audioUrl?: string; templateKey?: string } = {
+        mode,
+        templateKey: 'realtime_transcription',
+      };
+      const trimmed = modelValue.trim();
+      if (trimmed) body.model = trimmed;
+      if (mode === 'upload') body.audioUrl = audioUrl.trim();
+      const res = await api.post<TranscriptionTestResult>('/api/admin/transcription/test', body);
+      const result: TranscriptionTestResult = { ...res, at: Date.now() };
+      setHistory((prev) => [result, ...prev].slice(0, 3));
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'unknown');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const latest = history[0];
+  const previous = history[1];
+  const latestMs = latest ? getTotalMs(latest) : null;
+  const previousMs = previous ? getTotalMs(previous) : null;
+  const fasterThanPrevious =
+    latestMs !== null && previousMs !== null && latestMs < previousMs;
+
+  return (
+    <div className="rounded-md border border-ai/25 bg-ai/4 p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Mic size={15} className="text-ai-glow" />
+          <span className="text-sm font-semibold text-primary">Тест модели транскрипции</span>
+        </div>
+        <span className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">
+          POST /api/admin/transcription/test
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="text-[11px] uppercase tracking-[0.1em] text-muted font-semibold block mb-1">
+            Режим теста
+          </label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setMode('upload')}
+              className={`flex-1 h-9 px-3 rounded-md text-xs font-medium transition-all ${
+                mode === 'upload'
+                  ? 'bg-grad-ai text-canvas shadow-ai-glow'
+                  : 'border border-line bg-canvas text-secondary hover:border-ai/45'
+              }`}
+            >
+              Upload (аудио)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('realtime')}
+              className={`flex-1 h-9 px-3 rounded-md text-xs font-medium transition-all ${
+                mode === 'realtime'
+                  ? 'bg-grad-ai text-canvas shadow-ai-glow'
+                  : 'border border-line bg-canvas text-secondary hover:border-ai/45'
+              }`}
+            >
+              Realtime probe
+            </button>
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-[0.1em] text-muted font-semibold block mb-1">
+            Тестируемая модель
+          </label>
+          <div className="h-9 px-3 rounded-md border border-hairline bg-canvas/60 flex items-center text-xs text-primary truncate">
+            {modelValue.trim() || (
+              <span className="text-muted italic">
+                поле пустое → backend применит fallback из env / hard default
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {mode === 'upload' && (
+        <Input
+          label="URL аудио для теста"
+          hint="Публичный URL без auth (mp3/wav/m4a). По умолчанию — demo-запись с aicallscloud.ru."
+          value={audioUrl}
+          onChange={(e) => setAudioUrl(e.target.value)}
+          placeholder={DEMO_AUDIO_URL}
+        />
+      )}
+
+      <div className="flex items-center justify-between gap-3">
+        <Button
+          variant="ai"
+          size="sm"
+          iconLeft={<Zap size={13} />}
+          onClick={runTest}
+          loading={loading}
+          disabled={loading || (mode === 'upload' && !audioUrl.trim())}
+        >
+          Тестировать модель
+        </Button>
+        {fasterThanPrevious && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-success">
+            <Zap size={11} />
+            быстрее предыдущего теста
+            {previousMs && latestMs && ` (−${previousMs - latestMs} ms)`}
+          </span>
+        )}
+      </div>
+
+      {errorMsg && (
+        <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger flex items-start gap-2">
+          <AlertCircle size={13} className="mt-0.5 shrink-0" />
+          <span>Запрос не прошёл: {errorMsg}</span>
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="space-y-2 pt-1">
+          <div className="text-[10px] uppercase tracking-[0.1em] text-muted font-semibold">
+            Последние результаты (текущая сессия)
+          </div>
+          {history.map((r, idx) => (
+            <TestResultRow key={r.at} result={r} isLatest={idx === 0} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TestResultRow({ result, isLatest }: { result: TranscriptionTestResult; isLatest: boolean }) {
+  const tone = result.ok ? 'border-success/35 bg-success/8' : 'border-danger/40 bg-danger/10';
+  const totalMs = getTotalMs(result);
+  const fetchMs = typeof result.latencyMs === 'object' ? result.latencyMs?.fetch : null;
+  const transcribeMs = typeof result.latencyMs === 'object' ? result.latencyMs?.transcribe : null;
+  return (
+    <div className={`rounded-md border ${tone} px-3 py-2.5 text-xs space-y-2 ${isLatest ? 'shadow-ai-glow' : ''}`}>
+      <div className="flex items-center flex-wrap gap-2">
+        {result.ok ? (
+          <span className="inline-flex items-center gap-1 text-success font-semibold">
+            <CheckCircle2 size={12} /> OK
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-danger font-semibold">
+            <AlertCircle size={12} /> ERROR{result.status ? ` ${result.status}` : ''}
+          </span>
+        )}
+        <span className="text-secondary">mode={result.mode}</span>
+        {result.effectiveModel && (
+          <span className="text-primary font-mono text-[11px]">{result.effectiveModel}</span>
+        )}
+        {result.source && (
+          <span className="inline-flex items-center h-5 px-2 rounded-full bg-ai/10 border border-ai/25 text-[10px] uppercase tracking-[0.08em] text-ai-glow font-semibold">
+            source: {result.source}
+          </span>
+        )}
+        {totalMs !== null && (
+          <span className="ml-auto text-secondary font-mono">{totalMs} ms</span>
+        )}
+      </div>
+
+      {result.ok && result.mode === 'upload' && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+          {fetchMs !== null && fetchMs !== undefined && <span>fetch={fetchMs}ms</span>}
+          {transcribeMs !== null && transcribeMs !== undefined && <span>transcribe={transcribeMs}ms</span>}
+          {typeof result.audioBytes === 'number' && (
+            <span>audio={(result.audioBytes / 1024).toFixed(1)}KB</span>
+          )}
+          {typeof result.transcriptChars === 'number' && <span>transcript={result.transcriptChars} chars</span>}
+          {result.provider && <span>provider={result.provider}</span>}
+          {result.envVar && <span>env={result.envVar}</span>}
+        </div>
+      )}
+
+      {result.ok && result.mode === 'realtime' && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+          {typeof result.status === 'number' && <span>status={result.status}</span>}
+          {result.secretShape && (
+            <span>
+              secret={result.secretShape.hasClientSecret ? '✓ minted' : '✗ missing'}
+            </span>
+          )}
+          {result.envVar && <span>env={result.envVar}</span>}
+        </div>
+      )}
+
+      {result.ok && result.transcriptSample && (
+        <div className="rounded border border-hairline bg-canvas/40 px-2.5 py-1.5 text-[11px] text-secondary leading-relaxed">
+          <span className="text-muted">sample:</span> «{result.transcriptSample}…»
+        </div>
+      )}
+
+      {!result.ok && result.error && (
+        <div className="text-[11px] text-danger break-words">{String(result.error).slice(0, 400)}</div>
       )}
     </div>
   );
