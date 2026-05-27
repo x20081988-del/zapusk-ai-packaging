@@ -11,6 +11,7 @@ import { env, aiProviderStatus } from '../env.js';
 import { isFtsAvailable } from '../services/knowledgeFts.js';
 import { resolveModel, type AIProvider, type AIModelRoute } from '../ai/client.js';
 import { buildDiskReport } from '../lib/diskInspector.js';
+import { transcribeAudioOpenAI } from '../services/openaiTranscribe.js';
 
 export const adminRoutes = Router();
 adminRoutes.use(authMiddleware);
@@ -585,6 +586,175 @@ adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res
       lovable: lovableConfigured,
     },
     knowledgeFts: isFtsAvailable(),
+  });
+});
+
+// Sprint 62.P6 — transcription test endpoint. Lets admin verify that a
+// specific OpenAI transcription model is accessible + measure latency
+// without spinning up a WebRTC client. Two modes:
+//
+//   mode='realtime' — calls OpenAI /v1/realtime/client_secrets with the
+//     given model. Returns whether session can be minted (proves the model
+//     accepts realtime API requests). Does NOT actually stream audio.
+//
+//   mode='upload' + audioUrl — fetches the audio bytes from the URL and
+//     calls /v1/audio/transcriptions with the given model. Returns
+//     latency + transcript length + sample. audioUrl must be a public
+//     URL the server can fetch (no auth).
+//
+// No mutations. Doesn't change PromptTemplate.model — pure read/test.
+const transcriptionTestSchema = z.object({
+  mode: z.enum(['realtime', 'upload']),
+  model: z.string().min(1).max(120).optional().nullable(),
+  audioUrl: z.string().url().max(2000).optional().nullable(),
+  templateKey: z.string().max(60).optional().nullable(),
+});
+
+adminRoutes.post('/transcription/test', async (req, res) => {
+  const parsed = transcriptionTestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'invalid_body', detail: parsed.error.flatten() });
+  }
+  if (!env.OPENAI_API_KEY || env.OPENAI_API_KEY.length < 10) {
+    return res.status(503).json({ error: 'openai_not_configured' });
+  }
+  const { mode, audioUrl } = parsed.data;
+  const templateKey = parsed.data.templateKey ?? 'realtime_transcription';
+
+  // Resolve effective model: explicit override > template > env > fallback.
+  const tpl = await prisma.promptTemplate.findFirst({ where: { key: templateKey } });
+  const overrideModel = parsed.data.model && parsed.data.model.trim() ? parsed.data.model.trim() : null;
+  const templateModel = tpl?.model && tpl.model.trim() ? tpl.model.trim() : null;
+
+  const envVar = mode === 'realtime' ? 'OPENAI_MODEL_REALTIME_TRANSCRIBE' : 'OPENAI_MODEL_TRANSCRIBE';
+  const envModel = (mode === 'realtime' ? env.OPENAI_MODEL_REALTIME_TRANSCRIBE : env.OPENAI_MODEL_TRANSCRIBE)?.trim() || null;
+  const effectiveModel = overrideModel || templateModel || envModel || 'gpt-4o-transcribe';
+  const source: 'override' | 'template' | 'env' | 'hard_fallback' =
+    overrideModel ? 'override' : templateModel ? 'template' : envModel ? 'env' : 'hard_fallback';
+
+  console.log(
+    `[transcription:test] mode=${mode} effectiveModel=${effectiveModel} source=${source} ` +
+    `envVar=${envVar} templateKey=${templateKey} hasAudioUrl=${Boolean(audioUrl)}`,
+  );
+
+  if (mode === 'realtime') {
+    // Probe Realtime client_secrets endpoint. Doesn't stream audio.
+    const started = Date.now();
+    try {
+      const r = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session: {
+            type: 'transcription',
+            audio: { input: { transcription: { model: effectiveModel, language: 'ru' } } },
+          },
+        }),
+      });
+      const latencyMs = Date.now() - started;
+      const body = await r.text();
+      if (!r.ok) {
+        // Don't echo the API key — body only contains OpenAI's error JSON.
+        return res.json({
+          ok: false,
+          mode,
+          effectiveModel,
+          source,
+          envVar,
+          latencyMs,
+          status: r.status,
+          error: body.slice(0, 600),
+        });
+      }
+      let secretShape: { hasClientSecret: boolean; expiresAt: number | null } = { hasClientSecret: false, expiresAt: null };
+      try {
+        const j = JSON.parse(body) as { client_secret?: { value?: string; expires_at?: number }; expires_at?: number };
+        secretShape = {
+          hasClientSecret: Boolean(j.client_secret?.value),
+          expiresAt: j.client_secret?.expires_at ?? j.expires_at ?? null,
+        };
+      } catch { /* keep defaults */ }
+      return res.json({
+        ok: true,
+        mode,
+        effectiveModel,
+        source,
+        envVar,
+        latencyMs,
+        status: r.status,
+        secretShape,
+      });
+    } catch (err) {
+      return res.json({
+        ok: false,
+        mode,
+        effectiveModel,
+        source,
+        envVar,
+        latencyMs: Date.now() - started,
+        error: err instanceof Error ? err.message.slice(0, 240) : 'unknown',
+      });
+    }
+  }
+
+  // mode === 'upload'
+  if (!audioUrl) {
+    return res.status(400).json({ error: 'audio_url_required', detail: 'upload mode needs audioUrl' });
+  }
+  const started = Date.now();
+  let buffer: Buffer;
+  try {
+    const r = await fetch(audioUrl, { method: 'GET' });
+    if (!r.ok) {
+      return res.status(502).json({
+        error: 'audio_fetch_failed',
+        status: r.status,
+        latencyMs: Date.now() - started,
+      });
+    }
+    const ab = await r.arrayBuffer();
+    buffer = Buffer.from(ab);
+  } catch (err) {
+    return res.status(502).json({
+      error: 'audio_fetch_failed',
+      latencyMs: Date.now() - started,
+      detail: err instanceof Error ? err.message.slice(0, 240) : 'unknown',
+    });
+  }
+  const fetchMs = Date.now() - started;
+  const transcribeStarted = Date.now();
+  const result = await transcribeAudioOpenAI(buffer, {
+    mimeType: 'audio/mpeg',
+    fileName: 'admin-test.mp3',
+    modelOverride: effectiveModel,
+  });
+  const transcribeMs = Date.now() - transcribeStarted;
+  if (!result) {
+    return res.json({
+      ok: false,
+      mode,
+      effectiveModel,
+      source,
+      envVar,
+      latencyMs: { fetch: fetchMs, transcribe: transcribeMs, total: fetchMs + transcribeMs },
+      audioBytes: buffer.byteLength,
+      error: 'transcribe_failed',
+    });
+  }
+  return res.json({
+    ok: true,
+    mode,
+    effectiveModel: result.model,
+    source,
+    envVar,
+    latencyMs: { fetch: fetchMs, transcribe: transcribeMs, total: fetchMs + transcribeMs },
+    audioBytes: buffer.byteLength,
+    transcriptChars: result.text.length,
+    transcriptSample: result.text.slice(0, 240),
+    provider: result.provider,
   });
 });
 

@@ -20,6 +20,10 @@ const REALTIME_TEMPLATE_KEY = 'realtime_transcription';
 export interface OpenAITranscribeOptions {
   mimeType?: string;
   fileName?: string;
+  /** Sprint 62.P6 — admin transcription test override. When set, replaces
+   *  the template/env model resolution. Production callers must NEVER pass
+   *  this — it's exclusively for `/api/admin/transcription/test`. */
+  modelOverride?: string;
 }
 
 export async function transcribeAudioOpenAI(
@@ -35,7 +39,14 @@ export async function transcribeAudioOpenAI(
   const promptText = tpl?.active && tpl.body && tpl.body.trim().length >= 50
     ? tpl.body.trim().slice(0, 4_000)
     : null;
-  const model = (tpl?.model && tpl.model.trim()) || env.OPENAI_MODEL_TRANSCRIBE;
+  // Sprint 62.P6 — explicit source tracking, mirrors realtime.ts.
+  // override (admin test) → template.model (admin UI) → env.OPENAI_MODEL_TRANSCRIBE → hard fallback.
+  const overrideModel = opts.modelOverride && opts.modelOverride.trim() ? opts.modelOverride.trim() : null;
+  const templateModel = tpl?.model && tpl.model.trim() ? tpl.model.trim() : null;
+  const envModel = env.OPENAI_MODEL_TRANSCRIBE?.trim() || null;
+  const model = overrideModel || templateModel || envModel || 'gpt-4o-transcribe';
+  const modelSource: 'override' | 'template' | 'env' | 'hard_fallback' =
+    overrideModel ? 'override' : templateModel ? 'template' : envModel ? 'env' : 'hard_fallback';
 
   const fileName = opts.fileName || `audio.${mimeToExt(opts.mimeType)}`;
   const blob = new Blob([new Uint8Array(buffer)], { type: opts.mimeType || 'audio/mpeg' });
@@ -68,11 +79,12 @@ export async function transcribeAudioOpenAI(
     // в conversationAnalysis или persistSession. Это закрывает gap, что
     // OpenAI prompt-словарь — bias, не enforce.
     const text = normalizeTranscript(rawText);
-    // Sprint 56 P0 — diagnostics: see exactly which model + prompt config
-    // produced this transcript. Helps debug paraphrasing / hallucination
-    // reports without exposing raw text.
+    // Sprint 56 P0 + 62.P6 — diagnostics: exactly which model + source +
+    // prompt config produced this transcript. Helps debug paraphrasing /
+    // hallucination reports without exposing raw text.
     console.log(
-      `[openai-transcribe] ok model=${model} promptChars=${promptText?.length ?? 0} ` +
+      `[openai-transcribe] ok mode=upload model=${model} modelSource=${modelSource} ` +
+      `templateKey=${REALTIME_TEMPLATE_KEY} promptChars=${promptText?.length ?? 0} ` +
       `rawChars=${rawText.length} normalizedChars=${text.length}`,
     );
     return {

@@ -276,6 +276,41 @@ export default function Templates() {
                   <a href="/admin" className="underline">Admin → /api/admin/ai/active-models</a>.
                 </div>
               )}
+              {/* Sprint 62.P6 — positive help for realtime_transcription.
+                  Founder asked для прозрачности: «какая модель отвечает за
+                  скорость, и можно ли её сменить тут без деплоя». Ответ — да,
+                  это поле и есть переключатель для двух путей транскрипции. */}
+              {isTemplateModelHonored(draft.key) && (
+                <div className="rounded-md border border-ai/30 bg-ai/8 px-3 py-2 text-xs text-secondary leading-relaxed space-y-1.5">
+                  <div className="font-semibold text-ai-glow">Это поле управляет моделью транскрипции.</div>
+                  <div>
+                    <strong className="text-primary">Realtime (live микрофон / WebRTC):</strong>
+                    {' '}значение этого поля становится session model для OpenAI Realtime API.
+                    Если пусто → <code className="font-mono">OPENAI_MODEL_REALTIME_TRANSCRIBE</code> из env →
+                    {' '}жёсткий fallback <code className="font-mono">gpt-4o-transcribe</code>.
+                  </div>
+                  <div>
+                    <strong className="text-primary">Upload (загруженные аудио-файлы):</strong>
+                    {' '}то же значение используется в <code className="font-mono">/v1/audio/transcriptions</code>.
+                    Если пусто → <code className="font-mono">OPENAI_MODEL_TRANSCRIBE</code> из env →
+                    fallback <code className="font-mono">gpt-4o-transcribe</code>.
+                  </div>
+                  <div>
+                    <strong className="text-primary">Допустимые модели:</strong>
+                    {' '}<code className="font-mono">gpt-4o-transcribe</code> (качество, по умолчанию),
+                    {' '}<code className="font-mono">gpt-4o-mini-transcribe</code> (скорость, дешевле),
+                    {' '}<code className="font-mono">whisper-1</code> (старый, для совместимости).
+                  </div>
+                  <div className="text-muted">
+                    Текстовый body этого шаблона — словарь терминов проекта. Он отправляется AI
+                    как <code className="font-mono">prompt</code> в обоих режимах, помогает
+                    правильно расслышать редкие имена и термины.
+                    Изменение модели — без деплоя: сохрани шаблон → новые сессии берут новое
+                    значение. Проверить можно через{' '}
+                    <code className="font-mono">POST /api/admin/transcription/test</code>.
+                  </div>
+                </div>
+              )}
             </div>
 
             <Textarea

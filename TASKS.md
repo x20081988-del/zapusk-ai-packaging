@@ -2,11 +2,74 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-26 (Sprint 62.P5: prevent Anthropic bad_request during packaging seed).
+Last updated: 2026-05-26 (Sprint 62.P6: transcription model selection observability).
 
 ---
 
-## Completed (this sprint — Sprint 62.P5 Anthropic bad_request fix 2026-05-26)
+## Completed (this sprint — Sprint 62.P6 Transcription model observability 2026-05-26)
+
+**Why this sprint**
+Founder открыл Templates → realtime_transcription → не понял какая модель реально управляет скоростью транскрипции, есть ли разница между realtime и upload, можно ли менять модель без redeploy. Существующий код (`realtime.ts` + `openaiTranscribe.ts`) уже использовал `PromptTemplate.model` для обоих путей, но UI ничего об этом не говорил.
+
+**Tech audit answer**
+- **Realtime** (`server/src/routes/realtime.ts:resolveTranscriptionModel`): cascade `template.model` → `env.OPENAI_MODEL_REALTIME_TRANSCRIBE` → `'gpt-4o-transcribe'`. Возвращает `modelSource: 'template' | 'env' | 'hard_fallback'`, логирует на каждый session bootstrap.
+- **Upload** (`server/src/services/openaiTranscribe.ts`): cascade `template.model` → `env.OPENAI_MODEL_TRANSCRIBE` → `'gpt-4o-transcribe'`. До Sprint 62.P6 НЕ логировал `modelSource`.
+- **Шаблон один** — `realtime_transcription`. Текст body (словарь терминов) + поле model используются обоими путями. Менять модель = редактировать шаблон в UI → сохранить → новые сессии берут новое значение БЕЗ deploy.
+
+**Что сделано (commit feat: make transcription model selection observable)**
+
+### UI help text (web/src/pages/Templates.tsx)
+В шаблоне с key=`realtime_transcription` рядом с полем «Конкретная модель» теперь показывается информационный блок:
+- Что это поле управляет realtime + upload путями
+- Цепочка fallback'ов для каждого пути
+- Допустимые модели: `gpt-4o-transcribe` (качество), `gpt-4o-mini-transcribe` (скорость), `whisper-1` (legacy)
+- Что body шаблона = словарь терминов (отправляется как `prompt`)
+- Что изменение применяется без deploy
+Existing «⚠ Эта модель сейчас не применяется» warning для non-transcription шаблонов сохранён.
+
+### Upload path modelSource (server/src/services/openaiTranscribe.ts)
+- Добавлен `modelSource: 'override' | 'template' | 'env' | 'hard_fallback'` параллельно realtime path
+- Расширен лог: `[openai-transcribe] ok mode=upload model=… modelSource=… templateKey=…`
+- Добавлен optional `modelOverride?: string` параметр (используется ТОЛЬКО админ-test endpoint, production пути не передают)
+
+### Admin test endpoint (server/src/routes/admin.ts)
+- `POST /api/admin/transcription/test` (ADMIN-only)
+- Body: `{ mode: 'realtime' | 'upload', model?, audioUrl?, templateKey? }`
+- mode=`realtime`: probes `/v1/realtime/client_secrets` с выбранной моделью, возвращает latencyMs + статус + признак того, что секрет успешно сминтился (модель доступна для realtime API)
+- mode=`upload` + audioUrl: fetches audio bytes по URL → транскрибирует через выбранную модель → возвращает `latencyMs.{fetch,transcribe,total}` + audioBytes + transcriptChars + первые 240 символов sample
+- Возвращает `effectiveModel`, `source`, `envVar` — founder видит точно какая модель сработала и откуда взялась.
+- Полный safe-логинг при каждом вызове.
+
+**Какие файлы изменены**
+- `server/src/services/openaiTranscribe.ts` (+modelSource + modelOverride + log expansion)
+- `server/src/routes/admin.ts` (+~110 lines: POST /transcription/test handler)
+- `web/src/pages/Templates.tsx` (+~25 lines: positive help text для realtime_transcription)
+- `TASKS.md` (this entry)
+
+**Verification**
+- server tsc / web tsc — pass
+- npm run build — pass
+- smoke:project-knowledge / smoke:transcript / replay — pass
+- Existing live transcription path unchanged (realtime.ts behavior identical, openaiTranscribe.ts production callers don't pass modelOverride).
+
+**Простыми словами — что я могу теперь делать**
+- Открыть Templates → realtime_transcription → прочитать справку, понять что значит каждое поле.
+- Вписать model='gpt-4o-mini-transcribe' → сохранить → следующая live-встреча использует более быструю модель (хуже качество, меньше latency).
+- Через `POST /api/admin/transcription/test` с `mode='upload'` + audioUrl сравнить скорость и качество разных моделей на одном и том же аудио — увидеть latencyMs и transcript sample.
+- Через `mode='realtime'` проверить что модель доступна для realtime API (быстро, без аудио).
+
+**Чем отличается realtime от upload**
+- **Realtime** — браузер открывает WebRTC канал к OpenAI Realtime API, аудио стримится. Server только минтит ephemeral client secret (60 сек, для конкретной сессии). Используется во время живой встречи: микрофон → real-time транскрипт.
+- **Upload** — пользователь грузит готовый аудио-файл, server берёт buffer и шлёт `POST /v1/audio/transcriptions` (request-based, не Realtime). Используется когда analytics нужно из готовой записи (загрузка mp3/m4a). Realtime API намеренно НЕ используется для файлов — 60-сек secret короче типичной длины записи.
+
+**Рекомендации**
+- Скорость (live demo): `gpt-4o-mini-transcribe` — заметно быстрее, качество ниже на тихих/быстрых репликах.
+- Качество (production): `gpt-4o-transcribe` — текущий default, оптимум.
+- Legacy / совместимость: `whisper-1` — старый Whisper v2, доступен но менее точный.
+
+---
+
+## Completed (Sprint 62.P5 Anthropic bad_request fix 2026-05-26)
 
 **Symptom**
 After Sprint 62.P4 deploy, prod boots OK but Render logs spam:
