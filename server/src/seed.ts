@@ -1,6 +1,11 @@
 import { prisma } from './db.js';
 import { SEED_TEMPLATES } from './services/templateSeeds.js';
-import { DEMO_PROJECTS, type DemoProject } from './services/demoSeeds.js';
+import {
+  DEMO_PROJECTS,
+  DEMO_NEGOTIATIONS,
+  DEMO_MEETINGS,
+  type DemoProject,
+} from './services/demoSeeds.js';
 
 // Sprint 62.P3 — дополнительный список project IDs (НЕ name-based!), которые
 // тоже нужно довести до Luce Silva showcase-состояния. Используется когда у
@@ -384,7 +389,111 @@ async function main() {
     }
   }
 
+  // Sprint 62.P10 — демо AI-переговоры (разборы + встречи) для демо-фаундера.
+  await seedDemoNegotiations();
+
   log('done.');
+}
+
+// Sprint 62.P10 — заполняет «AI-разбор переговоров» (ConversationAnalysis) и
+// «Встречи» (SalesSession) демо-контентом, привязанным к демо-проектам и
+// видимым демо-фаундеру (createdById). Идемпотентно: пропускает запись, если
+// уже есть строка с тем же (projectId, createdById, investorName).
+async function seedDemoNegotiations(): Promise<void> {
+  const founder = await prisma.user.findUnique({
+    where: { email: env.BOOTSTRAP_DEMO_FOUNDER_EMAIL },
+    select: { id: true },
+  });
+  if (!founder) {
+    log('demo founder not found, skipping demo negotiations');
+    return;
+  }
+
+  async function demoProjectIdByName(name: string): Promise<string | null> {
+    const proj = await prisma.project.findFirst({
+      where: { name, isDemo: true, archivedAt: null },
+      select: { id: true },
+    });
+    return proj?.id ?? null;
+  }
+
+  log('seeding demo AI conversation analyses...');
+  for (const n of DEMO_NEGOTIATIONS) {
+    const projectId = await demoProjectIdByName(n.projectName);
+    if (!projectId) {
+      log(`demo negotiation: project "${n.projectName}" not found, skipping`);
+      continue;
+    }
+    const existing = await prisma.conversationAnalysis.findFirst({
+      where: { projectId, createdById: founder.id, investorName: n.investorName, archivedAt: null },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.conversationAnalysis.create({
+      data: {
+        projectId,
+        createdById: founder.id,
+        investorName: n.investorName,
+        source: 'paste',
+        transcript: n.transcript,
+        transcriptDurationSec: n.durationSec,
+        analysis: JSON.stringify(n.card),
+        aiScore: n.card.aiScore,
+        probabilityScore: n.card.probabilityScore,
+        sentiment: n.card.sentiment,
+        spinStage: n.card.spinStage,
+        aiProvider: 'mock',
+        aiModel: 'demo-seed',
+        fellBackToMock: true,
+      },
+    });
+  }
+
+  log('seeding demo sales sessions (meetings)...');
+  for (const m of DEMO_MEETINGS) {
+    const projectId = await demoProjectIdByName(m.projectName);
+    if (!projectId) {
+      log(`demo meeting: project "${m.projectName}" not found, skipping`);
+      continue;
+    }
+    const existing = await prisma.salesSession.findFirst({
+      where: { projectId, createdById: founder.id, investorName: m.investorName, archivedAt: null },
+      select: { id: true },
+    });
+    if (existing) continue;
+    const endedAt = new Date();
+    const startedAt = new Date(endedAt.getTime() - m.durationMin * 60 * 1000);
+    await prisma.salesSession.create({
+      data: {
+        projectId,
+        createdById: founder.id,
+        investorName: m.investorName,
+        investorPhone: m.investorPhone,
+        source: 'manual',
+        startedAt,
+        endedAt,
+        transcript: m.transcript,
+        summary: m.summary,
+        investorInterest: m.investorInterest,
+        checkRange: m.checkRange,
+        objections: JSON.stringify(m.objections),
+        risks: JSON.stringify(m.risks),
+        materialsToSend: JSON.stringify(m.materialsToSend),
+        nextStep: m.nextStep,
+        followUpMessage: m.followUpMessage,
+        probabilityScore: m.probabilityScore,
+        investorType: m.investorType,
+        tone: m.tone,
+        outcome: m.outcome,
+        aiProvider: 'mock',
+        aiModel: 'demo-seed',
+        fellBackToMock: true,
+        transcriptSource: 'manual',
+        transcriptQualityStatus: 'clean',
+        aiDerivedFrom: 'clean',
+      },
+    });
+  }
 }
 
 async function seedDemoArchetype(userId: string, d: DemoProject) {

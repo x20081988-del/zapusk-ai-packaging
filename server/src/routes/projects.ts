@@ -12,9 +12,14 @@ import { scheduleProjectFileIngest } from '../services/projectKnowledgeIngest.js
 
 export const projectsRoutes = Router();
 projectsRoutes.use(authMiddleware);
-// Sprint 37 P0.4 — INVESTOR-роль не имеет доступа к founder-проектам.
-// Их UX (когда появится) живёт на отдельных investor-роутах.
-projectsRoutes.use(requireNotInvestor());
+// Sprint 62.P10 — INVESTOR теперь может ЧИТАТЬ проекты (GET / и GET /:id):
+// демо-инвестор видит инвест-возможности (isDemo=true) на /opportunities.
+// where-фильтр в GET сам отдаёт демо-инвестору только isDemo-витрину
+// (workspaceStatus='demo' → { isDemo: true }), реальному инвестору — его
+// собственные (пусто на MVP). Мутации (POST/PATCH/DELETE) по-прежнему
+// закрыты requireNotInvestor() пер-роут — инвестор остаётся read-only.
+// Sprint 37 P0.4: ранее requireNotInvestor висел на всём роутере и возвращал
+// 403 даже на чтение — это и блокировало /opportunities.
 
 // Sprint 21: формат привлечения инвестиций. nullable — пользователь может
 // ещё не выбрать (по умолчанию TrackPicker предложит на главной странице
@@ -97,7 +102,36 @@ projectsRoutes.get('/', async (req, res) => {
   });
 });
 
-projectsRoutes.post('/', async (req, res) => {
+// Sprint 62.P10 — публичная демо-витрина. Всегда отдаёт только isDemo=true
+// проекты, независимо от роли/workspaceStatus зрителя. Используется
+// «Демо-кабинетом» (/demo): так показательные кейсы видны и admin'у, и
+// реальному фаундеру без утечки настоящих клиентских проектов в демо-UI.
+// Read-only, поэтому requireNotInvestor не нужен. Объявлен ДО '/:id', иначе
+// роут '/:id' перехватил бы 'showcase' как id.
+projectsRoutes.get('/showcase', async (_req, res) => {
+  const projects = await prisma.project.findMany({
+    where: { isDemo: true, archivedAt: null },
+    orderBy: { updatedAt: 'desc' },
+    include: {
+      files: { where: { archivedAt: null }, select: { id: true } },
+      brief: { select: { version: true, updatedAt: true } },
+      _count: { select: { generatedDocs: true, generatedPrompts: true } },
+    },
+  });
+  res.json({
+    projects: projects.map((p) => {
+      const { _count, ...project } = p;
+      return {
+        ...project,
+        sourceMaterialsCount: project.files.length,
+        generatedMaterialsCount: _count.generatedDocs + _count.generatedPrompts,
+        aiContextMaterialsCount: 0,
+      };
+    }),
+  });
+});
+
+projectsRoutes.post('/', requireNotInvestor(), async (req, res) => {
   const user = getUser(req);
   const parsed = projectSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -197,7 +231,7 @@ projectsRoutes.get('/:id', async (req, res) => {
   res.json({ project });
 });
 
-projectsRoutes.patch('/:id', async (req, res) => {
+projectsRoutes.patch('/:id', requireNotInvestor(), async (req, res) => {
   const user = getUser(req);
   const owned = await prisma.project.findFirst({ where: { id: req.params.id, userId: user.id } });
   if (!owned) return res.status(404).json({ error: 'not_found' });
@@ -218,7 +252,7 @@ projectsRoutes.patch('/:id', async (req, res) => {
 // удаления. Admin может восстановить через POST /api/admin/restore/project/:id.
 // Через 30 дней (ARCHIVE_RETENTION_DAYS) cleanup job сделает физический delete
 // (cleanup пока не реализован — out of scope).
-projectsRoutes.delete('/:id', async (req, res) => {
+projectsRoutes.delete('/:id', requireNotInvestor(), async (req, res) => {
   const user = getUser(req);
   const owned = await prisma.project.findFirst({
     where: { id: req.params.id, userId: user.id, archivedAt: null },

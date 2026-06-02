@@ -2,11 +2,66 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-05-27 (Sprint 62.P9.HOTFIX: prompt leakage in live transcription).
+Last updated: 2026-06-02 (Sprint 62.P10: demo opportunities & showcase content).
 
 ---
 
-## Completed (this sprint — Sprint 62.P9.HOTFIX Prompt leakage in live transcript 2026-05-27)
+## Completed (this sprint — Sprint 62.P10 Demo Opportunities & Showcase Content 2026-06-02)
+
+**Problem**
+Демо-контент существовал в БД (`isDemo=true` проекты), но был недостижим в UI:
+- `/opportunities` — пустая заглушка (EmptyState), да ещё и INVESTOR получал 403 от router-level `requireNotInvestor()`, т.е. даже чтение витрины было заблокировано.
+- demo-founder: «Мои проекты» скрыты (`HIDE_IN_DEMO`), а `/demo` был захардкожен под несуществующий кейс «Главснаб» → демо-кабинет показывал мёртвые данные.
+- AI-лиды / переговоры в демо — без реального наполнения (нет ConversationAnalysis/SalesSession для демо-проектов).
+
+**Root cause (TASK 2, read-only диагностика)**
+1. `projectsRoutes.use(requireNotInvestor())` висел на всём роутере → INVESTOR блокировался на GET, а не только на мутациях. Контракт «инвестор read-only» был реализован как «инвестор no-access».
+2. `/opportunities` (InvestorPortfolio.tsx) — никогда не дёргал API, рендерил статичный EmptyState.
+3. `/demo` (DemoCabinet.tsx) — хардкод «Главснаб» вместо чтения `isDemo`-витрины из БД.
+4. Демо-проектов для витрины было мало (Luce Silva, Планета 60, Венский ветер) и не было показательных AI-переговоров.
+
+**Fix 1 — investor read-only access (TASK 1)**
+- `server/src/routes/projects.ts`: снят router-level `requireNotInvestor()`; guard повешен пер-роут только на POST `/`, PATCH `/:id`, DELETE `/:id`. GET `/` и GET `/:id` теперь читаемы инвестором; where-фильтр сам отдаёт демо-инвестору только `{ isDemo: true }`.
+- `web/src/pages/InvestorPortfolio.tsx`: `/opportunities` переписан — тянет `GET /api/projects`, рендерит грид `OpportunityCard` (Раунд/Доля/Мин.чек/Стадия) со ссылкой на `/projects/:id`. `/portfolio` `/secondary` `/profile` остаются заглушками.
+
+**Fix 2 — demo cabinet data-driven (TASK 1)**
+- `server/src/routes/projects.ts`: новый публичный GET `/showcase` (объявлен ДО `/:id`) — всегда отдаёт `{ isDemo:true, archivedAt:null }`, read-only, без guard.
+- `web/src/pages/DemoCabinet.tsx`: убран хардкод «Главснаб»; тянет `GET /api/projects/showcase`, рендерит грид `ProjectCard` + превью AI-лидов + PersonalManagerMiniCard.
+
+**Fix 3 — showcase content: НеоГемовет (TASK 1)**
+- `server/src/services/demoSeeds.ts`: добавлен 3-й демо-проект **НеоГемовет** (ветеринарная биофарма, универсальный кровезаменитель; raise 150 млн ₽, мин.чек 3 млн, equity 25%, stage mvp, status ready) с полным `DemoBrief` (businessSummary, monetization, keyMetrics, investmentAsk, strengths, weaknesses, missingData, missingByCategory, napkin), собранным из Data Room (патент/НИР куплены, регистрационный риск, ветклиники, конкурент Перфторан). Второй проект из Google Sheet — таблица была доступна, данные внесены.
+
+**Fix 4 — demo negotiations & meetings (TASK 3)**
+- `server/src/services/demoSeeds.ts`: добавлены интерфейсы `DemoScoreBreakdown` / `DemoAnalysisCard` / `DemoNegotiation` / `DemoMeeting` и экспортированы массивы:
+  - `DEMO_NEGOTIATIONS` (2): НеоГемовет/Инвестор Д. (aiScore 81, spinStage N), Венский ветер/Инвестор А. (aiScore 73, spinStage I) — с многоходовыми русскими транскриптами и полной структурой analysis-карточки.
+  - `DEMO_MEETINGS` (2): Luce Silva/Инвестор К. (tone hot, outcome followup), НеоГемовет/Инвестор М. (tone warm, outcome followup).
+- `server/src/seed.ts`: новая идемпотентная `seedDemoNegotiations()` — резолвит demo-founder и projectId (`findFirst { name, isDemo:true }`), создаёт `ConversationAnalysis` + `SalesSession` (source manual, transcriptQualityStatus clean, aiProvider mock, fellBackToMock true). Guard на `projectId+createdById+investorName` — повторный seed не дублирует.
+
+**TASK 4 — demo-content audit matrix** (см. финальный отчёт сессии): по каждому демо-проекту покрытие brief / showcase / opportunities / AI-переговоры / встречи.
+
+**Какие файлы изменены**
+- `server/src/routes/projects.ts` (per-route guard + GET /showcase)
+- `web/src/pages/InvestorPortfolio.tsx` (живой /opportunities)
+- `web/src/pages/DemoCabinet.tsx` (data-driven /demo)
+- `server/src/services/demoSeeds.ts` (НеоГемовет + DEMO_NEGOTIATIONS + DEMO_MEETINGS)
+- `server/src/seed.ts` (seedDemoNegotiations)
+- `TASKS.md` (this entry)
+
+**Verification**
+- server tsc / web tsc — pass
+- npm run build — pass
+- npm run db:seed — pass (идемпотентно)
+- curl smoke (PORT 4599):
+  - `GET /api/projects/showcase` → 200, 4 проекта (НеоГемовет, Планета 60, Luce Silva, Венский ветер)
+  - INVESTOR `GET /api/projects` → 200 (4 isDemo), `POST` → 403, `DELETE` → 403 — read-only подтверждён
+  - FOUNDER(demo) `GET /api/projects` → 200 (4)
+
+**Deploy risk**
+- Низкий. Endpoint contract расширен (новый GET /showcase, ослаблен guard на GET — но мутации по-прежнему закрыты). Реальный инвестор видит только свои проекты (на MVP пусто), демо-инвестор — только `isDemo`-витрину; утечки клиентских проектов нет.
+
+---
+
+## Completed (Sprint 62.P9.HOTFIX Prompt leakage in live transcript 2026-05-27)
 
 **Prod incident**
 Founder открыл AI-ассистент → начал live прослушивание → в окне «Живая транскрипция» появился полный текст системного промпта из шаблона `realtime_transcription`:

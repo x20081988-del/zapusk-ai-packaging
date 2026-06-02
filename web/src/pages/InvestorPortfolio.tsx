@@ -1,21 +1,21 @@
-import { useLocation } from 'react-router-dom';
-import { BriefcaseBusiness, Repeat, TrendingUp, UserRound } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { BriefcaseBusiness, ChevronRight, Repeat, TrendingUp, UserRound, Wallet } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
+import { StatusBadge } from '../components/ui/StatusBadge';
+import { api, type Project } from '../lib/api';
+import { formatMoney, formatPercent, INVESTOR_TYPE_LABELS, STAGE_LABELS } from '../lib/format';
 
-// Sprint 25 — INVESTOR placeholder. Реальный investor UX (свой набор виджетов
-// по портфелю, secondary market, открытым раундам) — отдельный sprint. Пока
-// четыре страницы рендерятся единым компонентом с заглушкой, чтобы маршруты
-// /opportunities / /portfolio / /secondary / /profile не возвращали 404.
+// Sprint 25 — INVESTOR placeholder. Sprint 62.P10 — /opportunities оживлён:
+// читает реальные инвест-витрины (isDemo=true проекты) через /api/projects.
+// Бэкенд сам отдаёт демо-инвестору только показательные проекты (where
+// { isDemo: true }). Остальные три раздела (/portfolio /secondary /profile)
+// остаются заглушками до отдельного investor-спринта.
 
 const SECTIONS: Record<string, { title: string; subtitle: string; icon: React.ReactNode; description: string }> = {
-  '/opportunities': {
-    title: 'Инвест-возможности',
-    subtitle: 'Открытые раунды на платформе ZAPUSK AI',
-    icon: <TrendingUp size={24} />,
-    description: 'Здесь появятся проекты, открытые для инвестиций: размещения, доли ООО, конвертируемые займы и SAFE. Команда ZAPUSK AI готовит первый поток сделок — мы напишем, как только список будет открыт.',
-  },
   '/portfolio': {
     title: 'Портфель',
     subtitle: 'Ваши инвестиции на платформе',
@@ -38,8 +38,9 @@ const SECTIONS: Record<string, { title: string; subtitle: string; icon: React.Re
 
 export default function InvestorPortfolio() {
   const location = useLocation();
-  const section = SECTIONS[location.pathname] ?? SECTIONS['/opportunities'];
+  if (location.pathname === '/opportunities') return <Opportunities />;
 
+  const section = SECTIONS[location.pathname] ?? SECTIONS['/portfolio'];
   return (
     <AppLayout title={`${section.title} · ZAPUSK AI`}>
       <Card padded>
@@ -58,5 +59,108 @@ export default function InvestorPortfolio() {
         />
       </Card>
     </AppLayout>
+  );
+}
+
+function Opportunities() {
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ projects: Project[] }>('/api/projects')
+      .then((r) => setProjects(r.projects))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить инвест-возможности'));
+  }, []);
+
+  return (
+    <AppLayout title="Инвест-возможности · ZAPUSK AI">
+      <Card padded className="mb-4">
+        <CardHeader
+          title="Инвест-возможности"
+          subtitle="Открытые раунды на платформе ZAPUSK AI"
+          action={projects ? <StatusBadge tone="ai" dot>{projects.length} в подборке</StatusBadge> : undefined}
+        />
+        <p className="text-sm text-secondary leading-relaxed max-w-3xl">
+          Подобранные проекты, упакованные ZAPUSK AI: понятная сделка, финмодель, презентация
+          и материалы для инвестора. Откройте карточку, чтобы изучить условия.
+        </p>
+      </Card>
+
+      {error ? (
+        <Card padded>
+          <EmptyState
+            icon={<TrendingUp size={20} />}
+            title="Не удалось загрузить"
+            description={error}
+          />
+        </Card>
+      ) : projects === null ? (
+        <Card>
+          <div className="text-sm text-muted text-center py-8">Загрузка…</div>
+        </Card>
+      ) : projects.length === 0 ? (
+        <Card padded>
+          <EmptyState
+            icon={<TrendingUp size={20} />}
+            title="Раздел в подготовке"
+            description="Команда ZAPUSK AI готовит первый поток сделок — мы напишем, как только список будет открыт."
+            action={
+              <a href="mailto:hello@zapusk.tech?subject=Запрос%20по%20инвест-возможностям">
+                <span className="text-sm text-zapusk-400 font-semibold hover:text-zapusk-300">
+                  Связаться с менеджером
+                </span>
+              </a>
+            }
+          />
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {projects.map((p) => (
+            <OpportunityCard key={p.id} project={p} />
+          ))}
+        </div>
+      )}
+    </AppLayout>
+  );
+}
+
+function OpportunityCard({ project: p }: { project: Project }) {
+  const stage = p.stage ? STAGE_LABELS[p.stage] ?? p.stage : null;
+  const investorType = p.investorType ? INVESTOR_TYPE_LABELS[p.investorType] ?? p.investorType : null;
+  return (
+    <Link to={`/projects/${p.id}`} className="block group">
+      <Card padded hoverable accent="zapusk" className="h-full flex flex-col">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <h3 className="text-base font-semibold text-primary leading-tight">{p.name}</h3>
+          {p.status === 'ready' && <StatusBadge tone="success" dot>готов</StatusBadge>}
+        </div>
+        {p.industry && <p className="text-xs text-secondary leading-snug line-clamp-2">{p.industry}</p>}
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <Term icon={<Wallet size={13} />} label="Раунд" value={formatMoney(p.raiseAmount, p.currency)} />
+          <Term icon={<TrendingUp size={13} />} label="Доля" value={formatPercent(p.equityOffered)} />
+          <Term icon={<Wallet size={13} />} label="Мин. чек" value={formatMoney(p.minCheck, p.currency)} />
+          <Term icon={<BriefcaseBusiness size={13} />} label="Стадия" value={stage ?? '—'} />
+        </div>
+        <div className="flex items-center justify-between mt-4 pt-3 border-t border-hairline">
+          <span className="text-[11px] text-muted">{investorType ?? 'Инвест-возможность'}</span>
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-zapusk-400 group-hover:text-zapusk-300">
+            Изучить <ChevronRight size={13} />
+          </span>
+        </div>
+      </Card>
+    </Link>
+  );
+}
+
+function Term({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-hairline bg-canvas/45 px-2.5 py-2">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-muted font-semibold">
+        {icon}
+        {label}
+      </div>
+      <div className="text-sm font-semibold text-primary mt-0.5 truncate">{value}</div>
+    </div>
   );
 }
