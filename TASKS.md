@@ -2,7 +2,33 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-02 (Sprint 62.P10: demo opportunities & showcase content).
+Last updated: 2026-06-02 (Sprint 62.P10.HOTFIX: project page infinite loading for demo viewers).
+
+---
+
+## Completed (this sprint — Sprint 62.P10.HOTFIX Project page infinite loading 2026-06-02)
+
+**P0 symptom**
+Карточки проектов в `/opportunities` и `/demo` открывались, но страница проекта (`/projects/:id`, компонент `ProjectCockpit`) зависала на «Загрузка…» бесконечно. Воспроизводилось у demo-founder и demo-investor.
+
+**Root cause**
+`ProjectCockpit.load()` грузил данные через `Promise.all([...])`, где `/api/projects/:id` и `/api/reviews/project/:id` шли **без `.catch()`** (остальные 3 запроса — packaging-jobs/meetings/ai-leads — уже были обёрнуты). Для demo-viewer'ов `/api/reviews/project/:id` падает:
+- **demo-investor → 403** — `reviewsRoutes.use(requireNotInvestor())` (router-level guard, не затронут P10).
+- **demo-founder → 404** — `ownsProject(user.id, projectId)` требует точного `userId`-match, а демо-проекты принадлежат отдельному bootstrap-владельцу, не demo-founder.
+
+`/api/projects/:id` при этом отдаёт **200** для обоих (demo where-фильтр по `isDemo`, не по owner). Но отклонённый reviews-промис реджектил весь `Promise.all` → `setProject` не вызывался → `if (!project)` навсегда показывал «Загрузка…». Не было ни `catch`, ни error-state.
+
+**Exact bug**: один вторичный ресурс (reviews) ронял рендер всей страницы.
+
+**Fix (frontend-only, `web/src/pages/ProjectCockpit.tsx`)**
+- `load()` переписан: критичен только `GET /api/projects/:id` (await отдельно, в `try`); все вторичные ресурсы (reviews/jobs/meetings/ai-leads) в `Promise.all` с `.catch(() => пусто)` — деградируют, не блокируют.
+- Добавлен `loadError` state; при падении критичного запроса — экран «Не удалось открыть проект» + кнопка «Повторить» вместо бесконечного спиннера.
+
+Backend намеренно не трогали: demo-seed не создаёт ArtefactReview/PackagingJob, поэтому даже с расширенным investor-read эти секции были бы пусты — frontend-деградация даёт тот же результат без расширения API-surface (investor остаётся read-only).
+
+**Verification**
+- web tsc — pass; `npm run build` — pass.
+- curl smoke (PORT 4599): критичный `GET /api/projects/:id` = **200** для demo-investor (Luce Silva, НеоГемовет) и demo-founder (Венский ветер, Планета 60) → страница рендерится. Security invariants без изменений: non-demo `/:id` → 404, archived `/:id` → 404 (оба persona).
 
 ---
 

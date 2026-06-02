@@ -41,6 +41,7 @@ export default function ProjectCockpit() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [generatingBrief, setGeneratingBrief] = useState(false);
   const [generatingKind, setGeneratingKind] = useState<string | null>(null);
   const [generatingFull, setGeneratingFull] = useState(false);
@@ -58,22 +59,33 @@ export default function ProjectCockpit() {
 
   async function load() {
     if (!id) return;
-    const [p, rs, j, meetings, aiLeads] = await Promise.all([
-      api.get<{ project: Project }>(`/api/projects/${id}`),
-      api.get<{ reviews: ArtefactReview[] }>(`/api/reviews/project/${id}`),
-      api.get<{ jobs: PackagingJob[] }>(`/api/packaging-jobs/project/${id}`).catch(() => ({ jobs: [] })),
-      listMeetings({ projectId: id }).catch(() => ({ sessions: [] })),
-      api.get<{ mode?: string }>(`/api/ai-leads?projectId=${encodeURIComponent(id)}`).catch(() => ({ mode: undefined })),
-    ]);
-    setProject(p.project);
-    setReviews(rs.reviews);
-    setJobs(j.jobs);
-    setMeetingsCount(meetings.sessions?.length ?? 0);
-    setLeadsLaunched(aiLeads.mode === 'live');
-    // Sprint 21: если фаундер ещё не выбрал формат привлечения — открываем
-    // TrackPicker автоматически. Один раз, только при первом загрузке проекта.
-    if (!p.project.investmentTrack && !trackPickerOpen) {
-      setTrackPickerOpen(true);
+    // Sprint 62.P10.HOTFIX — раньше /api/projects/:id и /api/reviews/project/:id
+    // шли в Promise.all БЕЗ .catch(). Для demo-viewer'ов reviews отдаёт 403
+    // (investor) или 404 (founder не владелец демо-проекта), весь Promise.all
+    // реджектился, setProject не вызывался → бесконечная «Загрузка…».
+    // Теперь: only /api/projects/:id критичен (его падение → loadError-экран);
+    // все вторичные ресурсы деградируют до пустых значений и не блокируют рендер.
+    try {
+      const p = await api.get<{ project: Project }>(`/api/projects/${id}`);
+      const [rs, j, meetings, aiLeads] = await Promise.all([
+        api.get<{ reviews: ArtefactReview[] }>(`/api/reviews/project/${id}`).catch(() => ({ reviews: [] as ArtefactReview[] })),
+        api.get<{ jobs: PackagingJob[] }>(`/api/packaging-jobs/project/${id}`).catch(() => ({ jobs: [] as PackagingJob[] })),
+        listMeetings({ projectId: id }).catch(() => ({ sessions: [] })),
+        api.get<{ mode?: string }>(`/api/ai-leads?projectId=${encodeURIComponent(id)}`).catch(() => ({ mode: undefined })),
+      ]);
+      setProject(p.project);
+      setReviews(rs.reviews);
+      setJobs(j.jobs);
+      setMeetingsCount(meetings.sessions?.length ?? 0);
+      setLeadsLaunched(aiLeads.mode === 'live');
+      setLoadError(null);
+      // Sprint 21: если фаундер ещё не выбрал формат привлечения — открываем
+      // TrackPicker автоматически. Один раз, только при первом загрузке проекта.
+      if (!p.project.investmentTrack && !trackPickerOpen) {
+        setTrackPickerOpen(true);
+      }
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Не удалось загрузить проект');
     }
   }
 
@@ -94,7 +106,17 @@ export default function ProjectCockpit() {
   if (!project) {
     return (
       <AppLayout title="Проект">
-        <Card><div className="text-sm text-muted text-center py-8">Загрузка…</div></Card>
+        <Card>
+          {loadError ? (
+            <div className="text-sm text-center py-8 space-y-3">
+              <div className="text-danger">Не удалось открыть проект</div>
+              <div className="text-muted">{loadError}</div>
+              <Button variant="secondary" onClick={() => { setLoadError(null); load(); }}>Повторить</Button>
+            </div>
+          ) : (
+            <div className="text-sm text-muted text-center py-8">Загрузка…</div>
+          )}
+        </Card>
       </AppLayout>
     );
   }
