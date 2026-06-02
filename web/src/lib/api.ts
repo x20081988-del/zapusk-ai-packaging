@@ -176,6 +176,8 @@ export interface Project {
   raiseDeadline: string | null;
   investorType: string | null;
   status: string;
+  // Sprint 62.P11 — показательный/демо-проект (бэкенд всегда возвращает это поле).
+  isDemo?: boolean;
   // Sprint 21: выбранный трек привлечения инвестиций.
   investmentTrack: InvestmentTrack | null;
   createdAt: string;

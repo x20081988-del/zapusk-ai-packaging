@@ -67,6 +67,11 @@ export function AIPackagingHistory({ projectId, onRegenerate, onOpenHistory }: P
     try {
       const r = await api.get<{ jobs: PackagingJob[] }>(`/api/packaging-jobs/project/${projectId}`);
       setJobs(r.jobs);
+    } catch {
+      // Sprint 62.P11 — раньше не было catch: при 403/404 jobs оставался null
+      // и блок навсегда висел на «Загружаем историю…». Теперь деградируем до
+      // пустого списка → рендерится EmptyState вместо вечного спиннера.
+      setJobs([]);
     } finally {
       setRefreshing(false);
     }

@@ -33,6 +33,7 @@ import { TrackPicker } from '../components/project/TrackPicker';
 import { ActivityHistory } from '../components/project/ActivityHistory';
 import { MaterialHistoryDrawer, type MaterialKind } from '../components/ui/MaterialHistoryDrawer';
 import { listMeetings } from '../lib/salesSessions';
+import { getAuth } from '../lib/auth';
 import { listOutcomes, OUTCOME_LABELS, type AssistantOutcome } from '../lib/assistantOutcomes';
 import { History } from 'lucide-react';
 import { ProjectMaterialsWorkspace } from '../components/project/ProjectMaterialsWorkspace';
@@ -81,7 +82,14 @@ export default function ProjectCockpit() {
       setLoadError(null);
       // Sprint 21: если фаундер ещё не выбрал формат привлечения — открываем
       // TrackPicker автоматически. Один раз, только при первом загрузке проекта.
-      if (!p.project.investmentTrack && !trackPickerOpen) {
+      // Sprint 62.P11 — НЕ авто-открываем для demo/showcase: попап ломал
+      // демонстрацию (выглядел как незавершённый onboarding). Пропускаем если
+      // проект demo/ready или зритель в demo-workspace/INVESTOR. Ручной CTA
+      // «Изменить формат привлечения» остаётся для реального фаундера.
+      const auth = getAuth();
+      const isDemoViewer = auth?.workspaceStatus === 'demo' || auth?.role === 'INVESTOR';
+      const skipAutoPicker = p.project.isDemo || p.project.status === 'ready' || isDemoViewer;
+      if (!p.project.investmentTrack && !trackPickerOpen && !skipAutoPicker) {
         setTrackPickerOpen(true);
       }
     } catch (e) {

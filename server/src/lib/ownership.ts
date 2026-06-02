@@ -62,6 +62,32 @@ export async function assertProjectOwnership(
   return { ok: true };
 }
 
+// Sprint 62.P11 — read-доступ к ресурсам проекта с учётом demo-витрины.
+// В отличие от assertProjectOwnership (write-путь, founder только свои), это
+// READ-guard: demo-viewer (workspaceStatus='demo'), включая INVESTOR, может
+// читать ресурсы любого isDemo-проекта (packaging jobs, материалы). Owner —
+// свои. Admin-like — всё. Non-demo/archived проекты demo-зрителю отдаются 404
+// (без утечки факта существования). Write по-прежнему через requireNotInvestor
+// + assertProjectOwnership.
+export async function assertCanReadProject(
+  req: Request,
+  projectId: string | null | undefined,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const role = getActorRole(req);
+  if (isAdminLike(role)) return { ok: true };
+  if (!projectId) return { ok: false, status: 404, error: 'project_not_found' };
+
+  const user = getUser(req) as { id: string; workspaceStatus?: string };
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { userId: true, isDemo: true, archivedAt: true },
+  });
+  if (!project || project.archivedAt) return { ok: false, status: 404, error: 'project_not_found' };
+  if (project.userId === user.id) return { ok: true };
+  if (user.workspaceStatus === 'demo' && project.isDemo) return { ok: true };
+  return { ok: false, status: 404, error: 'project_not_found' };
+}
+
 // Применимо к записям с опциональным projectId (SalesSession, ConversationAnalysis).
 // Founder видит запись только если она привязана к его проекту.
 export function canFounderSeeRecord(

@@ -110,6 +110,180 @@ export interface DemoMeeting {
   outcome: 'success' | 'failed' | 'followup' | 'unknown';
 }
 
+// Sprint 62.P11 — готовые материалы упаковки для showcase-проектов. Каждая
+// строка рендерится в блоке «Материалы проекта от ZAPUSK AI» (AIPackagingHistory)
+// как завершённый артефакт. provider/tool/outputType взяты из
+// DEFAULT_TEMPLATE_ORCHESTRATION (web/src/lib/aiProviders.ts), чтобы лейблы и
+// бейджи совпадали с реальным pipeline.
+export interface DemoPackagingJob {
+  projectName: string;
+  templateKey: string;
+  provider: string;
+  tool: string;
+  model: string | null;
+  outputType: string;
+  resultPreview: string;
+  managerComment: string | null;
+  previewUrl: string | null;
+}
+
+export const DEMO_PACKAGING_JOBS: DemoPackagingJob[] = [
+  // ——— Luce Silva ———
+  {
+    projectName: 'Luce Silva', templateKey: 'cloud_design', provider: 'claude_design', tool: 'claude-design-pdf',
+    model: 'claude-opus', outputType: 'pitch_deck',
+    resultPreview: 'Инвестиционная презентация Luce Silva — 14 слайдов: рынок премиального света, продукт, юнит-экономика, команда, условия раунда.',
+    managerComment: 'Презентация собрана и проверена командой ZAPUSK AI, готова к показу инвестору.',
+    previewUrl: 'https://luce-silva.zapusk.tech/deck',
+  },
+  {
+    projectName: 'Luce Silva', templateKey: 'one_pager', provider: 'lovable', tool: 'lovable-web',
+    model: null, outputType: 'one_pager',
+    resultPreview: 'Тизер / one-pager Luce Silva — одностраничник с ключевыми метриками и условиями сделки для первого касания.',
+    managerComment: null,
+    previewUrl: 'https://luce-silva.zapusk.tech/one-pager',
+  },
+  {
+    projectName: 'Luce Silva', templateKey: 'lovable_landing', provider: 'lovable', tool: 'lovable-web',
+    model: null, outputType: 'landing',
+    resultPreview: 'Посадочная страница Luce Silva — инвестиционный лендинг с AEO-разметкой, формой интереса и расчётом доходности.',
+    managerComment: 'Лендинг опубликован, AI-видимость включена.',
+    previewUrl: 'https://luce-silva.zapusk.tech/',
+  },
+  {
+    projectName: 'Luce Silva', templateKey: 'financial', provider: 'claude', tool: 'claude-opus',
+    model: 'claude-opus', outputType: 'financial_model',
+    resultPreview: 'Финансовая модель Luce Silva — P&L, cash flow, 3 сценария и расчёт IRR/доли инвестора.',
+    managerComment: null,
+    previewUrl: 'https://luce-silva.zapusk.tech/finmodel',
+  },
+  {
+    projectName: 'Luce Silva', templateKey: 'investor_faq', provider: 'openai', tool: 'gpt-5.5',
+    model: 'gpt-5.5', outputType: 'faq',
+    resultPreview: 'Investor FAQ Luce Silva — снятие 12 типовых возражений: возвратность, риски, выход, конкуренты.',
+    managerComment: null,
+    previewUrl: 'https://luce-silva.zapusk.tech/faq',
+  },
+  {
+    projectName: 'Luce Silva', templateKey: 'investment_summary', provider: 'openai', tool: 'gpt-4.1',
+    model: 'gpt-4.1', outputType: 'investor_summary',
+    resultPreview: 'Юридическая структура и условия сделки Luce Silva — investor memo: форма участия, доля, защита инвестора.',
+    managerComment: 'Юридический блок согласован, договорная структура описана.',
+    previewUrl: 'https://luce-silva.zapusk.tech/legal',
+  },
+
+  // ——— Венский ветер ———
+  {
+    projectName: 'Венский ветер', templateKey: 'cloud_design', provider: 'claude_design', tool: 'claude-design-pdf',
+    model: 'claude-opus', outputType: 'pitch_deck',
+    resultPreview: 'Инвестиционная презентация «Венский ветер» — сеть кофеен, экономика точки, план масштабирования.',
+    managerComment: 'Презентация готова к показу инвестору.',
+    previewUrl: 'https://venskiy-veter.zapusk.tech/deck',
+  },
+  {
+    projectName: 'Венский ветер', templateKey: 'financial', provider: 'claude', tool: 'claude-opus',
+    model: 'claude-opus', outputType: 'financial_model',
+    resultPreview: 'Финансовая модель «Венский ветер» — экономика сети, окупаемость точки, сценарии роста.',
+    managerComment: null,
+    previewUrl: 'https://venskiy-veter.zapusk.tech/finmodel',
+  },
+  {
+    projectName: 'Венский ветер', templateKey: 'calculator_spec', provider: 'claude', tool: 'claude-code',
+    model: 'claude-code', outputType: 'calculator',
+    resultPreview: 'Калькулятор инвестора «Венский ветер» — интерактивный расчёт доли и доходности по сумме чека.',
+    managerComment: null,
+    previewUrl: 'https://venskiy-veter.zapusk.tech/calculator',
+  },
+  {
+    projectName: 'Венский ветер', templateKey: 'lovable_landing', provider: 'lovable', tool: 'lovable-web',
+    model: null, outputType: 'landing',
+    resultPreview: 'Посадочная страница «Венский ветер» — инвестиционный лендинг сети кофеен с AEO-разметкой.',
+    managerComment: 'Лендинг опубликован.',
+    previewUrl: 'https://venskiy-veter.zapusk.tech/',
+  },
+  {
+    projectName: 'Венский ветер', templateKey: 'investor_faq', provider: 'openai', tool: 'gpt-5.5',
+    model: 'gpt-5.5', outputType: 'faq',
+    resultPreview: 'FAQ инвестора «Венский ветер» — ответы по рискам сетевого ритейла, возвратности и выходу.',
+    managerComment: null,
+    previewUrl: 'https://venskiy-veter.zapusk.tech/faq',
+  },
+
+  // ——— Планета 60 ———
+  {
+    projectName: 'Планета 60', templateKey: 'one_pager', provider: 'lovable', tool: 'lovable-web',
+    model: null, outputType: 'one_pager',
+    resultPreview: 'Инвестиционный тизер «Планета 60» — одностраничник для первого касания с инвестором.',
+    managerComment: null,
+    previewUrl: 'https://planeta60.zapusk.tech/teaser',
+  },
+  {
+    projectName: 'Планета 60', templateKey: 'cloud_design', provider: 'claude_design', tool: 'claude-design-pdf',
+    model: 'claude-opus', outputType: 'pitch_deck',
+    resultPreview: 'Pitch deck «Планета 60» — презентация проекта, рынок, продукт, условия раунда.',
+    managerComment: 'Презентация собрана командой ZAPUSK AI.',
+    previewUrl: 'https://planeta60.zapusk.tech/deck',
+  },
+  {
+    projectName: 'Планета 60', templateKey: 'financial', provider: 'claude', tool: 'claude-opus',
+    model: 'claude-opus', outputType: 'financial_model',
+    resultPreview: 'Financial model «Планета 60» — P&L, сценарии и расчёт доходности инвестора.',
+    managerComment: null,
+    previewUrl: 'https://planeta60.zapusk.tech/finmodel',
+  },
+  {
+    projectName: 'Планета 60', templateKey: 'calculator_spec', provider: 'claude', tool: 'claude-code',
+    model: 'claude-code', outputType: 'calculator',
+    resultPreview: 'Unit-экономика «Планета 60» — модель экономики на единицу и драйверы маржи.',
+    managerComment: null,
+    previewUrl: 'https://planeta60.zapusk.tech/unit-economics',
+  },
+  {
+    projectName: 'Планета 60', templateKey: 'ai_visibility_report', provider: 'openai', tool: 'gpt-4.1',
+    model: 'gpt-4.1', outputType: 'ai_visibility_report',
+    resultPreview: 'AI discoverability report «Планета 60» — готовность материалов к AI-поиску и answer engines.',
+    managerComment: null,
+    previewUrl: 'https://planeta60.zapusk.tech/ai-visibility',
+  },
+
+  // ——— НеоГемовет ———
+  {
+    projectName: 'НеоГемовет', templateKey: 'cloud_design', provider: 'claude_design', tool: 'claude-design-pdf',
+    model: 'claude-opus', outputType: 'pitch_deck',
+    resultPreview: 'Инвестиционная презентация «НеоГемовет» — рынок ветеринарной биофармы, продукт, патент, условия раунда 150 млн ₽.',
+    managerComment: 'Презентация собрана и проверена командой ZAPUSK AI.',
+    previewUrl: 'https://neogemovet-invest.ru/deck',
+  },
+  {
+    projectName: 'НеоГемовет', templateKey: 'one_pager', provider: 'lovable', tool: 'lovable-web',
+    model: null, outputType: 'one_pager',
+    resultPreview: 'One-pager «НеоГемовет» — одностраничник: универсальный кровезаменитель, стадия MVP, спрос ветклиник.',
+    managerComment: null,
+    previewUrl: 'https://neogemovet-invest.ru/one-pager',
+  },
+  {
+    projectName: 'НеоГемовет', templateKey: 'financial', provider: 'claude', tool: 'claude-opus',
+    model: 'claude-opus', outputType: 'financial_model',
+    resultPreview: 'Financial model «НеоГемовет» — P&L, путь к регистрации, сценарии выручки и расчёт доли инвестора (25%).',
+    managerComment: null,
+    previewUrl: 'https://neogemovet-invest.ru/finmodel',
+  },
+  {
+    projectName: 'НеоГемовет', templateKey: 'investment_summary', provider: 'openai', tool: 'gpt-4.1',
+    model: 'gpt-4.1', outputType: 'investor_summary',
+    resultPreview: 'Market overview «НеоГемовет» — объём рынка ветеринарных трансфузий, конкурент Перфторан, барьеры входа.',
+    managerComment: null,
+    previewUrl: 'https://neogemovet-invest.ru/market',
+  },
+  {
+    projectName: 'НеоГемовет', templateKey: 'investor_faq', provider: 'openai', tool: 'gpt-5.5',
+    model: 'gpt-5.5', outputType: 'faq',
+    resultPreview: 'Legal structure memo «НеоГемовет» — форма участия инвестора, статус патента/НИР, регистрационные риски.',
+    managerComment: 'Юридический блок описан, патент и НИР подтверждены.',
+    previewUrl: 'https://neogemovet-invest.ru/legal',
+  },
+];
+
 export const DEMO_NEGOTIATIONS: DemoNegotiation[] = [
   {
     projectName: 'НеоГемовет',

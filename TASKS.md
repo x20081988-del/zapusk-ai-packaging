@@ -2,7 +2,40 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-02 (Sprint 62.P10.HOTFIX: project page infinite loading for demo viewers).
+Last updated: 2026-06-02 (Sprint 62.P11.HOTFIX: onboarding popup + empty ZAPUSK AI materials block).
+
+---
+
+## Completed (this sprint — Sprint 62.P11.HOTFIX Onboarding popup + empty materials block 2026-06-02)
+
+**P0/P1 symptoms**
+1. При открытии showcase-проекта (demo) сразу всплывал модал «Формат привлечения инвестиций» (TrackPicker) — ломал демо.
+2. Блок «Материалы проекта от ZAPUSK AI» (`AIPackagingHistory`) висел на «Загружаем историю…» или был пуст, хотя demo-проекты должны показывать готовые материалы (презентация, тизер, лендинг, финмодель, FAQ, юр.структура).
+
+**Root cause #1 — popup**
+`ProjectCockpit.load()` авто-открывал TrackPicker всегда, когда `project.investmentTrack` пуст — без учёта демо/инвестора/готовности. Demo-проекты без явного трека → попап на каждом открытии.
+
+**Root cause #2 — пустой блок материалов**
+Два независимых дефекта:
+- **Доступ**: `packagingJobsRoutes` имел router-level `requireNotInvestor()` + `assertOwnership` по точному `userId`-match. demo-investor → 403, demo-founder → 404 (демо-проекты принадлежат bootstrap-владельцу, не demo-founder). `GET /api/packaging-jobs/project/:id` падал.
+- **Loading-state**: `AIPackagingHistory.load()` не имел `catch` → при 403/404 `jobs` оставался `null` → вечный спиннер «Загружаем историю…».
+- Плюс данные: НеоГемовет не имел ни одной `succeeded`-задачи (только `awaiting_manager` после `generateAllPrompts(skipDispatch)`), а у Венский ветер/Планета 60 свежие `awaiting_manager`-задачи всплывали наверх ленты → блок выглядел «всё ещё готовится».
+
+**Fixes**
+- **TASK 1 popup** (`web/src/pages/ProjectCockpit.tsx`): авто-открытие TrackPicker гейтится `skipAutoPicker = project.isDemo || project.status==='ready' || isDemoViewer` (demo-workspace или INVESTOR). Реальный draft-проект без трека → попап остаётся. Ручная CTA «Изменить формат» (`onChooseTrack`) сохранена.
+- **TASK 8 доступ** (`server/src/lib/ownership.ts` + `server/src/routes/packagingJobs.ts`): новый `assertCanReadProject(req, projectId)` — admin-like → всё; owner → свои; demo-viewer (`workspaceStatus==='demo'`) → только `isDemo && !archived`; иначе 404. Снят router-level `requireNotInvestor` (роуты read-only; запуск новых job'ов идёт через `/api/prompts`, где guard сохранён).
+- **TASK 4/7 loading** (`web/src/components/ui/AIPackagingHistory.tsx`): `load()` получил `catch → setJobs([])` → вместо вечного спиннера рендерится EmptyState «История пуста».
+- **TASK 3/9 seed** (`server/src/services/demoSeeds.ts` + `server/src/seed.ts`): `DEMO_PACKAGING_JOBS` (21 curated-материал с RU-preview + previewUrl) + `seedDemoPackagingJobs()`. Дедуп по `(projectId, outputType, status='succeeded')` — не плодит дубли. Затем `SHOWCASE_FLIP_TO_READY` («дозакрывает» оставшиеся `awaiting_manager/queued/running/mock` все 4 showcase-проектов в `succeeded` с отодвинутым в прошлое `createdAt`) → блок выглядит готовым, curated-материалы наверху ленты.
+- `web/src/lib/api.ts`: `Project.isDemo?: boolean`.
+
+**Verification**
+- server tsc — pass; web tsc — pass; `npm run build` — pass; `npm run db:seed` — idempotent, успешно.
+- БД после seed: Luce Silva / Венский ветер / Планета 60 / НеоГемовет — **100% `succeeded`**, curated-материалы (с previewUrl) наверху ленты, никаких `awaiting_manager` на топе.
+- curl access-matrix (PORT 4000), `GET /api/packaging-jobs/project/:id`:
+  - 200 (с jobs): demo-founder→НеоГемовет, demo-investor→НеоГемовет/Luce, admin→Венский, manager→НеоГемовет, owner→real.
+  - 404 (no leak): demo-investor→real, non-demo-investor→demo/real, demo-founder→real, demo-founder→archived. admin→archived = 200/0 jobs (admin полный доступ; материалов нет).
+
+**Known issue (pre-existing, flagged not fixed)**: `generateAllPrompts(skipDispatch)` НЕ идемпотентен — добавляет ~11 packaging-job'ов на showcase-проект каждый seed-run (Luce Silva накопил 110, Венский/Планета по 114). Не вредит (UI `take:50`, все `succeeded`), но раздувает БД на каждом deploy. Кандидат на отдельную чистку (дедуп по `templateKey` или wipe-before-regen для demo).
 
 ---
 

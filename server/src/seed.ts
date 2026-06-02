@@ -4,6 +4,7 @@ import {
   DEMO_PROJECTS,
   DEMO_NEGOTIATIONS,
   DEMO_MEETINGS,
+  DEMO_PACKAGING_JOBS,
   type DemoProject,
 } from './services/demoSeeds.js';
 
@@ -392,7 +393,102 @@ async function main() {
   // Sprint 62.P10 — демо AI-переговоры (разборы + встречи) для демо-фаундера.
   await seedDemoNegotiations();
 
+  // Sprint 62.P11 — готовые материалы упаковки (PackagingJob) для showcase-проектов.
+  await seedDemoPackagingJobs();
+
   log('done.');
+}
+
+// Sprint 62.P11 — наполняет блок «Материалы проекта от ZAPUSK AI»
+// (AIPackagingHistory) готовыми артефактами для всех showcase-проектов.
+// Project-scoped (не createdById), поэтому виден владельцу, demo-инвестору
+// (через assertCanReadProject) и admin/manager. Идемпотентно: дедуп по
+// (projectId, outputType) среди succeeded-задач — не плодит дубли на
+// проектах, которые свой seed уже наполнил succeeded-материалами.
+//
+// generateAllPrompts(skipDispatch:true) создаёт пачку awaiting_manager-задач
+// на каждый showcase-проект при каждом seed'е (без дедупа — отдельный known
+// issue по накоплению). Из-за свежего createdAt они всплывают наверх ленты и
+// блок «Материалы проекта» выглядит как «всё ещё готовится» (+ баннер про
+// долгий лендинг), хотя showcase должен быть готов. Поэтому: (1) сначала
+// создаём curated-набор (дедуп пропускает проекты, где succeeded того же
+// outputType уже есть), затем (2) «дозакрываем» оставшиеся active-задачи всех
+// showcase-проектов в succeeded с отодвинутым в прошлое createdAt — чтобы блок
+// выглядел готовым, а curated-материалы оставались наверху ленты.
+const SHOWCASE_FLIP_TO_READY = ['Luce Silva', 'Венский ветер', 'Планета 60', 'НеоГемовет'];
+
+async function seedDemoPackagingJobs(): Promise<void> {
+  log('seeding demo packaging jobs (ready materials)...');
+  const now = Date.now();
+
+  // 1) Curated-материалы с богатым preview/ссылками. Дедуп: пропускаем, если
+  //    уже есть succeeded-job того же outputType. createdAt — недавнее
+  //    прошлое, разнесённое offset'ом, чтобы curated оказались наверху ленты.
+  let offset = 0;
+  for (const job of DEMO_PACKAGING_JOBS) {
+    const project = await prisma.project.findFirst({
+      where: { name: job.projectName, isDemo: true, archivedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      log(`demo packaging job: project "${job.projectName}" not found, skipping`);
+      continue;
+    }
+    const existing = await prisma.packagingJob.findFirst({
+      where: { projectId: project.id, outputType: job.outputType, status: 'succeeded' },
+      select: { id: true },
+    });
+    if (existing) continue;
+    offset += 1;
+    const completedAt = new Date(now - offset * 36 * 60 * 1000);
+    await prisma.packagingJob.create({
+      data: {
+        projectId: project.id,
+        templateKey: job.templateKey,
+        provider: job.provider,
+        tool: job.tool,
+        model: job.model,
+        outputType: job.outputType,
+        status: 'succeeded',
+        prompt: `demo-seed · ${job.projectName} · ${job.outputType}`,
+        resultPreview: job.resultPreview,
+        managerComment: job.managerComment,
+        previewUrl: job.previewUrl,
+        completedBy: 'команда ZAPUSK AI',
+        completedAt,
+        createdAt: completedAt,
+      },
+    });
+  }
+
+  // 2) Дозакрываем «висящие» active-задачи showcase-проектов в succeeded и
+  //    отодвигаем createdAt в прошлое, чтобы curated-материалы (шаг 1)
+  //    оставались наверху. Применяем точечно (НеоГемовет) — проекты, уже
+  //    наполненные succeeded-материалами своим seed'ом, не трогаем.
+  const flippedAt = new Date(now - 2 * 24 * 60 * 60 * 1000);
+  for (const name of SHOWCASE_FLIP_TO_READY) {
+    const project = await prisma.project.findFirst({
+      where: { name, isDemo: true, archivedAt: null },
+      select: { id: true },
+    });
+    if (!project) {
+      log(`flip-to-ready: project "${name}" not found, skipping`);
+      continue;
+    }
+    const flipped = await prisma.packagingJob.updateMany({
+      where: {
+        projectId: project.id,
+        status: { in: ['awaiting_manager', 'queued', 'running', 'mock'] },
+      },
+      data: {
+        status: 'succeeded',
+        completedBy: 'команда ZAPUSK AI',
+        completedAt: flippedAt,
+        createdAt: flippedAt,
+      },
+    });
+    if (flipped.count > 0) log(`flip-to-ready: marked ${flipped.count} jobs succeeded for "${name}"`);
+  }
 }
 
 // Sprint 62.P10 — заполняет «AI-разбор переговоров» (ConversationAnalysis) и
