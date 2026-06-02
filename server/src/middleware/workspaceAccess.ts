@@ -34,6 +34,11 @@ const WRITE_ALLOWED = new Set(['active']);
 const DEMO_INFERENCE_ALLOW = new Set<string>([
   '/sales-assistant/analyze',
   '/sales-assistant/analyze-fast', // Sprint 34В — fast tactical endpoint, тоже compute-only
+  // Sprint 62.P11 — заявка инвестора с публичной витрины /opportunities.
+  // Demo-инвестор должен иметь возможность оставить заявку (это и есть смысл
+  // витрины). POST персистит InvestorApplication с isDemo=true и подмешивается
+  // в demo AI-leads. Никаких чужих данных не читает/не мутирует.
+  '/investor-applications',
 ]);
 
 interface AuthedRequest extends Request {

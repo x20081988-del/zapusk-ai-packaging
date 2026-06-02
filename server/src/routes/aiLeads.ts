@@ -1,9 +1,11 @@
 import { Router } from 'express';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, InvestorApplication } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { requireNotInvestor } from '../lib/ownership.js';
-import { leadProvider, type ProjectForAILeads } from '../services/aiLeadsService.js';
+import {
+  leadProvider, type ProjectForAILeads, type AILead, type AILeadsDashboard,
+} from '../services/aiLeadsService.js';
 
 export const aiLeadsRoutes = Router();
 aiLeadsRoutes.use(authMiddleware);
@@ -21,6 +23,7 @@ aiLeadsRoutes.use(requireNotInvestor());
 // mockLeads() что и в demo workspace.
 aiLeadsRoutes.get('/showcase', async (_req, res) => {
   const dashboard = await leadProvider.getDashboard(null, { demoMode: true });
+  await mergeDemoApplications(dashboard);
   res.json(dashboard);
 });
 
@@ -53,8 +56,73 @@ aiLeadsRoutes.get('/', async (req, res) => {
     project ? toAILeadProject(project) : null,
     { demoMode },
   );
+  // Sprint 62.P11 — реальные заявки инвесторов с витрины /opportunities
+  // подмешиваются в demo-кабинет как лид-карточки (источник правды в БД).
+  if (demoMode) await mergeDemoApplications(dashboard);
   res.json(dashboard);
 });
+
+// Sprint 62.P11 — заявки с публичной витрины /opportunities (isDemo=true)
+// показываются в demo AI-leads первыми (свежие сверху), затем синтетические
+// curated-лиды. Так founder/менеджер на демо видит, что заявка инвестора
+// реально долетела до воронки.
+const CHECK_RANGE_LABEL: Record<string, string> = {
+  '500k_1m': '500 тыс – 1 млн ₽',
+  '1m_3m': '1–3 млн ₽',
+  '3m_10m': '3–10 млн ₽',
+  '10m_plus': 'от 10 млн ₽',
+};
+const INTEREST_LABEL: Record<string, string> = {
+  materials: 'Получить материалы',
+  discuss: 'Обсудить сделку',
+  invest: 'Войти в проект',
+  compare: 'Сравнить с другими',
+};
+
+async function mergeDemoApplications(dashboard: AILeadsDashboard): Promise<void> {
+  const applications = await prisma.investorApplication.findMany({
+    where: { isDemo: true },
+    orderBy: { createdAt: 'desc' },
+    include: { project: { select: { name: true } } },
+    take: 50,
+  });
+  if (applications.length === 0) return;
+  const leads = applications.map(toAILeadFromApplication);
+  dashboard.leads = [...leads, ...dashboard.leads];
+  dashboard.kpis = { ...dashboard.kpis, totalLeads: dashboard.leads.length };
+}
+
+function toAILeadFromApplication(
+  app: InvestorApplication & { project: { name: string } | null },
+): AILead {
+  const checkLabel = CHECK_RANGE_LABEL[app.checkRange] ?? app.checkRange;
+  const interestLabel = INTEREST_LABEL[app.interest] ?? app.interest;
+  const projectName = app.project?.name ?? 'проект';
+  return {
+    id: `app-${app.id}`,
+    status: 'NEW',
+    receivedAt: app.createdAt.toISOString(),
+    title: `Заявка с витрины · ${projectName}`,
+    investor: {
+      name: app.name,
+      phone: app.contact,
+      checkRange: checkLabel,
+      decisionWindow: 'новый запрос',
+      profile: `Заявка с витрины ZAPUSK AI · интерес: ${interestLabel}`,
+    },
+    tags: ['ВИТРИНА', 'НОВАЯ ЗАЯВКА', interestLabel.toUpperCase()],
+    aiSummary: `Инвестор оставил заявку на витрине по проекту «${projectName}». Чек: ${checkLabel}. Цель: ${interestLabel.toLowerCase()}.`,
+    whatHappened: {
+      summary: `Заявка получена через публичную витрину /opportunities. Контакт для связи: ${app.contact}.`,
+      interest: interestLabel,
+      objections: [],
+      sent: [],
+      nextStep: 'Связаться с инвестором и предоставить доступ к материалам / data room',
+    },
+    audio: { label: 'Заявка с формы (без звонка)', durationSec: 0, available: false, transcriptPeek: app.comment },
+    communications: [],
+  };
+}
 
 type ProjectWithAILeadContext = Prisma.ProjectGetPayload<{
   include: { files: { select: { id: true; category: true } }; brief: true };

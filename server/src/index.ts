@@ -21,6 +21,7 @@ import { salesAssistantRoutes } from './routes/salesAssistant.js';
 import { salesSessionsRoutes } from './routes/salesSessions.js';
 import { conversationAnalysisRoutes } from './routes/conversationAnalysis.js';
 import { aiLeadsRoutes } from './routes/aiLeads.js';
+import { investorApplicationsRoutes } from './routes/investorApplications.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
 import { initKnowledgeFts } from './services/knowledgeFts.js';
 import { assistantOutcomesRoutes } from './routes/assistantOutcomes.js';
@@ -117,6 +118,9 @@ app.use('/api/sales-assistant', salesAssistantRoutes);
 app.use('/api/sales-sessions', salesSessionsRoutes);
 app.use('/api/conversation-analysis', conversationAnalysisRoutes);
 app.use('/api/ai-leads', aiLeadsRoutes);
+// Sprint 62.P11 — investor crowdinvesting applications (POST allowed for
+// INVESTOR + demo; GET list for team/founder).
+app.use('/api/investor-applications', investorApplicationsRoutes);
 // Sprint 38 — Knowledge Base. AI-ассистент использует KB для retrieval,
 // admin/manager управляют source'ами через REST.
 app.use('/api/knowledge', knowledgeRoutes);

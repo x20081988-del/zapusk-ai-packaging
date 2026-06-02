@@ -30,6 +30,7 @@ import DemoConversationAnalysis from './pages/DemoConversationAnalysis';
 import ProjectsList from './pages/ProjectsList';
 import PersonalManager from './pages/PersonalManager';
 import InvestorPortfolio from './pages/InvestorPortfolio';
+import OpportunityDetail from './pages/OpportunityDetail';
 
 export default function App() {
   const auth = getAuth();
@@ -55,8 +56,12 @@ export default function App() {
       <Route path="/projects/:id/documents" element={<RequireAuth><ProjectDocuments /></RequireAuth>} />
       <Route path="/projects/:id/review" element={<RequireAuth><ProjectReview /></RequireAuth>} />
       <Route path="/templates" element={<RequireRole roles={['SUPER_ADMIN', 'ADMIN']}><Templates /></RequireRole>} />
-      {/* Sprint 25 — INVESTOR routes (stub) */}
+      {/* Sprint 25 — INVESTOR routes. Sprint 62.P11 — крауд-витрина. */}
       <Route path="/opportunities" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
+      {/* Sprint 62.P11 — инвестор-facing страница сделки (НЕ ProjectCockpit).
+          Объявлена ДО других /opportunities/* и отдельно от /projects/:id, чтобы
+          инвестор не попадал во внутренний cockpit. */}
+      <Route path="/opportunities/:id" element={<RequireAuth><OpportunityDetail /></RequireAuth>} />
       <Route path="/portfolio" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
       <Route path="/secondary" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />
       <Route path="/profile" element={<RequireAuth><InvestorPortfolio /></RequireAuth>} />

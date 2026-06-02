@@ -365,3 +365,27 @@ export interface PackagingJob {
   completedBy: string | null;
   createdAt: string;
 }
+
+// Sprint 62.P11 — заявка инвестора с публичной витрины /opportunities.
+export type InvestorCheckRange = '500k_1m' | '1m_3m' | '3m_10m' | '10m_plus';
+export type InvestorInterest = 'materials' | 'discuss' | 'invest' | 'compare';
+
+export interface InvestorApplicationInput {
+  projectId: string;
+  name: string;
+  contact: string;
+  email?: string;
+  checkRange: InvestorCheckRange;
+  interest: InvestorInterest;
+  comment?: string;
+}
+
+export interface InvestorApplicationResult {
+  application: { id: string; status: string; createdAt: string };
+  message: string;
+}
+
+export const investorApplications = {
+  create: (input: InvestorApplicationInput) =>
+    api.post<InvestorApplicationResult>('/api/investor-applications', input),
+};

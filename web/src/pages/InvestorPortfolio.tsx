@@ -3,11 +3,11 @@ import { Link, useLocation } from 'react-router-dom';
 import { BriefcaseBusiness, ChevronRight, Repeat, TrendingUp, UserRound, Wallet } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
-import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { api, type Project } from '../lib/api';
-import { formatMoney, formatPercent, INVESTOR_TYPE_LABELS, STAGE_LABELS } from '../lib/format';
+import { formatMoney, formatPercent } from '../lib/format';
+import { buildOpportunityView } from '../lib/opportunities';
 
 // Sprint 25 — INVESTOR placeholder. Sprint 62.P10 — /opportunities оживлён:
 // читает реальные инвест-витрины (isDemo=true проекты) через /api/projects.
@@ -126,26 +126,33 @@ function Opportunities() {
 }
 
 function OpportunityCard({ project: p }: { project: Project }) {
-  const stage = p.stage ? STAGE_LABELS[p.stage] ?? p.stage : null;
-  const investorType = p.investorType ? INVESTOR_TYPE_LABELS[p.investorType] ?? p.investorType : null;
+  const view = buildOpportunityView(p);
   return (
-    <Link to={`/projects/${p.id}`} className="block group">
+    <Link to={`/opportunities/${p.id}`} className="block group">
       <Card padded hoverable accent="zapusk" className="h-full flex flex-col">
-        <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex items-start justify-between gap-2 mb-1.5">
           <h3 className="text-base font-semibold text-primary leading-tight">{p.name}</h3>
-          {p.status === 'ready' && <StatusBadge tone="success" dot>готов</StatusBadge>}
+          <StatusBadge tone={view.statusTone} dot>{view.statusLabel}</StatusBadge>
         </div>
-        {p.industry && <p className="text-xs text-secondary leading-snug line-clamp-2">{p.industry}</p>}
-        <div className="grid grid-cols-2 gap-2 mt-4">
+        <p className="text-[11px] uppercase tracking-[0.06em] text-zapusk-400 font-semibold mb-2">{view.sector}</p>
+        <p className="text-xs text-secondary leading-snug line-clamp-3">{view.shortThesis}</p>
+
+        <div className="flex flex-wrap gap-1 mt-3">
+          {view.badges.slice(0, 3).map((b) => (
+            <StatusBadge key={b.label} tone={b.tone}>{b.label}</StatusBadge>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 mt-4">
           <Term icon={<Wallet size={13} />} label="Раунд" value={formatMoney(p.raiseAmount, p.currency)} />
           <Term icon={<TrendingUp size={13} />} label="Доля" value={formatPercent(p.equityOffered)} />
           <Term icon={<Wallet size={13} />} label="Мин. чек" value={formatMoney(p.minCheck, p.currency)} />
-          <Term icon={<BriefcaseBusiness size={13} />} label="Стадия" value={stage ?? '—'} />
         </div>
+
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-hairline">
-          <span className="text-[11px] text-muted">{investorType ?? 'Инвест-возможность'}</span>
-          <span className="inline-flex items-center gap-1 text-xs font-semibold text-zapusk-400 group-hover:text-zapusk-300">
-            Изучить <ChevronRight size={13} />
+          <span className="text-[11px] text-muted truncate pr-2">{view.payback ? `Окупаемость: ${view.payback}` : 'Инвест-возможность'}</span>
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-zapusk-400 group-hover:text-zapusk-300 shrink-0">
+            Подробнее <ChevronRight size={13} />
           </span>
         </div>
       </Card>

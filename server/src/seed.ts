@@ -396,7 +396,73 @@ async function main() {
   // Sprint 62.P11 — готовые материалы упаковки (PackagingJob) для showcase-проектов.
   await seedDemoPackagingJobs();
 
+  // Sprint 62.P11 — пара демо-заявок инвесторов с витрины /opportunities,
+  // чтобы demo AI-leads показывал реальный поток заявок без ручного сабмита.
+  await seedDemoInvestorApplications();
+
   log('done.');
+}
+
+// Sprint 62.P11 — идемпотентно сеет 1-2 демо-заявки инвестора на showcase-проекты.
+// Эти заявки (isDemo=true) подмешиваются в /api/ai-leads/showcase как лид-карточки.
+// Дедуп по (projectId, name) — повторный seed не плодит дубли.
+const DEMO_INVESTOR_APPLICATIONS: Array<{
+  projectName: string;
+  name: string;
+  contact: string;
+  email?: string;
+  checkRange: string;
+  interest: string;
+  comment?: string;
+}> = [
+  {
+    projectName: 'Luce Silva',
+    name: 'Инвестор с витрины · М.',
+    contact: 'Telegram: @investor_demo',
+    checkRange: '1m_3m',
+    interest: 'materials',
+    comment: 'Интересует формат участия и сезонная окупаемость. Прошу прислать пакет материалов.',
+  },
+  {
+    projectName: 'НеоГемовет',
+    name: 'Инвестор с витрины · К.',
+    contact: '+7 900 000-00-00',
+    checkRange: '3m_10m',
+    interest: 'discuss',
+    comment: 'Хочу обсудить долю и структуру сделки, а также получить доступ к data room.',
+  },
+];
+
+async function seedDemoInvestorApplications(): Promise<void> {
+  for (const app of DEMO_INVESTOR_APPLICATIONS) {
+    const project = await prisma.project.findFirst({
+      where: { name: app.projectName, isDemo: true, archivedAt: null },
+      select: { id: true },
+    });
+    if (!project) continue;
+
+    const existing = await prisma.investorApplication.findFirst({
+      where: { projectId: project.id, name: app.name },
+      select: { id: true },
+    });
+    if (existing) continue;
+
+    await prisma.investorApplication.create({
+      data: {
+        projectId: project.id,
+        name: app.name,
+        contact: app.contact,
+        email: app.email ?? null,
+        checkRange: app.checkRange,
+        interest: app.interest,
+        comment: app.comment ?? null,
+        source: 'opportunities',
+        status: 'demo_new',
+        isDemo: true,
+      },
+    });
+    log(`  + demo investor application for ${app.projectName}`);
+  }
 }
 
 // Sprint 62.P11 — наполняет блок «Материалы проекта от ZAPUSK AI»
@@ -407,8 +473,9 @@ async function main() {
 // проектах, которые свой seed уже наполнил succeeded-материалами.
 //
 // generateAllPrompts(skipDispatch:true) создаёт пачку awaiting_manager-задач
-// на каждый showcase-проект при каждом seed'е (без дедупа — отдельный known
-// issue по накоплению). Из-за свежего createdAt они всплывают наверх ленты и
+// на каждый showcase-проект при первом seed'е (Sprint 62.P12: теперь
+// идемпотентно — дедуп по (projectId, templateKey), повторный seed не плодит
+// строки). Из-за свежего createdAt они всплывают наверх ленты и
 // блок «Материалы проекта» выглядит как «всё ещё готовится» (+ баннер про
 // долгий лендинг), хотя showcase должен быть готов. Поэтому: (1) сначала
 // создаём curated-набор (дедуп пропускает проекты, где succeeded того же

@@ -2,7 +2,46 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-02 (Sprint 62.P11.HOTFIX: onboarding popup + empty ZAPUSK AI materials block).
+Last updated: 2026-06-02 (Sprint 62.P11: investor-facing opportunities showcase).
+
+---
+
+## Completed (this sprint — Sprint 62.P11 Investor Opportunities as Crowdinvesting Showcase 2026-06-02)
+
+**Intent** — переделать `/opportunities` и страницу проекта инвестора в настоящую краудинвестинговую витрину (как Republic/Seedrs/StartEngine), а не внутренний cockpit. Инвестор: видит список сделок → выбирает проект → быстро понимает сделку → смотрит открытую часть упаковки → видит, что есть полный data room → оставляет заявку → заявка попадает в demo AI-leads.
+
+**Backend**
+- **Модель** (`server/prisma/schema.prisma` + migration `20260602120000_sprint62_p11_investor_application`): новая `InvestorApplication` (projectId FK, name, contact, email?, checkRange, interest, comment?, source='opportunities', status, isDemo, timestamps) + relation на `Project`. Additive, без drop'ов.
+- **Route** (`server/src/routes/investorApplications.ts`, mounted `/api/investor-applications`): `POST /` — заявка инвестора, доступна ВСЕМ авторизованным (включая INVESTOR + demo). Валидация checkRange/interest; `assertCanReadProject` гейтит проект (404 на чужой/приватный — без утечки). `isDemo` → status `demo_new`, иначе `new`. В demo-режиме никаких внешних уведомлений. `GET /` — список для admin/manager (все) и founder (свои проекты); INVESTOR отрезан `requireNotInvestor()`.
+- **Demo-write allow** (`server/src/middleware/workspaceAccess.ts`): `/investor-applications` добавлен в `DEMO_INFERENCE_ALLOW` — demo-инвестор может оставить заявку (POST) несмотря на readonly-workspace.
+- **Surface в demo AI-leads** (`server/src/routes/aiLeads.ts`): `mergeDemoApplications()` подмешивает persisted `isDemo`-заявки в `/api/ai-leads/showcase` (и demo `/`) как лид-карточки (status NEW, тег «ВИТРИНА»), свежие сверху; `kpis.totalLeads` пересчитывается.
+- **Seed** (`server/src/seed.ts`): `seedDemoInvestorApplications()` — 2 идемпотентные демо-заявки (Luce Silva, НеоГемовет), дедуп по `(projectId, name)`.
+
+**Frontend**
+- **View-model** (`web/src/lib/opportunities.ts`): `buildOpportunityView(project)` — curated-контент для Luce Silva (свадебный event, раунд 66 млн ₽, доля 49%, мин чек 1 млн ₽, окупаемость 1–2 сезона, сценарии 75/100/150 свадеб) и НеоГемовет (ветбиофарма, 150 млн ₽, 25%, патент+НИР), generic-fallback для прочих isDemo-проектов из полей + брифа. Отдаёт thesis (4 блока), badges, metrics, открытые материалы, locked data room, шаги сделки, юр-блок.
+- **API** (`web/src/lib/api.ts`): типы `InvestorApplicationInput`/`InvestorCheckRange`/`InvestorInterest` + `investorApplications.create()`.
+- **Витрина** (`web/src/pages/InvestorPortfolio.tsx`): rich crowdinvesting-карточки (сектор, тезис, badges, раунд/доля/чек, окупаемость), линк на `/opportunities/:id` (раньше вёл в cockpit).
+- **Страница сделки** (`web/src/pages/OpportunityDetail.tsx`, route `/opportunities/:id`): инвестор-facing — hero (оффер + CTA «Оставить заявку»/«Получить data room»/«Обсудить»), инвест-тезис, ключевые метрики, открытые материалы (с previewUrl из packaging jobs если есть), запертый data room teaser, «Как проходит сделка» (4 шага), правовой блок. НЕ ProjectCockpit — никаких founder-контролей/онбординга/генерации.
+- **Форма заявки** (`web/src/components/ui/InvestorApplicationForm.tsx`): модал (имя, телефон/Telegram, email?, размер чека, цель, комментарий) → POST → success «Заявка отправлена. Менеджер ZAPUSK AI свяжется…».
+
+**Доступ/безопасность** — инвестор видит только demo-проекты + их инвестор-facing материалы + форму; не видит cockpit/генерацию/онбординг/чужие проекты. Полный data room заперт до заявки.
+
+**Verification**
+- server tsc — pass; web tsc — pass; `npm run build` — pass; `npm run db:seed` — идемпотентно (2 демо-заявки).
+- curl smoke (PORT 4100): POST заявки demo-investor → 201 `demo_new`; `/api/ai-leads/showcase` (admin) → 3 app-лида наверху, `kpis.totalLeads` обновлён; `GET /api/investor-applications` INVESTOR → 403, admin → список. Security: investor POST/GET на приватный non-demo проект → 404; invalid checkRange → 400.
+
+---
+
+## Completed (Sprint 62.P12 Idempotent demo packaging-job seeding 2026-06-02)
+
+**Problem** (carried over as the Sprint 62.P11 «Known issue»): `generateAllPrompts(demo.id, { skipDispatch: true })` создавал ~11 новых `PackagingJob` на каждый demo-проект при каждом `db:seed` / deploy без дедупа. За много прогонов накопилось: Luce Silva ~110, Венский ветер / Планета 60 ~114, НеоГемовет 49 — все дубли одних и тех же ~11 artifact-типов. Не user-visible (route `/api/packaging-jobs/project/:id` берёт `take:50`, все `succeeded`), но раздувало demo-БД на каждом deploy.
+
+**Fix — option (a), no deletes** (`server/src/services/promptBuilders.ts`): в `generatePrompt`, при `opts.skipDispatch` (seed/demo-флаг — только seed его передаёт; route- и `packageService`-вызовы идут обычным dispatch-путём), добавлен ранний дедуп: если `PackagingJob` для `(projectId, templateKey===kind)` уже существует, возвращаем последний существующий `GeneratedPrompt` и пропускаем создание новой строки (job И prompt). Повторный seed становится no-op для базовой ленты материалов. Curated-набор (`seedDemoPackagingJobs` / `DEMO_PACKAGING_JOBS`) и `SHOWCASE_FLIP_TO_READY` не тронуты — у них свой дедуп по `(projectId, outputType, status='succeeded')`.
+
+**Verification**
+- server tsc — pass; web tsc — pass; `npm run build` — pass.
+- `npm run db:seed` дважды подряд: per-project счётчик стабилен (Планета 60 / Венский ветер 114, Luce Silva 110, НеоГемовет 49), **не растёт** (раньше +~11 за прогон). Все 4 showcase-проекта остаются **100% `succeeded`**, 11 distinct base-templateKeys + curated-материалы (4/5/4) на месте.
+- Existing-БД не уменьшается (option (a) без delete'ов) — фиксирует рост на текущем уровне; свежая БД даёт ~11 base + curated с первого прогона.
 
 ---
 
@@ -35,7 +74,7 @@ Last updated: 2026-06-02 (Sprint 62.P11.HOTFIX: onboarding popup + empty ZAPUSK 
   - 200 (с jobs): demo-founder→НеоГемовет, demo-investor→НеоГемовет/Luce, admin→Венский, manager→НеоГемовет, owner→real.
   - 404 (no leak): demo-investor→real, non-demo-investor→demo/real, demo-founder→real, demo-founder→archived. admin→archived = 200/0 jobs (admin полный доступ; материалов нет).
 
-**Known issue (pre-existing, flagged not fixed)**: `generateAllPrompts(skipDispatch)` НЕ идемпотентен — добавляет ~11 packaging-job'ов на showcase-проект каждый seed-run (Luce Silva накопил 110, Венский/Планета по 114). Не вредит (UI `take:50`, все `succeeded`), но раздувает БД на каждом deploy. Кандидат на отдельную чистку (дедуп по `templateKey` или wipe-before-regen для demo).
+**Known issue → fixed in Sprint 62.P12** (see секцию выше): `generateAllPrompts(skipDispatch)` теперь идемпотентен (дедуп по `(projectId, templateKey)`).
 
 ---
 
