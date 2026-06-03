@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { BriefcaseBusiness, ChevronRight, Repeat, TrendingUp, UserRound, Wallet } from 'lucide-react';
+import { BriefcaseBusiness, Check, ChevronRight, Repeat, ShieldCheck, Sparkles, TrendingUp, UserRound } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { OpportunityCoverArt } from '../components/ui/OpportunityCoverArt';
 import { api, type Project } from '../lib/api';
 import { formatMoney, formatPercent } from '../lib/format';
 import { buildOpportunityView } from '../lib/opportunities';
@@ -75,17 +76,41 @@ function Opportunities() {
 
   return (
     <AppLayout title="Инвест-возможности · ZAPUSK AI">
-      <Card padded className="mb-4">
-        <CardHeader
-          title="Инвест-возможности"
-          subtitle="Открытые раунды на платформе ZAPUSK AI"
-          action={projects ? <StatusBadge tone="ai" dot>{projects.length} в подборке</StatusBadge> : undefined}
+      {/* ── Premium intro / hero ── */}
+      <div className="relative overflow-hidden rounded-2xl border border-hairline bg-grad-ink shadow-card mb-5">
+        <div className="absolute inset-0 bg-dot-grid opacity-60 pointer-events-none" />
+        <div
+          className="absolute -top-24 -right-24 w-72 h-72 rounded-full blur-3xl opacity-25 pointer-events-none"
+          style={{ background: 'radial-gradient(circle, rgb(var(--color-ai)) 0%, transparent 70%)' }}
         />
-        <p className="text-sm text-secondary leading-relaxed max-w-3xl">
-          Подобранные проекты, упакованные ZAPUSK AI: понятная сделка, финмодель, презентация
-          и материалы для инвестора. Откройте карточку, чтобы изучить условия.
-        </p>
-      </Card>
+        <div
+          className="absolute -bottom-28 -left-16 w-72 h-72 rounded-full blur-3xl opacity-20 pointer-events-none"
+          style={{ background: 'radial-gradient(circle, rgb(var(--color-zapusk)) 0%, transparent 70%)' }}
+        />
+        <div className="relative px-6 py-7 sm:px-8 sm:py-9">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/10 px-2.5 py-1 text-[11px] font-semibold text-ai-glow">
+              <Sparkles size={12} /> Краудинвестинг ZAPUSK AI
+            </span>
+            {projects && (
+              <StatusBadge tone="success" dot>{projects.length} {pluralDeals(projects.length)}</StatusBadge>
+            )}
+          </div>
+          <h1 className="text-2xl sm:text-[28px] font-bold text-primary leading-tight max-w-2xl">
+            Инвестируйте в проверенные проекты
+          </h1>
+          <p className="text-sm text-secondary leading-relaxed max-w-2xl mt-2">
+            Каждая сделка упакована и проверена ZAPUSK AI: понятная экономика, финмодель,
+            презентация и data room. Выберите проект, изучите условия и оставьте заявку — это
+            ни к чему не обязывает.
+          </p>
+          <div className="flex flex-wrap gap-4 mt-5">
+            <Trust icon={<ShieldCheck size={14} />} label="Проверено ZAPUSK AI" />
+            <Trust icon={<Check size={14} />} label="Сделка через платформу" />
+            <Trust icon={<TrendingUp size={14} />} label="Открытые материалы и data room" />
+          </div>
+        </div>
+      </div>
 
       {error ? (
         <Card padded>
@@ -115,7 +140,7 @@ function Opportunities() {
           />
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {projects.map((p) => (
             <OpportunityCard key={p.id} project={p} />
           ))}
@@ -125,49 +150,73 @@ function Opportunities() {
   );
 }
 
+function pluralDeals(n: number): string {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'сделка в подборке';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'сделки в подборке';
+  return 'сделок в подборке';
+}
+
+function Trust({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-secondary">
+      <span className="text-success">{icon}</span>
+      {label}
+    </span>
+  );
+}
+
 function OpportunityCard({ project: p }: { project: Project }) {
   const view = buildOpportunityView(p);
   return (
-    <Link to={`/opportunities/${p.id}`} className="block group">
-      <Card padded hoverable accent="zapusk" className="h-full flex flex-col">
-        <div className="flex items-start justify-between gap-2 mb-1.5">
-          <h3 className="text-base font-semibold text-primary leading-tight">{p.name}</h3>
-          <StatusBadge tone={view.statusTone} dot>{view.statusLabel}</StatusBadge>
-        </div>
-        <p className="text-[11px] uppercase tracking-[0.06em] text-zapusk-400 font-semibold mb-2">{view.sector}</p>
-        <p className="text-xs text-secondary leading-snug line-clamp-3">{view.shortThesis}</p>
+    <Link to={`/opportunities/${p.id}`} className="block group h-full">
+      <article className="h-full flex flex-col rounded-2xl border border-hairline bg-surface shadow-card overflow-hidden transition-all duration-200 ease-smooth group-hover:-translate-y-1 group-hover:shadow-lifted group-hover:border-line">
+        {/* ── Cover ── */}
+        <OpportunityCoverArt cover={view.cover} className="h-36">
+          <div className="absolute top-3 left-3">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-black/35 backdrop-blur-sm px-2.5 py-1 text-[11px] font-semibold text-white">
+              <span className={`w-1.5 h-1.5 rounded-full ${view.statusTone === 'success' ? 'bg-emerald-300' : 'bg-white'}`} />
+              {view.statusLabel}
+            </span>
+          </div>
+          <div className="absolute bottom-3 left-4 right-4">
+            <p className="text-[10px] uppercase tracking-[0.1em] font-semibold text-white/80">{view.tagline}</p>
+            <h3 className="text-lg font-bold text-white leading-tight line-clamp-2 drop-shadow-sm">{p.name}</h3>
+          </div>
+        </OpportunityCoverArt>
 
-        <div className="flex flex-wrap gap-1 mt-3">
-          {view.badges.slice(0, 3).map((b) => (
-            <StatusBadge key={b.label} tone={b.tone}>{b.label}</StatusBadge>
-          ))}
-        </div>
+        {/* ── Body ── */}
+        <div className="flex flex-col flex-1 p-4">
+          <p className="text-xs text-secondary leading-snug line-clamp-3">{view.shortThesis}</p>
 
-        <div className="grid grid-cols-3 gap-2 mt-4">
-          <Term icon={<Wallet size={13} />} label="Раунд" value={formatMoney(p.raiseAmount, p.currency)} />
-          <Term icon={<TrendingUp size={13} />} label="Доля" value={formatPercent(p.equityOffered)} />
-          <Term icon={<Wallet size={13} />} label="Мин. чек" value={formatMoney(p.minCheck, p.currency)} />
-        </div>
+          <div className="grid grid-cols-3 gap-2 mt-4">
+            <Term label="Раунд" value={formatMoney(p.raiseAmount, p.currency)} />
+            <Term label="Доля" value={formatPercent(p.equityOffered)} />
+            <Term label="Мин. чек" value={formatMoney(p.minCheck, p.currency)} />
+          </div>
 
-        <div className="flex items-center justify-between mt-4 pt-3 border-t border-hairline">
-          <span className="text-[11px] text-muted truncate pr-2">{view.payback ? `Окупаемость: ${view.payback}` : 'Инвест-возможность'}</span>
-          <span className="inline-flex items-center gap-1 text-xs font-semibold text-zapusk-400 group-hover:text-zapusk-300 shrink-0">
-            Подробнее <ChevronRight size={13} />
-          </span>
+          <div className="flex items-center gap-1.5 mt-3 text-[11px] text-zapusk-600 font-medium">
+            <Sparkles size={12} className="shrink-0" />
+            <span className="truncate">{view.payback ? `Окупаемость: ${view.payback}` : view.upside}</span>
+          </div>
+
+          <div className="flex items-center justify-between mt-auto pt-4">
+            <span className="text-[11px] text-muted">{view.scarcity.split(' · ')[0]}</span>
+            <span className="inline-flex items-center gap-1 rounded-lg bg-grad-zapusk px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition-transform group-hover:translate-x-0.5">
+              Подробнее <ChevronRight size={13} />
+            </span>
+          </div>
         </div>
-      </Card>
+      </article>
     </Link>
   );
 }
 
-function Term({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Term({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-hairline bg-canvas/45 px-2.5 py-2">
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-muted font-semibold">
-        {icon}
-        {label}
-      </div>
-      <div className="text-sm font-semibold text-primary mt-0.5 truncate">{value}</div>
+    <div className="rounded-lg border border-hairline bg-canvas/60 px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-[0.06em] text-muted font-semibold">{label}</div>
+      <div className="text-sm font-semibold text-primary mt-0.5 truncate font-num">{value}</div>
     </div>
   );
 }

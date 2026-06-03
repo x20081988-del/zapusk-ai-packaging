@@ -2,11 +2,39 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-02 (Sprint 62.P11: investor-facing opportunities showcase).
+Last updated: 2026-06-03 (Sprint 62.P12: investor showcase UX/UI upgrade).
 
 ---
 
-## Completed (this sprint — Sprint 62.P11 Investor Opportunities as Crowdinvesting Showcase 2026-06-02)
+## Completed (this sprint — Sprint 62.P12 Investor Showcase UX/UI Upgrade 2026-06-03)
+
+**Intent** — поднять `/opportunities` и `/opportunities/:id` с уровня «технический кабинет» до премиальной краудинвестинговой витрины (Republic / Seedrs / StartEngine / AngelList / Odin): визуал проектов, насыщенная светлая тема, real data room с реальными ссылками, эмоция инвестора (scarcity / social proof / ясный next step). Без cockpit/founder-UI; инвестор остаётся read-only.
+
+**Визуал проектов (без бинарных ассетов)**
+- `web/src/components/ui/OpportunityCoverArt.tsx` (new) — премиальный cover: секторный градиент из view-model + крупная полупрозрачная lucide-иконка-watermark + dot-grid + световой блик. Один источник для карточки витрины и hero сделки. Поддерживает опциональный реальный `coverUrl` (plug-in на будущее).
+- `web/src/lib/opportunities.ts`: в `OpportunityView` добавлены `cover` (gradient + icon + accent), `tagline`, `highlights[]`, `scarcity`. Curated-обложки: Luce Silva (emerald/flower), НеоГемовет (bio-violet/dna), Планета 60 (cosmic/planet), Венский ветер (teal/wind); generic — детерминированный палитра-хеш по имени.
+
+**Rich data room + реальные материалы**
+- `OpportunityMaterial` → `OpportunityDocument` (`title/type/size?/description/url?/outputType?/locked`). Два блока на странице сделки: «Открытые материалы» и «Полный Data Room», оба — preview-карточки (иконка, тип, размер, описание, кнопка «Открыть» / lock-CTA «после заявки»).
+- **НеоГемовет — реальные ссылки (Sprint 62.P12):** Тизер, Pitch Deck, FAQ (открытые) + Финмодель (в data room, открытая) подключены прямыми ссылками Google Drive/Docs, открываются в новой вкладке. Остальные документы data room заперты до заявки.
+- Прочие проекты (Luce Silva / Планета 60 / Венский ветер) тянут previewUrl из succeeded `PackagingJob` по `outputType`; locked-документы ведут на форму заявки.
+
+**Витрина и hero**
+- `web/src/pages/InvestorPortfolio.tsx`: premium hero-интро (grad-ink + glow-орбы + dot-grid, trust-маркеры) и cover-карточки (обложка, статус-чип, tagline, тезис, раунд/доля/чек, upside, scarcity, gradient-CTA «Подробнее», hover-lift).
+- `web/src/pages/OpportunityDetail.tsx`: hero на базе `OpportunityCoverArt` (обложка + бейджи + highlights-чипы), затем тезис, метрики, «Открытые материалы», «Полный Data Room», шаги сделки, правовой блок, форма заявки.
+
+**Светлая тема**
+- `web/src/index.css`: добавлен `--app-mesh` — мягкий многослойный брендовый радиальный градиент (violet/orange/green, очень низкая непрозрачность) на `body` для light (в dark — `none`), чтобы светлая тема читалась «дорого», не как flat-fallback. Контраст/читаемость не затронуты. Cover-градиенты самодостаточны и одинаково хорошо смотрятся в обеих темах.
+
+**Доступ/безопасность** — не тронуты. Инвестор по-прежнему read-only: видит только demo-проекты + их инвестор-facing материалы + форму; cockpit/генерация/онбординг/чужие проекты недоступны. Запертые документы data room — за формой заявки.
+
+**Verification**
+- server tsc — pass; web tsc — pass; `npm run build` — pass; `npm run db:seed` — идемпотентно.
+- Preview (demo-investor, light): витрина — 4 premium cover-карточки; НеоГемовет — hero с обложкой/highlights, «Открыть» на 4 реальных ссылках (Тизер/Pitch Deck/FAQ + Финмодель), 5 locked-документов «после заявки». Dark — без регрессий.
+
+---
+
+## Completed (Sprint 62.P11 Investor Opportunities as Crowdinvesting Showcase 2026-06-02)
 
 **Intent** — переделать `/opportunities` и страницу проекта инвестора в настоящую краудинвестинговую витрину (как Republic/Seedrs/StartEngine), а не внутренний cockpit. Инвестор: видит список сделок → выбирает проект → быстро понимает сделку → смотрит открытую часть упаковки → видит, что есть полный data room → оставляет заявку → заявка попадает в demo AI-leads.
 
