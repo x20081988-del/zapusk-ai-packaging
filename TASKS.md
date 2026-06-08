@@ -2,11 +2,72 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-03 (Sprint 62.P12: investor showcase UX/UI upgrade).
+Last updated: 2026-06-08 (Sprint 62.P15: Signal Engine import layer — signals.import.json).
 
 ---
 
-## Completed (this sprint — Sprint 62.P12 Investor Showcase UX/UI Upgrade 2026-06-03)
+## Completed (this sprint — Sprint 62.P15 Signal Engine import layer 2026-06-08)
+
+**Intent** — не подключая реальный Telegram, добавить слой импорта результатов внешнего «TG-BOT + Outreach»: читать drop-in файл `signals.import.json`, преобразовывать его obligation/contact-записи в формат `Signal` и показывать в Signals Feed. Mock-набор остаётся как fallback.
+
+**Как работает**
+- `web/src/lib/signalsImport.ts` (new) — типы сырого экспорта (`ImportedContact`, `ImportedObligation`, `ImportedSignalFile`), эвристические инференсы (contact_type / signal_type / source / pipeline-stage из kind / scheduling_status / category / возраста сообщения), `convertToSignals(file)` и `loadImportedSignals()`.
+- `loadImportedSignals()` — рантайм `fetch('/signals.import.json', {cache:'no-store'})` (drop-in, без пересборки). Любая проблема (нет файла, не-JSON, пусто, 0 сигналов, исключение) → `null` → fallback на mock `SIGNALS`.
+- `convertToSignals` — пропускает `status:done` и `scheduling_status:skipped`; `id = imp-<ob.id>`; черновик берётся ТОЛЬКО если экспорт его принёс (не фабрикуем), media — без черновика; `origin` = existing_base при найденном контакте.
+- `web/public/signals.import.json` (new) — синтетический пример экспорта: 4 контакта + 6 obligation (инвестор с черновиком, фаундер low-confidence, exit/Zoom с мячом на нашей стороне, медиа-канал, старый partnership, закрытый `done`).
+
+**Инварианты сохранены**
+- **Реальный Telegram НЕ подключён** — только оффлайн-импорт drop-in файла; имена/chat_id/ссылки в примере вымышлены.
+- **Не называем инвестором без доказательств** — категория investor на низкой уверенности понижается до `unknown`; честность отражена в `confidence` и `risk_of_error`.
+- **Нет сигнала → нет аутрича**; черновик не фабрикуется, привязан к signal_id.
+- Mock-набор (`SIGNALS`) остаётся полноценным fallback.
+
+**Что изменилось в UI** — `OutreachEngine` грузит импорт в `useEffect`, при `null` остаётся на mock; индикатор источника (`SourceBanner`): «Импорт TG-BOT + Outreach · N сигналов · дата экспорта» либо «Демо-набор (fallback)». Секции Signals Feed / Outreach Drafts / Follow-Up / Zoom Pipeline принимают `signals` пропом (раньше читали module-level `SIGNALS`).
+
+**Verification**
+- web tsc — pass; server tsc — pass; `npm run build` — pass.
+- Preview (FOUNDER, light): с файлом — баннер «Импорт TG-BOT + Outreach», 5 сигналов (закрытый `done` корректно отфильтрован), все 4 контакта в ленте; без файла (временно перемещён) — баннер «Демо-набор (fallback)», лента откатывается на синтетику.
+
+---
+
+## Completed (Sprint 62.P14 AI Outreach Engine → Signal Engine 2026-06-08)
+
+**Intent** — перепроектировать AI Outreach Engine из «CRM со скорингом инвесторов» в **систему поиска коммуникационных возможностей**. Рамка: не «кому написать», а «почему стоит написать именно сейчас». Главный объект — **Signal** (конкретный повод начать коммуникацию), НЕ Investor / Contact / Lead. Главный экран — **лента сигналов**, не список людей. (Заменяет невыпущенный вертикальный срез P13.)
+
+**Критерий успеха** — открыв модуль, пользователь сразу видит: с кем связаться сегодня, почему именно сейчас, что написать, какой следующий шаг и в чём риск ошибки.
+
+**Главный объект Signal** — карточка отвечает на 5 вопросов: что произошло / почему важно / почему релевантно проекту / что сделать / риск ошибки. Поля: contact_name, contact_type (investor/fund/founder/partner/media/expert/past_relationship/unknown), signal_type (14 типов: обсуждает инвестиции, ищет LP, pre-IPO, инвестировал в похожую, в релевантном чате, был на Zoom, давно нет контакта, мяч на нашей стороне, …), signal_source (Telegram-чат/комментарий/база/прошлый диалог/Zoom/CRM/вручную), why_found, why_important, why_relevant, action_recommendation, draft_message, next_step, risk_of_error, confidence (high/medium/low).
+
+**6 экранов (вкладки, Signals Feed — главный)**
+1. **Signals Feed** — лента из 8 синтетических сигналов; фильтры: уверенность (high/medium/low) + Все / Только инвесторы / Существующая база / Новые контакты / Telegram / Прошлые отношения / Follow-up / Подходит проекту.
+2. **Investability Engine (Investor Fit)** — ICP проекта + качественный fit (**high / medium / low / unknown**, без точных процентов) + объяснение + совпадающие темы + похожие инвесторы + риск ошибки. Фаундер Анна = `unknown` (демонстрация: не путать фаундера с инвестором).
+3. **Outreach Drafts** — каждый черновик привязан к `signal_id`, строится от сигнала («Увидел ваш комментарий про…»), а не от контакта.
+4. **Follow-Up Engine** — где мяч на нашей стороне, когда писать повторно, что написать (Дмитрий: Zoom + 120 дн тишины; Сергей: писал последним, мы не ответили).
+5. **Zoom Pipeline** — воронка Сигнал → Аутрич → Ответ → Zoom назначен → Zoom проведён → Follow-up → Сделка.
+6. **Learning Engine** — какие типы сигналов конвертируются (→ответ / →Zoom / →инвестиция / шум), относительные исторические показатели, явно «не прогноз по конкретному человеку».
+
+**Инварианты (перенесены из внешнего «TG-BOT + Outreach», живёт отдельно)**
+- **MOCK-ONLY** (CLAUDE.md 5a): нет реального Telegram, чтения чатов, баз и токенов — только синтетика в `web/src/lib/outreach.ts`.
+- **Агент сам не пишет**: готовит черновик, отправляет человек. Кнопка «Открыть чат» в демо отключена; deep-link `https://t.me/<username>?text=…` показан как механизм. Без @username — copy-only.
+- **Нет сигнала → нет аутрича**; черновик всегда привязан к signal_id.
+- **Не называем человека инвестором без доказательств**; канал/медиа («PE Daily») не трактуем как человека — у него нет черновика, действие «мониторить, не писать».
+- **Скоринг качественный** (fit-уровни), не точная вероятность.
+- **Стиль черновика**: короткий русский, «ёлочки», без буквы «е-с-точками», без длинного тире, без обещаний доходности / иксов / ликвидности.
+
+**Что изменилось в UI** — главным стал Signals Feed (раньше — список инвесторов со скором); investor score переименован в Investor Fit и переведён на high/medium/low/unknown + объяснение + риск; каждый черновик связан с конкретным signal_id.
+
+**Файлы**
+- `web/src/lib/outreach.ts` (rewrite) — модель вокруг `Signal` + `InvestorFit` + `SignalPerformance` + ICP; enum-лейблы (contact/signal/source/confidence/fit/pipeline/filter), хелперы `matchesFilter` / `chatDeepLink` / тон-функции; синтетика: 8 сигналов, 6 fit-записей, 8 строк learning.
+- `web/src/pages/OutreachEngine.tsx` (rewrite) — 6 вкладок на существующих UI-компонентах (Card/Button/StatusBadge/AppLayout); SignalCard (5 вопросов + риск + draft-блок), Investor Fit, Drafts, Follow-Up, Pipeline-воронка, Learning-таблица с относительными полосками.
+- `web/src/App.tsx`, `web/src/components/layout/Sidebar.tsx` — маршрут `/ai-leads/outreach` и пункт «AI Outreach» без изменений с P13.
+
+**Verification**
+- web tsc — pass; server tsc — pass; `npm run build` — pass.
+- Preview (FOUNDER, light): Signals Feed (8 сигналов, 5-вопросные карточки, фильтры, draft от sig-001 + deep-link); Investor Fit (HIGH/MEDIUM/LOW/unknown без процентов, ICP, риск); Drafts (6 черновиков с пометкой «ОТ СИГНАЛА sig-…»); Follow-Up (Дмитрий + Сергей, «мяч на нашей стороне», «Писать: Сегодня»); Zoom Pipeline (7 стадий заполнены); Learning (конверсия по типам + шум, «не прогноз по человеку»). Консоль чистая после reload. Компоненты на семантических токенах → корректны и в dark.
+
+---
+
+## Completed (Sprint 62.P12 Investor Showcase UX/UI Upgrade 2026-06-03)
 
 **Intent** — поднять `/opportunities` и `/opportunities/:id` с уровня «технический кабинет» до премиальной краудинвестинговой витрины (Republic / Seedrs / StartEngine / AngelList / Odin): визуал проектов, насыщенная светлая тема, real data room с реальными ссылками, эмоция инвестора (scarcity / social proof / ясный next step). Без cockpit/founder-UI; инвестор остаётся read-only.
 

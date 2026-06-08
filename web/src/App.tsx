@@ -18,6 +18,7 @@ import SalesAssistant from './pages/SalesAssistant';
 import Meetings from './pages/Meetings';
 import ConversationAnalysis from './pages/ConversationAnalysis';
 import AILeads from './pages/AILeads';
+import OutreachEngine from './pages/OutreachEngine';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminAudit from './pages/AdminAudit';
 import AdminKnowledge from './pages/AdminKnowledge';
@@ -71,6 +72,8 @@ export default function App() {
       <Route path="/demo/conversations" element={<RequireAuth><DemoConversationAnalysis /></RequireAuth>} />
       <Route path="/personal-manager" element={<RequireAuth><PersonalManager /></RequireAuth>} />
       <Route path="/ai-leads" element={<RequireAuth><AILeads /></RequireAuth>} />
+      {/* Sprint 62.P13 — AI Outreach Engine (демо, mock-only). Под AI-лиды. */}
+      <Route path="/ai-leads/outreach" element={<RequireAuth><OutreachEngine /></RequireAuth>} />
       <Route path="/sales-assistant" element={<RequireAuth><SalesAssistant /></RequireAuth>} />
       <Route path="/meetings" element={<RequireAuth><Meetings /></RequireAuth>} />
       <Route path="/conversation-analysis" element={<RequireAuth><ConversationAnalysis /></RequireAuth>} />
