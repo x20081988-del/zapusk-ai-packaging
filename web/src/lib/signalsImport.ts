@@ -1,241 +1,220 @@
-// Sprint 62.P15 — слой импорта реальных результатов «TG-BOT + Outreach».
+// Sprint 62.P16 — слой импорта реальных результатов «TG-BOT + Outreach».
 //
-// Реальный Telegram НЕ подключаем. Вместо живой интеграции — оффлайн-импорт:
-// внешний Python-проект экспортирует свои obligation/contact записи в файл
-// `public/signals.import.json`, а здесь мы преобразуем их в наш формат Signal
-// и показываем в Signals Feed. Если файла нет, он пуст или сломан — Signals Feed
-// откатывается на mock-набор (SIGNALS из lib/outreach).
+// Реальный Telegram НЕ подключаем. Внешний Python-проект экспортирует свои
+// сигналы в файл новой схемы (см. ImportedSignal), а здесь мы преобразуем их
+// в наш внутренний формат Signal и показываем в Signals Feed.
 //
-// Преобразование эвристическое: исходные obligation не несут явного типа
-// контакта и типа сигнала, поэтому мы их выводим из kind / scheduling_status /
-// category / возраста сообщения. Где доказательств мало — ставим unknown и
-// отражаем это в confidence и risk_of_error (не называем человека инвестором
-// без подтверждения).
+// Два источника данных (выбор режима — в OutreachEngine):
+//   • Owner Mode  → /signals.import.json — реальные сигналы. Файл НЕ коммитится
+//     (в .gitignore), генерируется владельцем локально. Нет файла → пустое
+//     состояние Owner Mode.
+//   • Safe Demo Mode → /signals.demo.json — обезличенные / синтетические сигналы.
+//     Нет файла → fallback на mock-набор SIGNALS из lib/outreach.
+//
+// Преобразование честное: где доказательств мало — ставим unknown и отражаем
+// это в confidence и risk_of_error. Канал/медиа не трактуем как человека.
 
 import type {
-  Signal, ContactType, SignalType, SignalSource, Confidence, PipelineStage, Origin,
+  Signal, ContactType, SignalType, SignalSource, Confidence, PipelineStage, Origin, Priority,
 } from './outreach';
 
-// ── сырой формат экспорта TG-BOT + Outreach ─────────────────────────────────
-// Повторяет модель внешнего проекта (obligation + contact). Все поля
-// опциональны: экспорт может быть частичным.
-export interface ImportedContact {
-  chat_id: number | string;
-  username?: string;
-  name?: string;
-  updated_ts?: number;
-}
-
-export interface ImportedObligation {
-  id: string | number;
-  chat_id?: number | string;
-  chat_name?: string;
-  message_id?: number | string;
-  message_link?: string;
-  source_text?: string;
-  kind?: string;              // mine | theirs | followup
-  who?: string;
-  to_whom?: string;
-  obligation_text?: string;
-  category?: string;          // investor | project | zapusk_ai | partnership | exit | ...
-  created_ts?: number;        // сек или мс
-  due_at?: string;
-  due_ts?: number | null;
-  confidence?: number;        // 0..1
-  status?: string;
-  notes?: string;
-  extracted_ts?: number;
-  scheduling_status?: string; // time_agreed | needs_time | needs_day | needs_confirm | scheduled | skipped
-  calendar_event_id?: string;
-  zoom_link?: string;
-  // расширения экспорта (если внешний бот их кладёт):
-  draft?: string;             // готовый черновик от бота
-  contact_type_hint?: string; // явный тип контакта, если экспорт его знает
+// ── новая схема экспорта сигналов (Sprint 62.P16) ───────────────────────────
+// Каждый сигнал самодостаточен (без отдельной таблицы контактов). Все поля,
+// кроме signal_id, опциональны: экспорт может быть частичным.
+export interface ImportedSignal {
+  signal_id: string | number;
+  signal_type?: string;        // telegram_investor_signal | ball_on_our_side | ...
+  signal_source?: string;      // telegram_chat | channel_comment | investor_base | ...
+  contact_name?: string;
+  contact_username?: string;   // @handle — попадает только в Owner-файл
+  contact_type?: string;       // investor | fund | founder | partner | media | ...
+  source_title?: string;       // название чата/источника
+  source_link?: string;        // ссылка на сообщение — только Owner-файл
+  signal_text?: string;
+  why_found?: string;
+  why_relevant?: string;
+  recommended_action?: string;
+  draft_message?: string;
+  next_step?: string;
+  risk_of_error?: string;
+  confidence?: string;         // high | medium | low
+  priority?: string;           // high | medium | low
+  created_at?: string;
+  expires_at?: string;
+  status?: string;             // open | done | closed | skipped | ...
 }
 
 export interface ImportedSignalFile {
   source?: string;
   exportedAt?: string;
   note?: string;
-  contacts?: ImportedContact[];
-  obligations?: ImportedObligation[];
+  mode?: 'demo' | 'owner';
+  signals?: ImportedSignal[];
 }
 
 const VALID_CONTACT_TYPES: ContactType[] = [
   'investor', 'fund', 'founder', 'partner', 'media', 'expert', 'past_relationship', 'unknown',
 ];
+const VALID_SOURCES: SignalSource[] = [
+  'telegram_chat', 'channel_comment', 'investor_base', 'past_dialog', 'zoom_history', 'crm', 'manual',
+];
 
-function tsToSeconds(ts?: number): number | undefined {
-  if (ts == null) return undefined;
-  return ts > 1e12 ? Math.floor(ts / 1000) : ts; // мс → сек
+// внешний тип сигнала → внутренний SignalType (для лейбла / фильтра / воронки).
+const SIGNAL_TYPE_MAP: Record<string, SignalType> = {
+  telegram_investor_signal: 'discussing_investments',
+  money_opportunity: 'discussing_investments',
+  warm_contact_stale: 'long_silence',
+  relationship_reactivation: 'long_silence',
+  lost_opportunity: 'long_silence',
+  ball_on_our_side: 'we_didnt_reply',
+  reply_opportunity: 'we_didnt_reply',
+  agreed_meeting: 'agreed_call',
+  needs_scheduling: 'agreed_call',
+};
+
+// типы, где мяч на нашей стороне (нужен наш шаг).
+const BALL_TYPES = new Set([
+  'ball_on_our_side', 'reply_opportunity', 'needs_scheduling', 'agreed_meeting',
+]);
+// типы, предполагающие уже существующие отношения.
+const EXISTING_TYPES = new Set([
+  'warm_contact_stale', 'relationship_reactivation', 'lost_opportunity',
+  'ball_on_our_side', 'reply_opportunity', 'agreed_meeting', 'needs_scheduling',
+]);
+
+function bucketConfidence(c?: string): Confidence {
+  return c === 'high' || c === 'medium' || c === 'low' ? c : 'low';
 }
 
-function daysAgo(ts?: number): number | undefined {
-  const sec = tsToSeconds(ts);
-  if (sec == null) return undefined;
-  const diff = Math.floor(Date.now() / 1000) - sec;
-  return Math.max(0, Math.round(diff / 86400));
+function bucketPriority(p?: string): Priority | undefined {
+  return p === 'high' || p === 'medium' || p === 'low' ? p : undefined;
 }
 
-function bucketConfidence(c?: number): Confidence {
-  if (c == null) return 'low';
-  if (c >= 0.75) return 'high';
-  if (c >= 0.5) return 'medium';
-  return 'low';
-}
-
-function inferContactType(ob: ImportedObligation, conf: Confidence): ContactType {
-  if (ob.contact_type_hint && VALID_CONTACT_TYPES.includes(ob.contact_type_hint as ContactType)) {
-    return ob.contact_type_hint as ContactType;
+function inferContactType(s: ImportedSignal, conf: Confidence): ContactType {
+  const raw = s.contact_type;
+  if (raw && VALID_CONTACT_TYPES.includes(raw as ContactType)) {
+    const t = raw as ContactType;
+    // не называем инвестором без доказательств: на низкой уверенности — unknown.
+    if (t === 'investor' && conf === 'low') return 'unknown';
+    return t;
   }
-  let base: ContactType;
-  switch (ob.category) {
-    case 'investor':
-    case 'exit': base = 'investor'; break;
-    case 'partnership': base = 'partner'; break;
-    case 'project': base = 'founder'; break;
-    case 'zapusk_ai': base = 'partner'; break;
-    default: base = 'unknown';
-  }
-  // не называем инвестором без доказательств: на низкой уверенности — unknown.
-  if (base === 'investor' && conf === 'low') return 'unknown';
-  return base;
+  return 'unknown';
 }
 
-function inferSignalType(ob: ImportedObligation, age?: number): SignalType {
-  const ss = ob.scheduling_status;
-  if (ss === 'scheduled') return 'past_zoom';
-  if (ss === 'time_agreed' || ss === 'needs_time' || ss === 'needs_day' || ss === 'needs_confirm') {
-    return 'agreed_call';
-  }
-  if (ob.zoom_link) return 'past_zoom';
-  if (ob.kind === 'followup' || ob.kind === 'mine') return 'we_didnt_reply';
-  if (age != null && age > 120) return 'long_silence';
-  if (ob.category === 'investor' || ob.category === 'exit') return 'discussing_investments';
-  if (ob.category === 'partnership') return 'seeking_partners';
+function inferSignalType(s: ImportedSignal): SignalType {
+  if (s.signal_type && SIGNAL_TYPE_MAP[s.signal_type]) return SIGNAL_TYPE_MAP[s.signal_type];
   return 'relevant_chat';
 }
 
-function inferSource(ob: ImportedObligation): SignalSource {
-  if (ob.scheduling_status === 'scheduled' || ob.zoom_link) return 'zoom_history';
-  if (ob.chat_name || ob.message_link) return 'telegram_chat';
+function inferSource(s: ImportedSignal): SignalSource {
+  if (s.signal_source && VALID_SOURCES.includes(s.signal_source as SignalSource)) {
+    return s.signal_source as SignalSource;
+  }
   return 'past_dialog';
 }
 
-function inferStage(ob: ImportedObligation): PipelineStage {
-  const ss = ob.scheduling_status;
-  if (ss === 'scheduled' || ss === 'time_agreed') return 'zoom_scheduled';
-  if (ss === 'needs_confirm') return 'outreach';
-  if (ss === 'needs_time' || ss === 'needs_day') return 'reply';
-  if (ob.kind === 'followup') return 'follow_up';
-  if (ob.zoom_link) return 'zoom_done';
-  return 'signal';
-}
-
-function ageLabel(age?: number): string {
-  if (age == null) return '';
-  if (age === 0) return 'сегодня';
-  if (age === 1) return 'вчера';
-  return `${age} дн назад`;
-}
-
-function buildWhyImportant(ob: ImportedObligation, sigType: SignalType, ball: boolean): string {
-  if (ball) return 'Мяч на нашей стороне — нужен ответ или шаг с нашей стороны.';
-  if (sigType === 'agreed_call') return 'Идёт согласование встречи — важно не потерять momentum.';
-  if (sigType === 'past_zoom') return 'Контакт уже был на Zoom — стадия горячая.';
-  if (sigType === 'long_silence') return 'Контакт давно молчит — повод слабый, нужен новый триггер.';
-  if (sigType === 'discussing_investments') return 'Активный интерес к инвест-теме прямо сейчас.';
-  return 'Повод зафиксирован — стоит оценить приоритет.';
-}
-
-function buildWhyRelevant(ob: ImportedObligation): string {
-  switch (ob.category) {
-    case 'investor':
-    case 'exit': return 'Тема инвестиций — потенциально релевантно проекту.';
-    case 'partnership': return 'Партнёрский трек — может усилить проект.';
-    case 'project': return 'Это фаундер / проект, не инвестор — другой сценарий работы.';
-    case 'zapusk_ai': return 'Касается Zapusk AI напрямую.';
-    default: return `Категория: ${ob.category || 'не определена'}.`;
+function inferStage(s: ImportedSignal): PipelineStage {
+  switch (s.signal_type) {
+    case 'agreed_meeting':
+    case 'needs_scheduling': return 'zoom_scheduled';
+    case 'ball_on_our_side':
+    case 'reply_opportunity': return 'outreach';
+    case 'warm_contact_stale':
+    case 'relationship_reactivation':
+    case 'lost_opportunity': return 'follow_up';
+    default: return 'signal';
   }
 }
 
-function buildAction(ob: ImportedObligation, sigType: SignalType, ball: boolean, ctype: ContactType): string {
-  if (ctype === 'media') return 'Мониторить, не писать как человеку.';
-  if (ball) return 'Ответить и закрыть открытый вопрос.';
-  if (sigType === 'agreed_call') return 'Подтвердить время и поставить Zoom.';
-  if (sigType === 'discussing_investments') return 'Мягкий заход, предложить короткий созвон.';
-  if (sigType === 'long_silence') return 'Не реактивировать вслепую — дождаться свежего повода.';
-  return 'Оценить контекст, при релевантности — мягкий заход.';
+function buildWhyImportant(s: ImportedSignal, ball: boolean): string {
+  if (ball) return 'Мяч на нашей стороне — нужен ответ или шаг с нашей стороны.';
+  switch (s.signal_type) {
+    case 'agreed_meeting':
+    case 'needs_scheduling': return 'Идёт согласование встречи — важно не потерять momentum.';
+    case 'telegram_investor_signal':
+    case 'money_opportunity': return 'Активный интерес к инвест-теме прямо сейчас — окно для тёплого захода.';
+    case 'warm_contact_stale':
+    case 'relationship_reactivation': return 'Тёплый контакт остывает — реактивация сейчас дешевле нового захода.';
+    case 'lost_opportunity': return 'Повод почти упущен — без свежего триггера заход будет слабым.';
+    default:
+      return s.priority === 'high'
+        ? 'Высокий приоритет — стоит обработать в первую очередь.'
+        : 'Повод зафиксирован — стоит оценить приоритет.';
+  }
 }
 
-function buildRisk(conf: Confidence, ctype: ContactType): string {
-  if (conf === 'low') return 'Низкая уверенность авто-извлечения — проверьте исходное сообщение.';
-  if (ctype === 'unknown') return 'Тип контакта не подтверждён — не называйте инвестором без проверки.';
-  return 'Контекст мог измениться с момента сигнала — сверьтесь перед заходом.';
+function fallbackText(...parts: (string | undefined)[]): string {
+  for (const p of parts) if (p && p.trim()) return p;
+  return '—';
 }
 
-function buildNextStep(ob: ImportedObligation, ball: boolean): string {
-  if (ob.due_at) return `Срок: ${ob.due_at}.`;
-  if (ball) return 'Ответить сегодня.';
-  return 'Поставить в очередь и следить за темой.';
-}
-
-// ── конвертер: obligation → Signal ──────────────────────────────────────────
-export function convertToSignals(file: ImportedSignalFile): Signal[] {
-  const obligations = Array.isArray(file.obligations) ? file.obligations : [];
-  const contacts = Array.isArray(file.contacts) ? file.contacts : [];
-  const byChat = new Map<string, ImportedContact>();
-  for (const c of contacts) byChat.set(String(c.chat_id), c);
-
+// ── конвертер: ImportedSignal → Signal ──────────────────────────────────────
+// ownerMode=false (Safe Demo) — НЕ переносим handle/sourceLink, даже если они
+// случайно попали в файл (защита от утечки на уровне рендера данных).
+export function convertToSignals(file: ImportedSignalFile, ownerMode: boolean): Signal[] {
+  const list = Array.isArray(file.signals) ? file.signals : [];
   const out: Signal[] = [];
-  for (const ob of obligations) {
-    if (ob == null || ob.id == null) continue;
-    if (ob.status === 'done' || ob.scheduling_status === 'skipped') continue;
 
-    const contact = ob.chat_id != null ? byChat.get(String(ob.chat_id)) : undefined;
-    const conf = bucketConfidence(ob.confidence);
-    const ctype = inferContactType(ob, conf);
-    const age = daysAgo(ob.created_ts);
-    const sigType = inferSignalType(ob, age);
-    const source = inferSource(ob);
-    const ball =
-      ob.kind === 'mine' || ob.kind === 'followup' ||
-      ['needs_time', 'needs_confirm', 'needs_day'].includes(ob.scheduling_status ?? '');
+  for (const s of list) {
+    if (s == null || s.signal_id == null) continue;
+    const status = (s.status || '').toLowerCase();
+    if (status === 'done' || status === 'closed' || status === 'skipped') continue;
 
-    const contactName =
-      contact?.name || ob.who || ob.to_whom || (ob.chat_name ? `Контакт · ${ob.chat_name}` : 'Контакт');
-    const handle = contact?.username ? contact.username.replace(/^@/, '') : undefined;
+    const conf = bucketConfidence(s.confidence);
+    const ctype = inferContactType(s, conf);
+    const sigType = inferSignalType(s);
+    const source = inferSource(s);
+    const ball = BALL_TYPES.has(s.signal_type ?? '');
+    const priority = bucketPriority(s.priority);
 
-    const whyFoundBits = [
-      ob.chat_name ? `Извлечено из «${ob.chat_name}»` : 'Извлечено из диалога',
-      ageLabel(age),
-    ].filter(Boolean).join(', ');
-    const whyFound = ob.obligation_text ? `${whyFoundBits}. ${ob.obligation_text}` : `${whyFoundBits}.`;
+    const handle = ownerMode && s.contact_username
+      ? s.contact_username.replace(/^@/, '')
+      : undefined;
+    const sourceLink = ownerMode ? (s.source_link || undefined) : undefined;
+    // media/канал — не предлагаем писать как человеку.
+    const draftMessage = ctype === 'media' ? undefined : (s.draft_message || undefined);
 
-    // черновик не фабрикуем: берём только если экспорт его принёс. media — без черновика.
-    const draftMessage = ctype === 'media' ? undefined : (ob.draft || undefined);
+    const whyFound = fallbackText(
+      s.why_found,
+      s.source_title ? `Источник: ${s.source_title}.` : undefined,
+    );
 
     out.push({
-      id: `imp-${ob.id}`,
-      contactName,
+      id: `imp-${s.signal_id}`,
+      contactName: fallbackText(s.contact_name, ctype === 'media' ? 'Канал / медиа' : 'Контакт'),
       contactType: ctype,
       signalType: sigType,
       signalSource: source,
-      signalText: ob.source_text || ob.obligation_text || 'Сигнал без текста.',
+      signalText: fallbackText(s.signal_text, s.why_found, 'Сигнал без текста.'),
       whyFound,
-      whyImportant: buildWhyImportant(ob, sigType, ball),
-      whyRelevant: buildWhyRelevant(ob),
-      actionRecommendation: buildAction(ob, sigType, ball, ctype),
-      riskOfError: buildRisk(conf, ctype),
-      nextStep: buildNextStep(ob, ball),
+      whyImportant: buildWhyImportant(s, ball),
+      whyRelevant: fallbackText(s.why_relevant, 'Релевантность требует проверки.'),
+      actionRecommendation: fallbackText(
+        s.recommended_action,
+        ball ? 'Ответить и закрыть открытый вопрос.' : 'Оценить контекст, при релевантности — мягкий заход.',
+      ),
+      riskOfError: fallbackText(
+        s.risk_of_error,
+        conf === 'low' ? 'Низкая уверенность авто-извлечения — проверьте исходный контекст.'
+          : ctype === 'unknown' ? 'Тип контакта не подтверждён — не называйте инвестором без проверки.'
+          : 'Контекст мог измениться с момента сигнала — сверьтесь перед заходом.',
+      ),
+      nextStep: fallbackText(
+        s.next_step,
+        s.expires_at ? `Срок: ${s.expires_at}.` : (ball ? 'Ответить сегодня.' : 'Поставить в очередь и следить за темой.'),
+      ),
       draftMessage,
       confidence: conf,
       handle,
-      origin: (contact ? 'existing_base' : 'new_contact') as Origin,
-      projectFit: ['investor', 'partnership', 'exit'].includes(ob.category ?? ''),
-      pipelineStage: inferStage(ob),
+      origin: (EXISTING_TYPES.has(s.signal_type ?? '') ? 'existing_base' : 'new_contact') as Origin,
+      projectFit: ctype === 'investor' || ctype === 'fund'
+        || ['telegram_investor_signal', 'money_opportunity'].includes(s.signal_type ?? ''),
+      pipelineStage: inferStage(s),
       ballOnOurSide: ball || undefined,
-      whenToFollowUp: ob.due_at || (ball ? 'Сегодня' : undefined),
+      whenToFollowUp: ball ? 'Сегодня' : (s.expires_at || undefined),
+      sourceTitle: s.source_title || undefined,
+      sourceLink,
+      priority,
     });
   }
   return out;
@@ -243,23 +222,32 @@ export function convertToSignals(file: ImportedSignalFile): Signal[] {
 
 export interface ImportedResult {
   signals: Signal[];
-  source: 'import';
   exportedAt?: string;
   note?: string;
 }
 
 // Грузим drop-in файл в рантайме (не bundling), чтобы можно было подменять
-// экспорт без пересборки. Любая проблема → null (fallback на mock).
-export async function loadImportedSignals(): Promise<ImportedResult | null> {
+// экспорт без пересборки. Любая проблема → null.
+async function loadFile(url: string, ownerMode: boolean): Promise<ImportedResult | null> {
   try {
-    const res = await fetch('/signals.import.json', { cache: 'no-store' });
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return null;
     const file = (await res.json()) as ImportedSignalFile;
-    if (!file || !Array.isArray(file.obligations) || file.obligations.length === 0) return null;
-    const signals = convertToSignals(file);
+    if (!file || !Array.isArray(file.signals) || file.signals.length === 0) return null;
+    const signals = convertToSignals(file, ownerMode);
     if (signals.length === 0) return null;
-    return { signals, source: 'import', exportedAt: file.exportedAt, note: file.note };
+    return { signals, exportedAt: file.exportedAt, note: file.note };
   } catch {
     return null;
   }
+}
+
+// Safe Demo Mode → /signals.demo.json (обезличено). Нет файла → null (fallback на mock).
+export function loadDemoSignals(): Promise<ImportedResult | null> {
+  return loadFile('/signals.demo.json', false);
+}
+
+// Owner Mode → /signals.import.json (реальные данные). Нет файла → null (пустое состояние).
+export function loadOwnerSignals(): Promise<ImportedResult | null> {
+  return loadFile('/signals.import.json', true);
 }

@@ -2,11 +2,35 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-08 (Sprint 62.P15: Signal Engine import layer — signals.import.json).
+Last updated: 2026-06-08 (Sprint 62.P16: Safe Demo Mode / Owner Mode + demo leak-check).
 
 ---
 
-## Completed (this sprint — Sprint 62.P15 Signal Engine import layer 2026-06-08)
+## Completed (this sprint — Sprint 62.P16 Safe Demo Mode + Owner Mode 2026-06-08)
+
+**Intent** — безопасный мост между внешним «TG-BOT + Outreach» и Zapusk AI. Реальные сигналы можно смотреть только в Owner Mode; демо и публичный интерфейс работают в Safe Demo Mode (механика Signal Engine без раскрытия реальных людей и источников). По умолчанию — Safe Demo Mode. Реальные имена, @username, ссылки, названия чатов и брендов не должны попасть в демо.
+
+**Объём в этом репо** — только Zapusk AI side (C/D/E + demo-файл). Python-скрипты `export_signals.py` / `export_demo_signals.py` (A/B) живут во внешнем проекте и сюда не входят.
+
+**Новая схема сигналов** — `signalsImport.ts` переписан под богатую схему экспорта (`signal_id`, `signal_type`, `signal_source`, `contact_name`, `contact_username`, `contact_type`, `source_title`, `source_link`, `signal_text`, `why_*`, `recommended_action`, `draft_message`, `next_step`, `risk_of_error`, `confidence`, `priority`, `created_at`, `expires_at`, `status`). Маппинг внешних типов (`telegram_investor_signal`, `ball_on_our_side`, `agreed_meeting`, `needs_scheduling`, `warm_contact_stale`, `relationship_reactivation`, `lost_opportunity`, `money_opportunity`, `reply_opportunity`) → внутренний `SignalType`/воронка/ball. Пропуск `done`/`closed`/`skipped`; investor на низкой уверенности → `unknown`; media → без черновика.
+
+**Два режима (по умолчанию Safe Demo)**
+- **Safe Demo Mode** → `/signals.demo.json` (обезличено), нет файла → fallback на mock `SIGNALS`. В UI прячем @username, `source_link`, кнопку «Открыть чат», deep-link; источник показываем обобщённо (`source_title` = «Венчурное сообщество #1»). Конвертер с `ownerMode=false` вообще не переносит handle/sourceLink (защита на уровне данных).
+- **Owner Mode** → `/signals.import.json` (реальные данные), нет файла → пустое состояние «Реальные сигналы ещё не экспортированы». Только здесь видны @username, ссылка, кнопка «Открыть чат», реальное имя/источник. Бейдж «Owner Mode — реальные данные».
+
+**Защита от утечки (demo_data_leak_check)** — `web/scripts/demoDataLeakCheck.mjs`, встроен в `web build` (падает первым). Проверяет `signals.demo.json` и UI-исходники: запрещённые поля (`contact_username`, `source_link`, `raw_message_text`), паттерны (@username, `t.me/`), бренд-денилист (FriendlyVC, PE-VC, САИК) и совпадения с реальными `contact_name`/`source_title`/`contact_username` из локального `signals.import.json`. Нарушение → exit 1, список нарушений, сборка останавливается.
+
+**git** — `web/public/signals.import.json` удалён из трекинга (`git rm --cached`) и добавлен в `.gitignore`: Owner-файл генерируется локально, реальные данные никогда не коммитятся. Коммитим только санитизированный `signals.demo.json`.
+
+**Файлы** — `web/src/lib/signalsImport.ts` (rewrite), `web/src/lib/outreach.ts` (+`Priority`, +`sourceTitle`/`sourceLink`/`priority` в `Signal`), `web/src/pages/OutreachEngine.tsx` (ModeBar, OwnerEmptyState, ownerMode-гейтинг в SignalCard/DraftBlock/Feed/Drafts/Follow-Up), `web/public/signals.demo.json` (new), `web/public/signals.import.json` (rewrite в новую схему, теперь gitignored), `web/scripts/demoDataLeakCheck.mjs` (new), `web/package.json` (leak-check в build), `.gitignore`.
+
+**Verification**
+- web tsc — pass; server tsc — pass; `npm run build` — pass (leak-check проходит первым: «signals.demo.json и UI-тексты чисты»).
+- Preview (FOUNDER, light): Safe Demo Mode по умолчанию — бейдж «данные обезличены», 7 демо-сигналов (закрытый отфильтрован), обобщённые источники и синтетические имена («Инвестор #14»), НЕТ @username / `t.me/` / брендов / кнопки «Открыть чат». Owner Mode — 3 реальных сигнала, реальное имя, `@k_morozov`, `t.me/`, кнопка «Открыть чат». Возврат в Safe Demo снова прячет всё закрытое.
+
+---
+
+## Completed (Sprint 62.P15 Signal Engine import layer 2026-06-08)
 
 **Intent** — не подключая реальный Telegram, добавить слой импорта результатов внешнего «TG-BOT + Outreach»: читать drop-in файл `signals.import.json`, преобразовывать его obligation/contact-записи в формат `Signal` и показывать в Signals Feed. Mock-набор остаётся как fallback.
 

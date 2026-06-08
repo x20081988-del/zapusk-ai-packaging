@@ -33,6 +33,12 @@ server/test-fixtures/audio/manifest.json
 # web
 web/dist
 
+# Sprint 62.P16 — Owner-Mode real signals export. Generated locally by the
+# external TG-BOT + Outreach project; must never be committed (real names,
+# @handles, t.me links, chat titles). Safe Demo Mode uses the committed
+# signals.demo.json instead.
+web/public/signals.import.json
+
 # stale tsc-emit (Vite uses .tsx; .js next to .tsx shadows imports)
 web/src/**/*.js
 web/tsconfig.tsbuildinfo

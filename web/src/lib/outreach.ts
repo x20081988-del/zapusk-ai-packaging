@@ -111,6 +111,17 @@ export function confidenceTone(c: Confidence): 'success' | 'warning' | 'neutral'
 // откуда контакт: уже в базе vs новый.
 export type Origin = 'existing_base' | 'new_contact';
 
+// приоритет повода (из экспорта реальных сигналов, Sprint 62.P16).
+export type Priority = 'high' | 'medium' | 'low';
+export const PRIORITY_LABEL: Record<Priority, string> = {
+  high: 'высокий приоритет',
+  medium: 'средний приоритет',
+  low: 'низкий приоритет',
+};
+export function priorityTone(p: Priority): 'danger' | 'warning' | 'neutral' {
+  return p === 'high' ? 'danger' : p === 'medium' ? 'warning' : 'neutral';
+}
+
 // ── воронка Zoom Pipeline ───────────────────────────────────────────────────
 export type PipelineStage =
   | 'signal'
@@ -157,6 +168,11 @@ export interface Signal {
   pipelineStage: PipelineStage;
   ballOnOurSide?: boolean;     // мяч на нашей стороне (follow-up)
   whenToFollowUp?: string;     // когда писать повторно
+  // Sprint 62.P16 — поля из экспорта реальных сигналов. В Safe Demo Mode
+  // sourceLink/handle не показываются; sourceTitle уже обобщён в demo-файле.
+  sourceTitle?: string;        // название источника (реальное в Owner / обобщённое в Demo)
+  sourceLink?: string;         // ссылка на сообщение — ТОЛЬКО Owner Mode
+  priority?: Priority;
 }
 
 // ── фильтры Signals Feed ────────────────────────────────────────────────────

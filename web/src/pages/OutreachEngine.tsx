@@ -14,7 +14,7 @@ import { Link } from 'react-router-dom';
 import {
   Radar, ShieldCheck, Target, MessageSquareText, Reply, Video, Brain,
   ArrowLeft, Copy, Check, ExternalLink, AlertTriangle, ArrowRight, Search,
-  Sparkles, CircleHelp, Clock, Download, FlaskConical,
+  Sparkles, CircleHelp, Clock, EyeOff, Lock, Inbox,
 } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card, CardHeader } from '../components/ui/Card';
@@ -28,7 +28,7 @@ import {
   type Signal, type SignalFilter, type Confidence, type PipelineStage,
   type SignalPerformance,
 } from '../lib/outreach';
-import { loadImportedSignals } from '../lib/signalsImport';
+import { loadDemoSignals, loadOwnerSignals } from '../lib/signalsImport';
 
 type Tab = 'feed' | 'fit' | 'drafts' | 'followup' | 'pipeline' | 'learning';
 const TABS: { id: Tab; label: string; icon: typeof Radar }[] = [
@@ -40,30 +40,45 @@ const TABS: { id: Tab; label: string; icon: typeof Radar }[] = [
   { id: 'learning', label: 'Learning', icon: Brain },
 ];
 
-// Источник ленты: реальный импорт TG-BOT (signals.import.json) или mock-fallback.
-type SignalSourceInfo =
-  | { kind: 'import'; signals: Signal[]; exportedAt?: string; note?: string }
+// Sprint 62.P16 — два режима данных.
+//   • demo  → /signals.demo.json (обезличено), fallback на mock SIGNALS.
+//   • owner → /signals.import.json (реальные данные), нет файла → пустое состояние.
+// По умолчанию — Safe Demo Mode.
+type Mode = 'demo' | 'owner';
+
+// Источник ленты в demo-режиме: обезличенный импорт или mock-fallback.
+type DemoSource =
+  | { kind: 'demo_import'; signals: Signal[]; exportedAt?: string }
   | { kind: 'mock'; signals: Signal[] };
 
 export default function OutreachEngine() {
   const [tab, setTab] = useState<Tab>('feed');
-  // По умолчанию — mock; если найдётся валидный импорт, переключимся на него.
-  const [src, setSrc] = useState<SignalSourceInfo>({ kind: 'mock', signals: SIGNALS });
-  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState<Mode>('demo');
+
+  // Safe Demo Mode: demo-файл или mock.
+  const [demoSrc, setDemoSrc] = useState<DemoSource>({ kind: 'mock', signals: SIGNALS });
+  const [demoLoading, setDemoLoading] = useState(true);
+  // Owner Mode: реальные сигналы (null = ещё не экспортированы).
+  const [owner, setOwner] = useState<{ signals: Signal[]; exportedAt?: string } | null>(null);
+  const [ownerLoading, setOwnerLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
-    loadImportedSignals()
+    loadDemoSignals()
       .then((res) => {
-        if (!alive) return;
-        if (res) setSrc({ kind: 'import', signals: res.signals, exportedAt: res.exportedAt, note: res.note });
-        // res === null → оставляем mock-fallback, заданный в initial state.
+        if (alive && res) setDemoSrc({ kind: 'demo_import', signals: res.signals, exportedAt: res.exportedAt });
       })
-      .finally(() => { if (alive) setLoading(false); });
+      .finally(() => { if (alive) setDemoLoading(false); });
+    loadOwnerSignals()
+      .then((res) => { if (alive) setOwner(res ? { signals: res.signals, exportedAt: res.exportedAt } : null); })
+      .finally(() => { if (alive) setOwnerLoading(false); });
     return () => { alive = false; };
   }, []);
 
-  const signals = src.signals;
+  const ownerMode = mode === 'owner';
+  const signals = ownerMode ? (owner?.signals ?? []) : demoSrc.signals;
+  // Owner Mode ещё грузится или файла нет → покажем пустое состояние вместо вкладок.
+  const ownerEmpty = ownerMode && !ownerLoading && owner === null;
 
   return (
     <AppLayout title="AI Outreach Engine">
@@ -76,7 +91,14 @@ export default function OutreachEngine() {
 
       <Hero />
 
-      <SourceBanner src={src} loading={loading} />
+      <ModeBar
+        mode={mode}
+        onChange={setMode}
+        demoSrc={demoSrc}
+        demoLoading={demoLoading}
+        owner={owner}
+        ownerLoading={ownerLoading}
+      />
 
       {/* вкладки: Signals Feed — главный, остальное подчинено */}
       <div className="flex flex-wrap gap-2 mt-5 mb-5">
@@ -99,43 +121,92 @@ export default function OutreachEngine() {
         })}
       </div>
 
-      {tab === 'feed' && <SignalsFeed signals={signals} />}
-      {tab === 'fit' && <InvestabilityEngine />}
-      {tab === 'drafts' && <OutreachDrafts signals={signals} />}
-      {tab === 'followup' && <FollowUpEngine signals={signals} />}
-      {tab === 'pipeline' && <ZoomPipeline signals={signals} />}
-      {tab === 'learning' && <LearningEngine />}
+      {ownerEmpty ? (
+        <OwnerEmptyState />
+      ) : (
+        <>
+          {tab === 'feed' && <SignalsFeed signals={signals} ownerMode={ownerMode} />}
+          {tab === 'fit' && <InvestabilityEngine />}
+          {tab === 'drafts' && <OutreachDrafts signals={signals} ownerMode={ownerMode} />}
+          {tab === 'followup' && <FollowUpEngine signals={signals} ownerMode={ownerMode} />}
+          {tab === 'pipeline' && <ZoomPipeline signals={signals} />}
+          {tab === 'learning' && <LearningEngine />}
+        </>
+      )}
     </AppLayout>
   );
 }
 
-// Индикатор источника ленты: импорт реальных результатов vs mock-fallback.
-function SourceBanner({ src, loading }: { src: SignalSourceInfo; loading: boolean }) {
-  if (loading) {
-    return (
-      <div className="mt-4 flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-[12px] text-muted">
-        <Clock size={14} className="text-muted shrink-0" /> Проверяю импорт signals.import.json…
-      </div>
-    );
-  }
-  if (src.kind === 'import') {
-    return (
-      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-ai/30 bg-ai/5 px-3 py-2 text-[12px] text-secondary">
-        <span className="inline-flex items-center gap-1.5 text-ai font-medium">
-          <Download size={14} /> Импорт TG-BOT + Outreach
-        </span>
-        <span className="text-muted">{src.signals.length} сигналов из signals.import.json</span>
-        {src.exportedAt && <span className="text-faint">· экспорт {new Date(src.exportedAt).toLocaleString('ru-RU')}</span>}
-      </div>
-    );
-  }
+// Переключатель режимов + бейдж текущего источника.
+function ModeBar({
+  mode, onChange, demoSrc, demoLoading, owner, ownerLoading,
+}: {
+  mode: Mode;
+  onChange: (m: Mode) => void;
+  demoSrc: DemoSource;
+  demoLoading: boolean;
+  owner: { signals: Signal[]; exportedAt?: string } | null;
+  ownerLoading: boolean;
+}) {
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-line bg-surface px-3 py-2 text-[12px] text-secondary">
-      <span className="inline-flex items-center gap-1.5 text-secondary font-medium">
-        <FlaskConical size={14} className="text-info" /> Демо-набор (fallback)
-      </span>
-      <span className="text-muted">signals.import.json не найден или пуст — показываю синтетику ({src.signals.length})</span>
+    <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1">
+        {(['demo', 'owner'] as Mode[]).map((m) => {
+          const active = mode === m;
+          const isOwner = m === 'owner';
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onChange(m)}
+              className={`inline-flex items-center gap-1.5 px-3 h-8 rounded-md text-[12px] font-medium transition-all ${
+                active
+                  ? isOwner ? 'bg-warning/15 text-warning' : 'bg-success/15 text-success'
+                  : 'text-muted hover:text-secondary'
+              }`}
+            >
+              {isOwner ? <Lock size={13} /> : <ShieldCheck size={13} />}
+              {isOwner ? 'Owner Mode' : 'Safe Demo Mode'}
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === 'demo' ? (
+        <div className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+          <StatusBadge tone="success" dot><EyeOff size={12} className="mr-1" />Safe Demo Mode — данные обезличены</StatusBadge>
+          <span className="text-muted">
+            {demoLoading ? 'загрузка…'
+              : demoSrc.kind === 'demo_import' ? `${demoSrc.signals.length} демо-сигналов`
+              : `mock-fallback (${demoSrc.signals.length})`}
+          </span>
+        </div>
+      ) : (
+        <div className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
+          <StatusBadge tone="warning" dot>Owner Mode — реальные данные</StatusBadge>
+          <span className="text-muted">
+            {ownerLoading ? 'загрузка…' : owner ? `${owner.signals.length} реальных сигналов` : 'не экспортированы'}
+          </span>
+        </div>
+      )}
     </div>
+  );
+}
+
+// Owner Mode без экспортированного файла.
+function OwnerEmptyState() {
+  return (
+    <Card className="text-center py-12">
+      <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-elevated border border-line mb-3">
+        <Inbox size={22} className="text-muted" />
+      </div>
+      <div className="text-[15px] font-semibold text-primary">Реальные сигналы ещё не экспортированы</div>
+      <p className="text-[13px] text-muted mt-2 max-w-md mx-auto leading-relaxed">
+        Owner Mode читает <code className="text-secondary">signals.import.json</code>. Файл не закоммичен и
+        генерируется локально экспортом из внешнего «TG-BOT + Outreach». Пока файла нет — переключитесь в
+        Safe Demo Mode, чтобы посмотреть механику на обезличенных данных.
+      </p>
+    </Card>
   );
 }
 
@@ -171,7 +242,7 @@ function Hero() {
 }
 
 // ── 1. Signals Feed (главный экран) ─────────────────────────────────────────
-function SignalsFeed({ signals }: { signals: Signal[] }) {
+function SignalsFeed({ signals, ownerMode }: { signals: Signal[]; ownerMode: boolean }) {
   const [conf, setConf] = useState<Set<Confidence>>(new Set());
   const [filter, setFilter] = useState<SignalFilter>('all');
 
@@ -217,7 +288,7 @@ function SignalsFeed({ signals }: { signals: Signal[] }) {
       <div className="text-[11px] text-muted mb-3 px-1">{visible.length} сигналов</div>
 
       <div className="space-y-4">
-        {visible.map((s) => <SignalCard key={s.id} s={s} />)}
+        {visible.map((s) => <SignalCard key={s.id} s={s} ownerMode={ownerMode} />)}
         {visible.length === 0 && (
           <Card className="text-center text-sm text-muted py-10">Под выбранные фильтры сигналов нет.</Card>
         )}
@@ -247,7 +318,9 @@ function FilterChip({
 }
 
 // карточка сигнала отвечает на 5 вопросов.
-function SignalCard({ s }: { s: Signal }) {
+// ownerMode=false (Safe Demo): @handle не показываем; источник — обобщённый sourceTitle.
+function SignalCard({ s, ownerMode }: { s: Signal; ownerMode: boolean }) {
+  const sourceLabel = s.sourceTitle || SOURCE_LABEL[s.signalSource];
   return (
     <Card accent={s.confidence === 'high' ? 'ai' : null}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -255,14 +328,14 @@ function SignalCard({ s }: { s: Signal }) {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[15px] font-semibold text-primary">{s.contactName}</span>
             <StatusBadge tone={contactTypeTone(s.contactType)}>{CONTACT_TYPE_LABEL[s.contactType]}</StatusBadge>
-            {s.handle && <span className="text-[11px] text-muted">@{s.handle}</span>}
+            {ownerMode && s.handle && <span className="text-[11px] text-muted">@{s.handle}</span>}
           </div>
           <div className="mt-1.5 inline-flex items-center gap-2 text-[12px]">
             <span className="px-2 h-6 inline-flex items-center rounded-md bg-ai/10 text-ai font-medium">
               {SIGNAL_TYPE_LABEL[s.signalType]}
             </span>
             <span className="text-faint">·</span>
-            <span className="text-muted">{SOURCE_LABEL[s.signalSource]}</span>
+            <span className="text-muted">{sourceLabel}</span>
           </div>
         </div>
         <StatusBadge tone={confidenceTone(s.confidence)} dot>confidence: {CONFIDENCE_LABEL[s.confidence]}</StatusBadge>
@@ -283,7 +356,7 @@ function SignalCard({ s }: { s: Signal }) {
 
       {/* черновик строится ОТ сигнала; нет повода писать как человеку → нет черновика */}
       {s.draftMessage ? (
-        <DraftBlock signalId={s.id} draft={s.draftMessage} handle={s.handle} nextStep={s.nextStep} />
+        <DraftBlock signalId={s.id} draft={s.draftMessage} handle={s.handle} nextStep={s.nextStep} ownerMode={ownerMode} />
       ) : (
         <div className="mt-3 flex items-start gap-2 rounded-md border border-line bg-elevated px-3 py-2 text-[12px] text-muted">
           <CircleHelp size={14} className="shrink-0 mt-0.5 text-info" />
@@ -304,11 +377,13 @@ function QA({ q, a, sub }: { q: string; a: string; sub?: string }) {
   );
 }
 
+// ownerMode=false (Safe Demo): кнопка «Открыть чат» и deep-link (t.me/...) скрыты —
+// в демо нет реального @handle и ссылок. Черновик копировать можно (он синтетический).
 function DraftBlock({
-  signalId, draft, handle, nextStep,
-}: { signalId: string; draft: string; handle?: string; nextStep: string }) {
+  signalId, draft, handle, nextStep, ownerMode,
+}: { signalId: string; draft: string; handle?: string; nextStep: string; ownerMode: boolean }) {
   const [copied, setCopied] = useState(false);
-  const deepLink = chatDeepLink(handle, draft);
+  const deepLink = ownerMode ? chatDeepLink(handle, draft) : null;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(draft);
@@ -324,9 +399,11 @@ function DraftBlock({
       </div>
       <p className="text-[13px] text-primary leading-relaxed whitespace-pre-wrap">{draft}</p>
       <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-3">
-        <Button variant="ai" size="sm" iconLeft={<ExternalLink size={14} />} disabled title="В демо отправка отключена">
-          Открыть чат
-        </Button>
+        {ownerMode && (
+          <Button variant="ai" size="sm" iconLeft={<ExternalLink size={14} />} disabled title="Отправка отключена — отправляете вы вручную">
+            Открыть чат
+          </Button>
+        )}
         <Button variant="secondary" size="sm" iconLeft={copied ? <Check size={14} /> : <Copy size={14} />} onClick={copy}>
           {copied ? 'Скопировано' : 'Скопировать'}
         </Button>
@@ -407,7 +484,7 @@ function InvestabilityEngine() {
 }
 
 // ── 3. Outreach Drafts (каждый черновик от signal_id) ───────────────────────
-function OutreachDrafts({ signals }: { signals: Signal[] }) {
+function OutreachDrafts({ signals, ownerMode }: { signals: Signal[]; ownerMode: boolean }) {
   const withDraft = signals.filter((s) => s.draftMessage);
   return (
     <div className="space-y-4">
@@ -425,7 +502,7 @@ function OutreachDrafts({ signals }: { signals: Signal[] }) {
             </span>
           </div>
           <div className="mt-2 text-[12px] text-muted">Повод: {s.signalText}</div>
-          <DraftBlock signalId={s.id} draft={s.draftMessage!} handle={s.handle} nextStep={s.nextStep} />
+          <DraftBlock signalId={s.id} draft={s.draftMessage!} handle={s.handle} nextStep={s.nextStep} ownerMode={ownerMode} />
         </Card>
       ))}
     </div>
@@ -433,7 +510,7 @@ function OutreachDrafts({ signals }: { signals: Signal[] }) {
 }
 
 // ── 4. Follow-Up Engine (мяч на нашей стороне) ──────────────────────────────
-function FollowUpEngine({ signals }: { signals: Signal[] }) {
+function FollowUpEngine({ signals, ownerMode }: { signals: Signal[]; ownerMode: boolean }) {
   const items = signals.filter((s) => s.ballOnOurSide);
   return (
     <div className="space-y-4">
@@ -457,7 +534,7 @@ function FollowUpEngine({ signals }: { signals: Signal[] }) {
               </span>
             )}
           </div>
-          {s.draftMessage && <DraftBlock signalId={s.id} draft={s.draftMessage} handle={s.handle} nextStep={s.nextStep} />}
+          {s.draftMessage && <DraftBlock signalId={s.id} draft={s.draftMessage} handle={s.handle} nextStep={s.nextStep} ownerMode={ownerMode} />}
         </Card>
       ))}
       {items.length === 0 && <Card className="text-center text-sm text-muted py-10">Открытых follow-up нет.</Card>}
