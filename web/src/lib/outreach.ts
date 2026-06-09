@@ -141,7 +141,7 @@ export const PIPELINE_LABEL: Record<PipelineStage, string> = {
   reply: 'Ответ',
   zoom_scheduled: 'Zoom назначен',
   zoom_done: 'Zoom проведён',
-  follow_up: 'Follow-up',
+  follow_up: 'Фоллоу-ап',
   deal: 'Сделка / партнёрство',
 };
 
@@ -193,7 +193,7 @@ export const FILTER_LABEL: Record<SignalFilter, string> = {
   new_contacts: 'Новые контакты',
   telegram: 'Telegram-сигналы',
   past_relationship: 'Прошлые отношения',
-  follow_up: 'Follow-up',
+  follow_up: 'Фоллоу-ап',
   project_fit: 'Подходит проекту',
 };
 
@@ -224,10 +224,10 @@ export function chatDeepLink(handle: string | undefined, draft: string | undefin
 // Качественная оценка похожести на целевого инвестора проекта. НЕ точная вероятность.
 export type FitLevel = 'high_fit' | 'medium_fit' | 'low_fit' | 'unknown';
 export const FIT_LABEL: Record<FitLevel, string> = {
-  high_fit: 'high fit',
-  medium_fit: 'medium fit',
-  low_fit: 'low fit',
-  unknown: 'unknown',
+  high_fit: 'высокая',
+  medium_fit: 'средняя',
+  low_fit: 'низкая',
+  unknown: 'неизвестно',
 };
 export function fitTone(f: FitLevel): 'success' | 'zapusk' | 'warning' | 'neutral' {
   if (f === 'high_fit') return 'success';

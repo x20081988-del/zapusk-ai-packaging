@@ -32,12 +32,12 @@ import { loadDemoSignals, loadOwnerSignals } from '../lib/signalsImport';
 
 type Tab = 'feed' | 'fit' | 'drafts' | 'followup' | 'pipeline' | 'learning';
 const TABS: { id: Tab; label: string; icon: typeof Radar }[] = [
-  { id: 'feed', label: 'Signals Feed', icon: Radar },
-  { id: 'fit', label: 'Investor Fit', icon: Target },
-  { id: 'drafts', label: 'Outreach Drafts', icon: MessageSquareText },
-  { id: 'followup', label: 'Follow-Up', icon: Reply },
-  { id: 'pipeline', label: 'Zoom Pipeline', icon: Video },
-  { id: 'learning', label: 'Learning', icon: Brain },
+  { id: 'feed', label: 'Лента сигналов', icon: Radar },
+  { id: 'fit', label: 'Релевантность инвестора', icon: Target },
+  { id: 'drafts', label: 'Черновики сообщений', icon: MessageSquareText },
+  { id: 'followup', label: 'Фоллоу-ап', icon: Reply },
+  { id: 'pipeline', label: 'Zoom Воронка', icon: Video },
+  { id: 'learning', label: 'Обучение', icon: Brain },
 ];
 
 // Sprint 62.P16 — два режима данных.
@@ -81,7 +81,7 @@ export default function OutreachEngine() {
   const ownerEmpty = ownerMode && !ownerLoading && owner === null;
 
   return (
-    <AppLayout title="AI Outreach Engine">
+    <AppLayout title="AI-аутрич">
       <Link
         to="/ai-leads"
         className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-primary transition-colors mb-4"
@@ -166,7 +166,7 @@ function ModeBar({
               }`}
             >
               {isOwner ? <Lock size={13} /> : <ShieldCheck size={13} />}
-              {isOwner ? 'Owner Mode' : 'Safe Demo Mode'}
+              {isOwner ? 'Режим проекта' : 'Безопасное демо'}
             </button>
           );
         })}
@@ -174,16 +174,16 @@ function ModeBar({
 
       {mode === 'demo' ? (
         <div className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
-          <StatusBadge tone="success" dot><EyeOff size={12} className="mr-1" />Safe Demo Mode — данные обезличены</StatusBadge>
+          <StatusBadge tone="success" dot><EyeOff size={12} className="mr-1" />Безопасное демо — данные обезличены</StatusBadge>
           <span className="text-muted">
             {demoLoading ? 'загрузка…'
               : demoSrc.kind === 'demo_import' ? `${demoSrc.signals.length} демо-сигналов`
-              : `mock-fallback (${demoSrc.signals.length})`}
+              : `резервные данные (${demoSrc.signals.length})`}
           </span>
         </div>
       ) : (
         <div className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]">
-          <StatusBadge tone="warning" dot>Owner Mode — реальные данные</StatusBadge>
+          <StatusBadge tone="warning" dot>Режим проекта — реальные данные</StatusBadge>
           <span className="text-muted">
             {ownerLoading ? 'загрузка…' : owner ? `${owner.signals.length} реальных сигналов` : 'не экспортированы'}
           </span>
@@ -202,9 +202,9 @@ function OwnerEmptyState() {
       </div>
       <div className="text-[15px] font-semibold text-primary">Реальные сигналы ещё не экспортированы</div>
       <p className="text-[13px] text-muted mt-2 max-w-md mx-auto leading-relaxed">
-        Owner Mode читает <code className="text-secondary">signals.import.json</code>. Файл не закоммичен и
+        Режим проекта читает <code className="text-secondary">signals.import.json</code>. Файл не закоммичен и
         генерируется локально экспортом из внешнего «TG-BOT + Outreach». Пока файла нет — переключитесь в
-        Safe Demo Mode, чтобы посмотреть механику на обезличенных данных.
+        Безопасное демо, чтобы посмотреть механику на обезличенных данных.
       </p>
     </Card>
   );
@@ -219,7 +219,7 @@ function Hero() {
         <div className="relative">
           <div className="flex items-center gap-2 mb-3">
             <span className="inline-flex items-center gap-1.5 px-2.5 h-7 rounded-md bg-ai/15 border border-ai/30 text-ai text-[11px] font-semibold">
-              <Radar size={13} /> Signal Engine
+              <Radar size={13} /> Сигналы
             </span>
             <StatusBadge tone="neutral" dot>Демо · синтетика</StatusBadge>
           </div>
@@ -338,7 +338,7 @@ function SignalCard({ s, ownerMode }: { s: Signal; ownerMode: boolean }) {
             <span className="text-muted">{sourceLabel}</span>
           </div>
         </div>
-        <StatusBadge tone={confidenceTone(s.confidence)} dot>confidence: {CONFIDENCE_LABEL[s.confidence]}</StatusBadge>
+        <StatusBadge tone={confidenceTone(s.confidence)} dot>уверенность: {CONFIDENCE_LABEL[s.confidence]}</StatusBadge>
       </div>
 
       <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
@@ -429,7 +429,7 @@ function InvestabilityEngine() {
     <div className="space-y-5">
       <Card accent="zapusk">
         <CardHeader
-          title={<span className="inline-flex items-center gap-2"><Target size={15} className="text-zapusk" /> ICP проекта</span>}
+          title={<span className="inline-flex items-center gap-2"><Target size={15} className="text-zapusk" /> Профиль целевого инвестора</span>}
           subtitle={`Целевой инвестор проекта «${PROJECT_ICP.projectName}» — база для сравнения`}
         />
         <p className="text-[13px] text-secondary leading-relaxed">{PROJECT_ICP.summary}</p>
@@ -443,7 +443,7 @@ function InvestabilityEngine() {
 
       <div className="rounded-md border border-info/30 bg-info/5 px-3 py-2 text-[12px] text-secondary inline-flex items-start gap-2">
         <Sparkles size={14} className="text-info shrink-0 mt-0.5" />
-        Fit — качественная оценка похожести, не точная вероятность. Используем high / medium / low / unknown с объяснением и риском ошибки.
+        Релевантность — качественная оценка похожести, не точная вероятность. Используем градации «высокая / средняя / низкая / неизвестно» с объяснением и риском ошибки.
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -537,7 +537,7 @@ function FollowUpEngine({ signals, ownerMode }: { signals: Signal[]; ownerMode: 
           {s.draftMessage && <DraftBlock signalId={s.id} draft={s.draftMessage} handle={s.handle} nextStep={s.nextStep} ownerMode={ownerMode} />}
         </Card>
       ))}
-      {items.length === 0 && <Card className="text-center text-sm text-muted py-10">Открытых follow-up нет.</Card>}
+      {items.length === 0 && <Card className="text-center text-sm text-muted py-10">Открытых фоллоу-ап нет.</Card>}
     </div>
   );
 }
@@ -548,7 +548,7 @@ function ZoomPipeline({ signals }: { signals: Signal[] }) {
   return (
     <div>
       <div className="text-[12px] text-muted px-1 mb-4">
-        Сигнал → Аутрич → Ответ → Zoom назначен → Zoom проведён → Follow-up → Сделка.
+        Сигнал → Аутрич → Ответ → Zoom назначен → Zoom проведён → Фоллоу-ап → Сделка.
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
         {PIPELINE_ORDER.map((stage) => {
