@@ -25,6 +25,7 @@ import {
   SIGNAL_TYPE_LABEL, CONTACT_TYPE_LABEL, SOURCE_LABEL, CONFIDENCE_LABEL,
   FILTER_LABEL, FIT_LABEL, PIPELINE_LABEL, PIPELINE_ORDER,
   contactTypeTone, confidenceTone, fitTone, matchesFilter, chatDeepLink,
+  DEAL_LEARNING,
   type Signal, type SignalFilter, type Confidence, type PipelineStage,
   type SignalPerformance,
 } from '../lib/outreach';
@@ -32,8 +33,8 @@ import { loadDemoSignals, loadOwnerSignals } from '../lib/signalsImport';
 
 type Tab = 'feed' | 'fit' | 'drafts' | 'followup' | 'pipeline' | 'learning';
 const TABS: { id: Tab; label: string; icon: typeof Radar }[] = [
-  { id: 'feed', label: 'Лента сигналов', icon: Radar },
   { id: 'fit', label: 'Релевантность инвестора', icon: Target },
+  { id: 'feed', label: 'Лента сигналов', icon: Radar },
   { id: 'drafts', label: 'Черновики сообщений', icon: MessageSquareText },
   { id: 'followup', label: 'Фоллоу-ап', icon: Reply },
   { id: 'pipeline', label: 'Zoom Воронка', icon: Video },
@@ -52,7 +53,7 @@ type DemoSource =
   | { kind: 'mock'; signals: Signal[] };
 
 export default function OutreachEngine() {
-  const [tab, setTab] = useState<Tab>('feed');
+  const [tab, setTab] = useState<Tab>('fit');
   const [mode, setMode] = useState<Mode>('demo');
 
   // Safe Demo Mode: demo-файл или mock.
@@ -219,7 +220,7 @@ function Hero() {
         <div className="relative">
           <div className="flex items-center gap-2 mb-3">
             <span className="inline-flex items-center gap-1.5 px-2.5 h-7 rounded-md bg-ai/15 border border-ai/30 text-ai text-[11px] font-semibold">
-              <Radar size={13} /> Сигналы
+              <Radar size={13} /> AI-отдел привлечения капитала
             </span>
             <StatusBadge tone="neutral" dot>Демо · синтетика</StatusBadge>
           </div>
@@ -227,11 +228,13 @@ function Hero() {
             Не «кому написать», а «почему стоит написать именно сейчас»
           </h2>
           <p className="text-sm text-secondary mt-2 max-w-2xl leading-relaxed">
-            Движок анализирует Telegram-чаты, каналы, базу инвесторов, историю диалогов, Zoom и CRM
-            и показывает не людей, а <span className="text-primary font-medium">поводы для коммуникации</span>.
-            Каждый сигнал отвечает: что произошло, почему важно, чем релевантно проекту, что сделать и какой риск ошибки.
+            Система не хранит контакты. Она изучает историю привлечения капитала проекта —
+            <span className="text-primary font-medium"> кто уже инвестировал, кто рассматривал сделку и отказался, почему принимались решения</span> —
+            и находит новых инвесторов, максимально похожих на тех, кто уже зашёл в проект.
+            Telegram — первая интеграция; архитектура рассчитана на WhatsApp, LinkedIn, X и другие каналы.
           </p>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 text-[12px] text-muted">
+            <span className="inline-flex items-center gap-1.5"><Brain size={14} className="text-ai" /> Учится на ваших сделках — это и есть преимущество</span>
             <span className="inline-flex items-center gap-1.5"><ShieldCheck size={14} className="text-success" /> Агент сам не пишет — отправляете вы</span>
             <span className="inline-flex items-center gap-1.5"><Search size={14} className="text-ai" /> Нет сигнала — нет аутрича</span>
           </div>
@@ -427,10 +430,61 @@ function DraftBlock({
 function InvestabilityEngine() {
   return (
     <div className="space-y-5">
+      {/* ядро продукта: обучение на реальных сделках — то, что сложно повторить */}
+      <Card accent="ai">
+        <CardHeader
+          title={<span className="inline-flex items-center gap-2"><Brain size={15} className="text-ai" /> Ядро системы — обучение на ваших сделках</span>}
+          subtitle="AI изучает не только тех, кто инвестировал, но и тех, кто отказался, и строит модель инвестиционного решения именно для этого проекта"
+        />
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-lg border border-line bg-elevated px-3 py-2.5 text-center">
+            <div className="text-[20px] font-semibold text-primary font-num">{DEAL_LEARNING.dealsAnalyzed}</div>
+            <div className="text-[10px] text-muted uppercase tracking-wide mt-0.5">сделок в анализе</div>
+          </div>
+          <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2.5 text-center">
+            <div className="text-[20px] font-semibold text-success font-num">{DEAL_LEARNING.invested}</div>
+            <div className="text-[10px] text-muted uppercase tracking-wide mt-0.5">инвестировали</div>
+          </div>
+          <div className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 text-center">
+            <div className="text-[20px] font-semibold text-warning font-num">{DEAL_LEARNING.declined}</div>
+            <div className="text-[10px] text-muted uppercase tracking-wide mt-0.5">отказались</div>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
+          <div>
+            <div className="text-[10px] text-faint uppercase tracking-wide mb-1.5">На какие вопросы отвечает модель</div>
+            <ul className="space-y-1">
+              {DEAL_LEARNING.questions.map((q) => (
+                <li key={q} className="text-[12px] text-secondary leading-snug flex gap-1.5">
+                  <CircleHelp size={13} className="text-info shrink-0 mt-0.5" /> {q}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <div className="text-[10px] text-faint uppercase tracking-wide mb-1.5">Что модель уже выявила</div>
+            <ul className="space-y-1">
+              {DEAL_LEARNING.patterns.map((p) => (
+                <li key={p} className="text-[12px] text-secondary leading-snug flex gap-1.5">
+                  <Sparkles size={13} className="text-ai shrink-0 mt-0.5" /> {p}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        <div className="mt-4 flex items-start gap-2 rounded-md border border-ai/30 bg-ai/5 px-3 py-2.5">
+          <Target size={15} className="text-ai shrink-0 mt-0.5" />
+          <div className="text-[13px] text-secondary">
+            Среди контактов проекта найдено <span className="text-primary font-semibold">{DEAL_LEARNING.lookalikeCount}</span> человек
+            с профилем поведения, максимально похожим на действующих инвесторов. Ниже — почему именно они.
+          </div>
+        </div>
+      </Card>
+
       <Card accent="zapusk">
         <CardHeader
           title={<span className="inline-flex items-center gap-2"><Target size={15} className="text-zapusk" /> Профиль целевого инвестора</span>}
-          subtitle={`Целевой инвестор проекта «${PROJECT_ICP.projectName}» — база для сравнения`}
+          subtitle={`Не задан вручную — выведен моделью из истории сделок проекта «${PROJECT_ICP.projectName}»`}
         />
         <p className="text-[13px] text-secondary leading-relaxed">{PROJECT_ICP.summary}</p>
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -548,7 +602,8 @@ function ZoomPipeline({ signals }: { signals: Signal[] }) {
   return (
     <div>
       <div className="text-[12px] text-muted px-1 mb-4">
-        Сигнал → Аутрич → Ответ → Zoom назначен → Zoom проведён → Фоллоу-ап → Сделка.
+        Путь к сделке: Сигнал → Контакт → Коммуникация → Zoom → Проверка (DD) → Инвестиция.
+        AI показывает, где находится каждый контакт и где теряются потенциальные сделки.
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
         {PIPELINE_ORDER.map((stage) => {

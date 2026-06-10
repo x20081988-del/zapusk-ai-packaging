@@ -2,11 +2,27 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-08 (Sprint 62.P16: Safe Demo Mode / Owner Mode + demo leak-check).
+Last updated: 2026-06-10 (Sprint 62.P17: AI-аутрич — русификация UI + разворот позиционирования на обучение на сделках).
 
 ---
 
-## Completed (this sprint — Sprint 62.P16 Safe Demo Mode + Owner Mode 2026-06-08)
+## Completed (this sprint — Sprint 62.P17 AI-аутрич: русификация + разворот позиционирования 2026-06-10)
+
+**Intent** — два связанных изменения демо AI-аутрича на сайте.
+
+**1. Русификация UI** — убраны англицизмы/латиница из экрана (по согласованным с владельцем формулировкам). Заголовок «AI Outreach Engine» → «AI-аутрич»; бейдж «Signal Engine» → «Сигналы»; режимы «Safe Demo / Owner» → «Безопасное демо / Режим проекта»; вкладки «Signals Feed / Investor Fit / Outreach Drafts / Follow-Up / Zoom Pipeline / Learning» → «Лента сигналов / Релевантность инвестора / Черновики сообщений / Фоллоу-ап / Zoom Воронка / Обучение»; `confidence:` → `уверенность:`; `FIT_LABEL` (high/medium/low fit, unknown) → «высокая/средняя/низкая/неизвестно»; этапы воронки `Аутрич`/`Фоллоу-ап`. Бренды и финтермины оставлены (Telegram, Zoom, CRM, IPO, M&A, LP, pre-IPO). Также пункт сайдбара «AI Outreach» → «AI-аутрич».
+
+**2. Разворот позиционирования** — продукт перестаёт звучать как «поиск инвесторов в Telegram». Ядро = обучение на истории сделок проекта (кто инвестировал / кто отказался / почему) → модель инвестиционного решения → похожие новые инвесторы. Hero переписан под «AI-отдел привлечения капитала»; добавлен `DEAL_LEARNING` (синтетика: 34 сделки / 9 инвестировали / 25 отказались, вопросы модели, выявленные закономерности, 7 lookalike-контактов). **Investability Engine сделан центральным**: вкладка «Релевантность инвестора» — первая и открывается по умолчанию, наверху блок «Ядро системы — обучение на ваших сделках»; ICP-подпись переформулирована («не задан вручную — выведен моделью из истории сделок»). Воронка Zoom описана как «Сигнал → Контакт → Коммуникация → Zoom → Проверка (DD) → Инвестиция».
+
+**Инварианты сохранены** — MOCK-only, Safe Demo по умолчанию, leak-check проходит; реальный Telegram не подключается, цифры/данные синтетические.
+
+**Файлы** — `web/src/pages/OutreachEngine.tsx`, `web/src/lib/outreach.ts` (+`DEAL_LEARNING`), `web/src/components/layout/Sidebar.tsx`.
+
+**Verification** — web tsc — pass; `npm run build` — pass (leak-check: «signals.demo.json и UI-тексты чисты»). Preview (FOUNDER, light): страница открывается на «Релевантность инвестора», виден блок «Ядро системы» со статистикой 34/9/25, Hero с новым позиционированием.
+
+---
+
+## Completed (Sprint 62.P16 Safe Demo Mode + Owner Mode 2026-06-08)
 
 **Intent** — безопасный мост между внешним «TG-BOT + Outreach» и Zapusk AI. Реальные сигналы можно смотреть только в Owner Mode; демо и публичный интерфейс работают в Safe Demo Mode (механика Signal Engine без раскрытия реальных людей и источников). По умолчанию — Safe Demo Mode. Реальные имена, @username, ссылки, названия чатов и брендов не должны попасть в демо.
 

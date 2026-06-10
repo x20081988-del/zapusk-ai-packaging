@@ -109,7 +109,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
     ]},
     { label: 'Инструменты', items: [
       { to: '/ai-leads',         icon: Radio,             label: 'AI-лиды', matchExclude: ['/ai-leads/outreach'] },
-      { to: '/ai-leads/outreach', icon: Radar,            label: 'AI Outreach' },
+      { to: '/ai-leads/outreach', icon: Radar,            label: 'AI-аутрич' },
       { to: '/conversation-analysis', icon: Brain,        label: 'AI-разбор переговоров' },
       { to: '/sales-assistant',  icon: Headphones,        label: 'AI-ассистент' },
       { to: '/meetings',         icon: ClipboardCheck,    label: 'Встречи' },
