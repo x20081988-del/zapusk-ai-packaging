@@ -68,8 +68,13 @@ function Opportunities() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Sprint 62.P18 — витрина читает /showcase, а не /api/projects.
+    // /api/projects фильтрует по workspaceStatus: demo-инвестор после входа
+    // через /api/auth/demo получает workspaceStatus='active' → фильтр отдаёт
+    // только его собственные (пустые) проекты. /showcase детерминированно
+    // возвращает isDemo-витрину независимо от роли/статуса зрителя.
     api
-      .get<{ projects: Project[] }>('/api/projects')
+      .get<{ projects: Project[] }>('/api/projects/showcase')
       .then((r) => setProjects(r.projects))
       .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось загрузить инвест-возможности'));
   }, []);

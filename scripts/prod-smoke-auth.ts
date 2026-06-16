@@ -253,6 +253,19 @@ async function main() {
     return { ok: res.status === 403, status: res.status, detail: await res.text() };
   });
 
+  // Sprint 62.P18 — guard the investor showcase regression. The /opportunities
+  // витрина reads /api/projects/showcase (deterministic isDemo=true list), NOT
+  // /api/projects (filtered by workspaceStatus — empty for a demo investor who
+  // logs in via /api/auth/demo and lands on workspaceStatus='active'). If this
+  // ever returns 0 projects, the demo витрина is broken before partners see it.
+  await check('INVESTOR showcase is non-empty', async () => {
+    const res = await authed('INVESTOR', '/api/projects/showcase');
+    if (res.status !== 200) return { ok: false, status: res.status, detail: await res.text() };
+    const payload = await json<{ projects: ProjectRow[] }>(res);
+    const count = payload.projects?.length ?? 0;
+    return { ok: count >= 1, status: res.status, detail: `showcase projects=${count}` };
+  });
+
   await check('INVESTOR forbidden on admin routes', async () => {
     const res = await authed('INVESTOR', '/api/admin/dashboard');
     return { ok: res.status === 403, status: res.status, detail: await res.text() };

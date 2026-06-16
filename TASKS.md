@@ -2,11 +2,31 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-10 (Sprint 62.P17: AI-аутрич — русификация UI + разворот позиционирования на обучение на сделках).
+Last updated: 2026-06-16 (Sprint 62.P18: фикс — инвест-витрина /opportunities снова грузит проекты + восстановление сессии при 401).
 
 ---
 
-## Completed (this sprint — Sprint 62.P17 AI-аутрич: русификация + разворот позиционирования 2026-06-10)
+## Completed (this sprint — Sprint 62.P18 фикс инвест-витрины + recovery при 401 2026-06-16)
+
+**Симптом** — на странице «Инвест-возможности» (`/opportunities`, демо-инвестор) проекты пропали: экран показывал `401 invalid_token`. Команда/партнёры видели пустую витрину вместо демо-кейсов.
+
+**Две причины**
+1. **Истёкшая сессия без recovery.** JWT живёт 7 дней; после истечения браузер продолжал слать мёртвый токен, каждый вызов отвечал `401 invalid_token`, а `api.request()` просто кидал ошибку — страница навсегда залипала на сыром 401, без пути назад на логин.
+2. **Витрина читала не тот эндпоинт.** `InvestorPortfolio` тянул `/api/projects`, который фильтрует по `workspaceStatus`. Демо-инвестор после входа через `/api/auth/demo` получает `workspaceStatus='active'` → фильтр отдаёт только его собственные (пустые) проекты, а не `isDemo`-витрину. Даже со свежим валидным токеном `/api/projects` возвращал `{projects: []}`.
+
+**Фиксы**
+- `web/src/lib/api.ts` — на `401` от любого не-`/api/auth/*` эндпоинта (при наличии auth) чистим stale-сессию (`clearAuth`) и редиректим на `/login`, чтобы пользователь (в т.ч. демо-инвестор) мог войти заново.
+- `web/src/pages/InvestorPortfolio.tsx` — витрина читает `/api/projects/showcase` (детерминированно отдаёт `isDemo=true` независимо от роли/статуса зрителя) вместо `/api/projects`.
+
+**Профилактика регресса** — в `scripts/prod-smoke-auth.ts` добавлена проверка `INVESTOR showcase is non-empty`: демо-инвестор → `GET /api/projects/showcase` → 200 и `projects.length >= 1`. Падает в smoke ДО того, как пустую витрину увидят партнёры.
+
+**Замечено (не чинил — отдельная задача):** ассерция `INVESTOR forbidden on founder projects` в том же smoke ждёт `403` на `GET /api/projects`, но после Sprint 62.P10 INVESTOR может ЧИТАТЬ проекты — роут отдаёт `200` (where-фильтр по own/demo вместо 403). Ассерция устарела и, вероятно, уже фейлит smoke. Контракт-гарантия (инвестор не видит чужих реальных проектов) теперь держится фильтром, а не статусом.
+
+**Verification** — server tsc — pass; web tsc — pass; `npm run build` — pass (leak-check чист). Локальный smoke: `POST /api/auth/demo {role:investor}` → 200 + токен; `GET /api/projects/showcase` с токеном → 4 проекта (НеоГемовет, Планета 60, Luce Silva, Венский ветер); `GET /api/projects` тем же токеном → `[]` (подтверждает причину №2).
+
+---
+
+## Completed (Sprint 62.P17 AI-аутрич: русификация + разворот позиционирования 2026-06-10)
 
 **Intent** — два связанных изменения демо AI-аутрича на сайте.
 

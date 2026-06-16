@@ -1,4 +1,4 @@
-import { getAuth } from './auth';
+import { getAuth, clearAuth } from './auth';
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -32,6 +32,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    // Sprint 62.P18 — recover from an expired/stale session instead of leaving
+    // the page stuck on a raw "401 invalid_token". Token TTL is 7 days; once it
+    // lapses the browser keeps sending the dead JWT and every call 401s with no
+    // way back. On a 401 from any non-auth endpoint we drop the stale auth and
+    // bounce to /login so the user (incl. the demo investor) can sign in again.
+    if (res.status === 401 && !path.startsWith('/api/auth/') && auth) {
+      clearAuth();
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.assign('/login');
+      }
+    }
     throw new Error(`${res.status} ${res.statusText}: ${text}`);
   }
   const ct = res.headers.get('content-type') ?? '';
