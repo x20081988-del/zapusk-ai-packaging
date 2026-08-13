@@ -15,6 +15,7 @@ import {
   groupByKind,
   kindLabel,
   packDate,
+  fetchImageObjectUrl,
   needsComment,
   sortActions,
   type DecideItem,
@@ -278,6 +279,15 @@ function DecisionCard({
         </p>
       )}
 
+      {/* Sprint 63.P8 - превью картинки к посту. Решение «да» по карточке канала
+          означает публикацию, а пост уходит с изображением: без него владелец
+          одобрял бы вслепую. Раньше картинку показывал дублирующий пуш в бота.
+          Картинки может не быть - тогда onError убирает блок и карточка живет без
+          него, а не показывает битую иконку. */}
+      {item.kind === 'channel' && item.id.endsWith(':pending') && (
+        <ChannelPreview channel={item.id.split(':')[0]} />
+      )}
+
       {item.hint && <p className="text-xs text-muted mt-2.5">{item.hint}</p>}
 
       {editorFor && (
@@ -346,5 +356,42 @@ function DecisionCard({
         )}
       </div>
     </Card>
+  );
+}
+
+/** Картинка к готовому посту. Молча исчезает, если ее нет. */
+function ChannelPreview({ channel }: { channel: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    let objectUrl: string | null = null;
+    fetchImageObjectUrl(`/api/decide/image/${channel}`, ctrl.signal)
+      .then((u) => {
+        if (ctrl.signal.aborted) {
+          if (u) URL.revokeObjectURL(u);
+          return;
+        }
+        objectUrl = u;
+        setUrl(u);
+      })
+      .catch(() => {
+        /* картинки может не быть - карточка живет без нее */
+      });
+    return () => {
+      ctrl.abort();
+      // Отзываем обязательно: blob иначе живет до перезагрузки вкладки, а экран
+      // открывают по многу раз в день.
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [channel]);
+
+  if (!url) return null;
+  return (
+    <img
+      src={url}
+      alt="Картинка к посту"
+      className="mt-3 rounded-md border border-line max-h-72 w-auto max-w-full object-contain"
+    />
   );
 }

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireSuperAdmin } from '../auth.js';
-import { callBridge, relayBridge } from '../lib/decideBridge.js';
+import { callBridge, relayBridge, fetchBridgeBinary } from '../lib/decideBridge.js';
 
 // Sprint 63.P1 - очередь решений владельца в вебе.
 //
@@ -73,4 +73,31 @@ decideRoutes.post('/action', async (req, res) => {
     );
     return res.json({ ok: true, detail });
   }, 'decide');
+});
+
+// Sprint 63.P8 - картинка к готовому посту канала.
+//
+// Карточка «Пост в канал» показывала только текст, а пост уходит с картинкой: решение
+// «да» приходилось принимать вслепую. Раньше превью дублировалось в бота, теперь экран
+// единственное место.
+//
+// Имя канала уходит в мост как есть, но мост принимает ТОЛЬКО имена из своего белого
+// списка и берет путь из состояния канала, а не из запроса. Здесь дополнительно
+// ограничиваем алфавит, чтобы из имени нельзя было собрать другой путь.
+const CHANNEL_RE = /^[a-z0-9_-]{1,40}$/;
+
+decideRoutes.get('/image/:channel', async (req, res) => {
+  const channel = String(req.params.channel ?? '');
+  if (!CHANNEL_RE.test(channel)) {
+    return res.status(400).json({ error: 'bad_channel' });
+  }
+  const got = await fetchBridgeBinary(`/image/channel/${channel}`);
+  if (!got.ok) {
+    // Картинки нет - это не ошибка экрана: пост мог быть без нее. Отдаем 404 и
+    // карточка просто рисуется без превью.
+    return res.status(got.status ?? 502).json({ error: got.error ?? 'source' });
+  }
+  res.setHeader('Content-Type', got.contentType);
+  res.setHeader('Cache-Control', 'no-store');
+  return res.send(got.body);
 });

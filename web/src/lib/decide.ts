@@ -1,4 +1,5 @@
 import { api } from './api';
+import { getAuth } from './auth';
 
 // Sprint 63.P1 - очередь решений владельца.
 //
@@ -267,4 +268,28 @@ export function ageLabel(sec?: number): string {
   if (min < 60) return `${min} мин назад`;
   const h = Math.round(min / 60);
   return h < 24 ? `${h} ч назад` : 'больше суток назад';
+}
+
+/**
+ * Картинка из защищенного маршрута как object URL.
+ *
+ * Тег `<img src>` НЕ отправляет ни Authorization, ни x-user-email - браузер не
+ * прикладывает к нему заголовки. Поэтому прямой src на /api/decide/image всегда
+ * получал бы 401, и превью не появилось бы никогда. Тянем через fetch с теми же
+ * заголовками, что и остальные вызовы, и подставляем object URL.
+ *
+ * Вызывающий ОБЯЗАН отозвать ссылку через URL.revokeObjectURL: иначе blob живет до
+ * перезагрузки вкладки, а экран открывают по многу раз в день.
+ */
+export async function fetchImageObjectUrl(path: string, signal?: AbortSignal): Promise<string | null> {
+  const auth = getAuth();
+  const res = await fetch(path, {
+    signal,
+    headers: {
+      ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
+      ...(auth ? { 'x-user-email': auth.email, 'x-user-role': auth.role } : {}),
+    },
+  });
+  if (!res.ok) return null;
+  return URL.createObjectURL(await res.blob());
 }

@@ -101,3 +101,34 @@ export function relayBridge(
   }
   return onOk(body);
 }
+
+/**
+ * Забрать бинарь (картинку) из моста.
+ *
+ * Отдельно от callBridge: тот разбирает JSON, а тут нужны байты как есть. Тип
+ * содержимого берем от моста, но пропускаем только картинки - мост по контракту
+ * ничего другого отсюда не отдает, и полагаться на это вслепую не стоит.
+ */
+const IMAGE_TYPES = new Set(['image/png', 'image/jpeg']);
+
+export async function fetchBridgeBinary(
+  path: string,
+): Promise<{ ok: true; body: Buffer; contentType: string } | { ok: false; status?: number; error?: string }> {
+  if (!bridgeConfigured()) return { ok: false, status: 503, error: 'source_not_configured' };
+  try {
+    const res = await fetch(`${env.DECIDE_BRIDGE_URL.replace(/\/+$/, '')}${path}`, {
+      headers: { 'X-Decide-Token': env.DECIDE_BRIDGE_TOKEN },
+      signal: AbortSignal.timeout(env.DECIDE_BRIDGE_TIMEOUT_MS),
+    });
+    if (res.status === 404) return { ok: false, status: 404, error: 'not_found' };
+    if (!res.ok) return { ok: false, status: 502, error: 'source' };
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!IMAGE_TYPES.has(contentType.split(';')[0].trim())) {
+      console.warn(`[decide] image: неожиданный тип ${contentType}`);
+      return { ok: false, status: 502, error: 'source' };
+    }
+    return { ok: true, body: Buffer.from(await res.arrayBuffer()), contentType };
+  } catch {
+    return { ok: false, status: 503, error: 'source_unreachable' };
+  }
+}
