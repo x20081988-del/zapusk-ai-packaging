@@ -32,6 +32,7 @@ import ProjectsList from './pages/ProjectsList';
 import { Decisions } from './pages/Decisions';
 import { SystemHealth } from './pages/SystemHealth';
 import { MailBrief } from './pages/MailBrief';
+import { Inbound } from './pages/Inbound';
 import PersonalManager from './pages/PersonalManager';
 import InvestorPortfolio from './pages/InvestorPortfolio';
 import OpportunityDetail from './pages/OpportunityDetail';
@@ -55,6 +56,8 @@ export default function App() {
       <Route path="/system" element={<RequireRole roles={['SUPER_ADMIN']}><SystemHealth /></RequireRole>} />
       {/* Sprint 63.P7 - утренний почтовый бриф вместо пуша в 10:00. */}
       <Route path="/mail" element={<RequireRole roles={['SUPER_ADMIN']}><MailBrief /></RequireRole>} />
+      {/* Sprint 63.P9 - состояние входящих; пуши остаются, экран дополняет. */}
+      <Route path="/inbound" element={<RequireRole roles={['SUPER_ADMIN']}><Inbound /></RequireRole>} />
       <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
       <Route path="/projects" element={<RequireAuth><ProjectsList /></RequireAuth>} />
       <Route path="/projects/new" element={<RequireAuth><NewProject /></RequireAuth>} />

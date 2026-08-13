@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
-  Mail, TrendingUp, Repeat, X, Archive, Activity, Radar, ListChecks, HeartPulse, Inbox,
+  Mail, TrendingUp, Repeat, X, Archive, Activity, Radar, ListChecks, HeartPulse, Inbox, PhoneIncoming,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
@@ -47,6 +47,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/decide',           icon: ListChecks,        label: 'Решения' },
       { to: '/system',           icon: HeartPulse,        label: 'Здоровье системы' },
       { to: '/mail',             icon: Inbox,             label: 'Почта' },
+      { to: '/inbound',          icon: PhoneIncoming,     label: 'Входящие' },
       { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель', end: true },
       { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
       { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
