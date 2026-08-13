@@ -134,7 +134,7 @@ export function Decisions() {
         <Button
           variant="secondary"
           size="md"
-          onClick={() => void load(true)}
+          onClick={() => void load(true, showAll)}
           loading={refreshing}
           iconLeft={<RefreshCw className="w-4 h-4" />}
         >
@@ -179,17 +179,35 @@ export function Decisions() {
 
         {status.phase === 'ready' && status.pack.items.length === 0 && (
           <Card className="p-0">
-            <EmptyState
-              icon={<Inbox className="w-6 h-6" />}
-              title="Решений нет"
-              description="Очередь пуста. Ничего не ждет твоего ответа прямо сейчас."
-            />
+            {(status.pack.degraded?.length ?? 0) > 0 ? (
+              // Все живые источники пусты, но часть недоступна: писать «очередь
+              // пуста» рядом с баннером «решения есть, показать нельзя» - это два
+              // взаимоисключающих утверждения на одном экране.
+              <EmptyState
+                icon={<AlertTriangle className="w-6 h-6 text-warning" />}
+                title="Показать нечего"
+                description="Доступные источники пусты, но часть очереди не загрузилась - решения там могут быть."
+                action={
+                  <Button variant="secondary" onClick={() => void load(true, showAll)} loading={refreshing}>
+                    Повторить
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={<Inbox className="w-6 h-6" />}
+                title="Решений нет"
+                description="Очередь пуста. Ничего не ждет твоего ответа прямо сейчас."
+              />
+            )}
           </Card>
         )}
 
         {status.phase === 'ready' && allSettled(status.pack, outcomes) && (
           <Card className="p-5 mb-5 text-center">
-            <p className="text-sm font-semibold text-primary mb-1">Все разобрано</p>
+            <p className="text-sm font-semibold text-primary mb-1">
+              {status.pack.total > status.pack.items.length ? 'Показанное разобрано' : 'Все разобрано'}
+            </p>
             <p className="text-sm text-secondary mb-3">
               {status.pack.total > status.pack.items.length
                 ? `За кадром еще ${status.pack.total - status.pack.items.length}.`

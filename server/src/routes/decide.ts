@@ -71,6 +71,12 @@ decideRoutes.post('/action', async (req, res) => {
       console.warn(`[decide] source refused kind=${parsed.data.kind} action=${parsed.data.action}`);
       return res.status(409).json({ error: 'source_refused', detail });
     }
+    // Успех подтверждается ТОЛЬКО явным ok:true. Источник нормализует ok в единой
+    // точке, так что ответ без булева ok - сломанная цепочка, а не успех.
+    if (payload?.ok !== true) {
+      console.warn(`[decide] source did not confirm kind=${parsed.data.kind}`);
+      return res.status(502).json({ error: 'source', detail: 'источник не подтвердил решение' });
+    }
     console.log(
       `[decide] POST status=200 ms=${Date.now() - t0} kind=${parsed.data.kind} action=${parsed.data.action}`,
     );
@@ -94,6 +100,9 @@ decideRoutes.get('/image/:channel', async (req, res) => {
   if (!CHANNEL_RE.test(channel)) {
     return res.status(400).json({ error: 'bad_channel' });
   }
+  // no-store ДО ветвления: 404 «картинки нет» закешированный прокси превращал бы
+  // в вечное отсутствие превью даже после того, как картинка появилась.
+  res.setHeader('Cache-Control', 'no-store');
   const got = await fetchBridgeBinary(`/image/channel/${channel}`);
   if (!got.ok) {
     // Картинки нет - это не ошибка экрана: пост мог быть без нее. Отдаем 404 и
@@ -101,6 +110,5 @@ decideRoutes.get('/image/:channel', async (req, res) => {
     return res.status(got.status ?? 502).json({ error: got.error ?? 'source' });
   }
   res.setHeader('Content-Type', got.contentType);
-  res.setHeader('Cache-Control', 'no-store');
   return res.send(got.body);
 });

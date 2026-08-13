@@ -286,7 +286,10 @@ export function ageLabel(sec?: number): string {
  */
 export async function fetchImageObjectUrl(path: string, signal?: AbortSignal): Promise<string | null> {
   const auth = getAuth();
-  const res = await fetch(path, {
+  // Тот же базовый адрес, что у api.ts: при раздельном размещении SPA и API запрос
+  // без префикса ушел бы на хост статики и вернул index.html вместо картинки.
+  const base = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+  const res = await fetch(`${base}${path}`, {
     signal,
     headers: {
       ...(auth?.token ? { Authorization: `Bearer ${auth.token}` } : {}),
