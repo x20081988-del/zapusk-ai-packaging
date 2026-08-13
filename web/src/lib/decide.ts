@@ -113,11 +113,12 @@ export const KIND_LABEL: Record<string, string> = {
   candidate: 'Кандидат на рассылку',
   fork: 'Развилка',
   accept: 'Приемка сделанного',
+  gap: 'Нет карточки в CRM',
 };
 
 // Порядок разбора loss-first, тот же, что в decide_pack.KIND_ORDER: сначала то, что
 // теряет деньги сегодня, приемка сделанного в конец.
-const KIND_ORDER = ['hot', 'ask', 'deal', 'draft', 'channel', 'candidate', 'fork', 'accept'];
+const KIND_ORDER = ['hot', 'ask', 'deal', 'draft', 'channel', 'candidate', 'gap', 'fork', 'accept'];
 
 /** ISO-дата пакета в вид, которым владелец пользуется в текстах: 13.08. */
 export function packDate(iso: string): string {
