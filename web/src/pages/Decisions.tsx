@@ -5,6 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { BalancesStrip } from '../components/ui/BalancesStrip';
+import { renderInlineMarkup } from '../lib/markup';
 import {
   actionLabel,
   applyDecision,
@@ -269,8 +270,11 @@ function DecisionCard({
       <p className="text-sm text-primary mt-1.5 leading-relaxed">{item.title}</p>
 
       {item.body && (
+        // Разметку разбираем: тела приходят сверстанными под Telegram, и владелец
+        // видел бы `**SPV**` звездочками. Пока пост дублировался в бота, он читал
+        // его там сверстанным; экран остался единственным местом.
         <p className="text-sm text-secondary mt-2 whitespace-pre-wrap leading-relaxed break-words">
-          {item.body}
+          {renderInlineMarkup(item.body)}
         </p>
       )}
 
