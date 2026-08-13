@@ -42,14 +42,20 @@ function isItemActive(pathname: string, item: NavItem): boolean {
 // «где у меня настоящие данные, а где готовый пример».
 const NAV: Partial<Record<UserRole, NavSection[]>> = {
   SUPER_ADMIN: [
-    { items: [
-      // Sprint 63.P1 - первым пунктом: за этим владелец сюда и заходит.
+    // Две секции вместо плоского списка: четыре экрана дня тонули в четырнадцати
+    // админских пунктах. «Мой день» - то, ради чего владелец заходит каждый день;
+    // все остальное - управление платформой, туда он ходит по случаю.
+    { label: 'Мой день', items: [
       { to: '/decide',           icon: ListChecks,        label: 'Решения' },
       { to: '/system',           icon: HeartPulse,        label: 'Здоровье системы' },
-      { to: '/mail',             icon: Inbox,             label: 'Почта' },
-      { to: '/inbound',          icon: PhoneIncoming,     label: 'Входящие' },
+      // Конверт у Почты, а не у Приглашений: «Почта» и «Входящие» и так путались
+      // по смыслу, одинаково почтовые иконки добивали.
+      { to: '/mail',             icon: Mail,              label: 'Почта' },
+      { to: '/inbound',          icon: PhoneIncoming,     label: 'Заявки и чаты' },
+    ]},
+    { label: 'Админка платформы', items: [
       { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель', end: true },
-      { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
+      { to: '/admin/invites',    icon: UserRound,         label: 'Приглашения' },
       { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
       { to: '/admin/projects',   icon: BriefcaseBusiness, label: 'Все проекты' },
       { to: '/templates',        icon: FileCode2,         label: 'Шаблоны' },
@@ -224,6 +230,7 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
         </div>
       </nav>
 
+      {role !== 'SUPER_ADMIN' && (
       <div className="mx-3 mb-4 p-4 rounded-lg border border-line bg-grad-ink relative overflow-hidden">
         <div className="absolute -top-8 -right-8 w-24 h-24 bg-zapusk/20 rounded-full blur-2xl" />
         {role === 'FOUNDER' ? <UserRound size={16} className="text-zapusk-400 mb-2" />
@@ -243,6 +250,7 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
             : 'Роли, проекты, шаблоны и статусы.'}
         </div>
       </div>
+      )}
     </>
   );
 

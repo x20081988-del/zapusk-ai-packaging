@@ -35,9 +35,13 @@ export function Topbar({ title, action, onOpenMenu }: TopbarProps) {
           {action}
           <ThemeToggle />
           {auth && (
-            <StatusBadge tone={auth.role === 'SUPER_ADMIN' ? 'danger' : auth.role === 'ADMIN' ? 'danger' : auth.role === 'MANAGER' ? 'ai' : auth.role === 'INVESTOR' ? 'zapusk' : 'success'} dot>
-              {roleLabel(auth.role)}
-            </StatusBadge>
+            // На 390px бейдж переносился в две строки и выдавливал заголовок экрана
+            // в ноль. Для продукта с одним пользователем бейдж роли на телефоне - шум.
+            <span className="hidden sm:inline-flex">
+              <StatusBadge tone={auth.role === 'SUPER_ADMIN' ? 'danger' : auth.role === 'ADMIN' ? 'danger' : auth.role === 'MANAGER' ? 'ai' : auth.role === 'INVESTOR' ? 'zapusk' : 'success'} dot>
+                {roleLabel(auth.role)}
+              </StatusBadge>
+            </span>
           )}
           <div className="hidden md:flex items-center gap-2.5 pl-4 border-l border-hairline">
             <div className="w-7 h-7 rounded-full bg-grad-zapusk flex items-center justify-center text-white text-xs font-bold">

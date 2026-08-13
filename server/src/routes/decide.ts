@@ -31,9 +31,12 @@ const actionSchema = z.object({
   comment: z.string().max(4000).optional(),
 });
 
-decideRoutes.get('/', async (_req, res) => {
+decideRoutes.get('/', async (req, res) => {
   const t0 = Date.now();
-  const result = await callBridge('/decide');
+  // ?all=1 - кнопка «показать следующие» на экране: очередь целиком вместо первых
+  // двадцати. Потолок держит мост (200), здесь только переключатель.
+  const wantAll = String(req.query.all ?? '') === '1';
+  const result = await callBridge(wantAll ? '/decide?limit=200' : '/decide');
   // Пакет не кешируется нигде: ни здесь, ни в Prisma, ни в браузере. Показывать
   // вчерашнюю очередь как сегодняшнюю - это и есть «выдуманные карточки».
   res.setHeader('Cache-Control', 'no-store');

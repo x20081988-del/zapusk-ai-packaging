@@ -70,6 +70,14 @@ export function BalancesStrip() {
         </span>
       )}
 
+      {/* Лимит подписки Claude - цифра, по которой владелец каждое утро решает,
+          сколько сегодня можно жать. В боте строка была, терять ее нельзя. */}
+      {f.claude.ok && f.claude.norm_pct != null && (
+        <span className="text-secondary">
+          Claude {f.claude.day_no}/{f.claude.of_days} суток, сегодня до {Math.round(f.claude.norm_pct)}%
+        </span>
+      )}
+
       <span className="text-muted">{ageLabel(data?.age_sec)}</span>
 
       {low.length > 0 && (

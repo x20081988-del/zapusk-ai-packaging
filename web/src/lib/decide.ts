@@ -184,9 +184,12 @@ export function decisionErrorText(err: unknown): string {
   return raw;
 }
 
-export async function fetchPack(signal?: AbortSignal): Promise<DecidePack> {
+export async function fetchPack(signal?: AbortSignal, all = false): Promise<DecidePack> {
   try {
-    const res = await api.get<{ ok: boolean; pack: DecidePack }>('/api/decide', { signal });
+    const res = await api.get<{ ok: boolean; pack: DecidePack }>(
+      all ? '/api/decide?all=1' : '/api/decide',
+      { signal },
+    );
     return res.pack;
   } catch (e) {
     throw toFailure(e);

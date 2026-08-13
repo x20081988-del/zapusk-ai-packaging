@@ -50,12 +50,12 @@ const FAILURE_COPY: Record<string, { title: string; description: string }> = {
   source_not_configured: {
     title: 'Мост к источнику не настроен',
     description:
-      'В настройках сервера пустые DECIDE_BRIDGE_URL или DECIDE_BRIDGE_TOKEN. Это правится в конфигурации, будить мак не нужно.',
+      'Связка с маком не настроена на сервере. Это правится в настройках хостинга, будить мак не нужно.',
   },
   source_auth: {
     title: 'Секрет моста разъехался',
     description:
-      'Источник не принял наш секрет. Нужно обновить DECIDE_BRIDGE_TOKEN, чтобы он совпал с тем, что на маке.',
+      'Источник не принял секрет связки. Лечится обновлением секрета в настройках хостинга, мак будить не нужно.',
   },
   source_rate_limited: {
     title: 'Слишком часто',
@@ -73,18 +73,19 @@ export function Decisions() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [openEditor, setOpenEditor] = useState<Record<string, string | null>>({});
   const [refreshing, setRefreshing] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   // Повторный «Обновить» во время загрузки не должен плодить параллельные запросы:
   // два ответа вразнобой перерисовали бы экран дважды и потеряли бы порядок.
   const inFlight = useRef<AbortController | null>(null);
 
-  const load = useCallback(async (isRefresh = false) => {
+  const load = useCallback(async (isRefresh = false, all = false) => {
     if (inFlight.current) inFlight.current.abort();
     const ctrl = new AbortController();
     inFlight.current = ctrl;
     if (isRefresh) setRefreshing(true);
     else setStatus({ phase: 'loading' });
     try {
-      const pack = await fetchPack(ctrl.signal);
+      const pack = await fetchPack(ctrl.signal, all);
       if (ctrl.signal.aborted) return;
       setStatus({ phase: 'ready', pack });
     } catch (e) {
@@ -148,11 +149,7 @@ export function Decisions() {
         <BalancesStrip />
 
         <p className="text-sm text-secondary mb-5">
-          {status.phase === 'ready'
-            ? status.pack.total > status.pack.shown
-              ? `Показано ${status.pack.shown} из ${status.pack.total} за ${packDate(status.pack.date)}`
-              : `${status.pack.shown} на разбор за ${packDate(status.pack.date)}`
-            : 'Очередь из telegram-agent'}
+          {status.phase === 'ready' ? headline(status.pack, outcomes) : 'Очередь из telegram-agent'}
         </p>
 
         {status.phase === 'ready' && (status.pack.degraded?.length ?? 0) > 0 && (
@@ -190,14 +187,35 @@ export function Decisions() {
           </Card>
         )}
 
+        {status.phase === 'ready' && allSettled(status.pack, outcomes) && (
+          <Card className="p-5 mb-5 text-center">
+            <p className="text-sm font-semibold text-primary mb-1">Все разобрано</p>
+            <p className="text-sm text-secondary mb-3">
+              {status.pack.total > status.pack.items.length
+                ? `За кадром еще ${status.pack.total - status.pack.items.length}.`
+                : 'Очередь на сегодня закрыта.'}
+            </p>
+            {status.pack.total > status.pack.items.length && !showAll && (
+              <Button variant="secondary" size="sm" onClick={() => { setShowAll(true); void load(true, true); }}>
+                Показать следующие {status.pack.total - status.pack.items.length}
+              </Button>
+            )}
+          </Card>
+        )}
+
         {status.phase === 'ready' && status.pack.items.length > 0 && (
           <div className="space-y-7">
             {groupByKind(status.pack.items).map((group) => (
               <section key={group.kind}>
-                <h2 className="text-xs uppercase tracking-wide text-muted mb-2.5">
+                <h2 className="text-xs uppercase tracking-wide text-muted mb-1">
                   {kindLabel(group.kind)}
                   <span className="ml-2 text-muted/70">{group.items.length}</span>
                 </h2>
+                {/* Подсказка одна на группу: действия у вида общие, и та же фраза
+                    на каждой карточке четыре раза подряд - шум, а не помощь. */}
+                {group.items[0]?.hint && (
+                  <p className="text-xs text-muted mb-2.5">{group.items[0].hint}</p>
+                )}
                 <div className="space-y-3">
                   {group.items.map((item) => {
                     const key = keyOf(item);
@@ -219,8 +237,35 @@ export function Decisions() {
             ))}
           </div>
         )}
+
+        {status.phase === 'ready' && status.pack.total > status.pack.items.length && !showAll && (
+          <div className="mt-6 text-center">
+            <Button variant="ghost" size="sm" onClick={() => { setShowAll(true); void load(true, true); }}>
+              Показать следующие {status.pack.total - status.pack.items.length}
+            </Button>
+          </div>
+        )}
       </div>
     </AppLayout>
+  );
+}
+
+/** Живая шапка: сколько осталось разобрать прямо сейчас, а не статичная надпись. */
+function headline(pack: DecidePack, outcomes: Record<string, Outcome>): string {
+  const done = pack.items.filter((it) => outcomes[`${it.kind}:${it.id}`]?.state === 'done').length;
+  const left = pack.items.length - done;
+  const date = packDate(pack.date);
+  if (left <= 0) return `Разобрано ${done} за ${date}`;
+  if (done > 0) return `Осталось ${left} из ${pack.items.length} за ${date}`;
+  return pack.total > pack.items.length
+    ? `${pack.items.length} на разбор за ${date}, всего ${pack.total}`
+    : `${pack.items.length} на разбор за ${date}`;
+}
+
+function allSettled(pack: DecidePack, outcomes: Record<string, Outcome>): boolean {
+  return (
+    pack.items.length > 0 &&
+    pack.items.every((it) => outcomes[`${it.kind}:${it.id}`]?.state === 'done')
   );
 }
 
@@ -241,6 +286,8 @@ function LoadingSkeleton() {
   );
 }
 
+const BODY_CLAMP = 420;
+
 function DecisionCard({
   item,
   outcome,
@@ -260,6 +307,18 @@ function DecisionCard({
 }) {
   const busy = outcome?.state === 'busy';
   const settled = outcome?.state === 'done';
+  const [expanded, setExpanded] = useState(false);
+  // «Закрыть» снимает задачу с повестки насовсем, а кнопка стоит через одну от «Да».
+  // Первый клик - вопрос, второй - действие; через 4 секунды вопрос сбрасывается.
+  const [confirmClose, setConfirmClose] = useState(false);
+  useEffect(() => {
+    if (!confirmClose) return;
+    const id = setTimeout(() => setConfirmClose(false), 4000);
+    return () => clearTimeout(id);
+  }, [confirmClose]);
+
+  const longBody = (item.body?.length ?? 0) > BODY_CLAMP;
+  const bodyText = !item.body ? '' : expanded || !longBody ? item.body : item.body.slice(0, BODY_CLAMP);
 
   return (
     <Card className={`p-4 ${settled ? 'opacity-70' : ''}`}>
@@ -268,14 +327,29 @@ function DecisionCard({
         {item.context && <span className="text-xs text-muted">{item.context}</span>}
       </div>
 
-      <p className="text-sm text-primary mt-1.5 leading-relaxed">{item.title}</p>
+      {/* Заголовок, дословно равный имени, не повторяем: «Зоя» два раза подряд -
+          шум. У таких карточек суть лежит в теле. */}
+      {item.title && item.title !== item.who && (
+        <p className="text-sm text-primary mt-1.5 leading-relaxed">{item.title}</p>
+      )}
 
       {item.body && (
         // Разметку разбираем: тела приходят сверстанными под Telegram, и владелец
-        // видел бы `**SPV**` звездочками. Пока пост дублировался в бота, он читал
-        // его там сверстанным; экран остался единственным местом.
+        // видел бы `**SPV**` звездочками. Длинное тело сворачиваем: решение по
+        // простыне не читается, но и резать текст насовсем нельзя - «развернуть»
+        // отдает его целиком.
         <p className="text-sm text-secondary mt-2 whitespace-pre-wrap leading-relaxed break-words">
-          {renderInlineMarkup(item.body)}
+          {renderInlineMarkup(bodyText)}
+          {longBody && !expanded && '...'}
+          {longBody && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="ml-2 text-xs text-muted underline underline-offset-2 hover:text-primary"
+            >
+              {expanded ? 'свернуть' : 'развернуть'}
+            </button>
+          )}
         </p>
       )}
 
@@ -288,7 +362,6 @@ function DecisionCard({
         <ChannelPreview channel={item.id.split(':')[0]} />
       )}
 
-      {item.hint && <p className="text-xs text-muted mt-2.5">{item.hint}</p>}
 
       {editorFor && (
         <div className="mt-3">
@@ -327,6 +400,11 @@ function DecisionCard({
               variant={action === 'approve' ? 'primary' : action === 'close' ? 'danger' : 'secondary'}
               disabled={busy || settled || blocked}
               onClick={() => {
+                if (action === 'close' && !confirmClose) {
+                  setConfirmClose(true);
+                  return;
+                }
+                if (action === 'close') setConfirmClose(false);
                 if (wantsComment && !editorOpen) {
                   onOpenEditor(action);
                   return;
@@ -334,7 +412,7 @@ function DecisionCard({
                 onDecide(action);
               }}
             >
-              {actionLabel(action)}
+              {action === 'close' && confirmClose ? 'Точно закрыть?' : actionLabel(action)}
             </Button>
           );
         })}

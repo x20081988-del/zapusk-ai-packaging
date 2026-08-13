@@ -4,6 +4,7 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ageLabel, fetchReport, type ReportEnvelope } from '../lib/decide';
+import { renderInlineMarkup } from '../lib/markup';
 
 // Sprint 63.P4 - экран «Здоровье системы».
 //
@@ -146,14 +147,53 @@ function PanelCard({ panel, slot }: { panel: Panel; slot?: Slot }) {
         </p>
       )}
 
-      {slot?.phase === 'ready' && (
-        // Разбор приходит готовым текстом: это слова, а не набор чисел, и раскладывать
-        // их на поля значило бы переписать четыре генератора ради верстки. Показываем
-        // как есть, моноширинным, с переносом - ровно то, что владелец читал в боте.
-        <pre className="text-xs text-secondary whitespace-pre-wrap break-words font-mono leading-relaxed max-h-96 overflow-y-auto">
-          {slot.report.text}
-        </pre>
-      )}
+      {slot?.phase === 'ready' && <ReportBody text={slot.report.text} />}
     </Card>
+  );
+}
+
+/**
+ * Тело отчета: вердикт сверху, простыня под «подробнее».
+ *
+ * Источник отдает первой строкой «ИТОГ: ...» - ответ на единственный вопрос владельца
+ * «все ли живо». Полный разбор с командами и путями к логам написан для агента, а не
+ * для человека, поэтому по умолчанию свернут. Жирное в звездочках разбираем - раньше
+ * владелец видел `**Зоя**` буквально.
+ */
+function ReportBody({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const lines = (text ?? '').split('\n');
+  const hasVerdict = lines[0]?.startsWith('ИТОГ:');
+  const verdict = hasVerdict ? lines[0].replace(/^ИТОГ:\s*/, '') : null;
+  const rest = hasVerdict ? lines.slice(1).join('\n').trim() : text;
+  const ok = hasVerdict && /все (живо|ок|в порядке|чисто)|замечаний нет|решать нечего/.test(verdict ?? '');
+
+  if (!hasVerdict) {
+    return (
+      <p className="text-sm text-secondary whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-y-auto">
+        {renderInlineMarkup(text)}
+      </p>
+    );
+  }
+  return (
+    <div>
+      <p className={`text-sm font-medium ${ok ? 'text-success' : 'text-warning'}`}>{verdict}</p>
+      {rest && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="mt-1.5 text-xs text-muted underline underline-offset-2 hover:text-primary"
+          >
+            {open ? 'скрыть разбор' : 'подробнее'}
+          </button>
+          {open && (
+            <p className="mt-2 text-xs text-secondary whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-y-auto">
+              {renderInlineMarkup(rest)}
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
