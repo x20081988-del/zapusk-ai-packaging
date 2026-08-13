@@ -172,6 +172,34 @@ Per-feature route table:
 
 ¹ `DEMO_FAST_AI_MODE=true` switches prepare to fast route (gpt-4o-mini) for live demos.
 
+### Decision queue (Sprint 63.P1) — SUPER_ADMIN only
+
+```
+GET    /api/decide          → { ok, pack: { items[], total, shown, date } }
+POST   /api/decide/action   { kind, id, action, comment? } → { ok, detail }
+```
+
+Source of truth is **not** this codebase: the pack is built by `decide_pack.build_pack()` in
+`~/telegram-agent` and reached over HTTP via `decide_bridge` (`DECIDE_BRIDGE_URL` +
+`DECIDE_BRIDGE_TOKEN`, server-side only — the secret never reaches the browser). Nothing is
+mirrored into Prisma and nothing is cached: a stale pack shown as live is the exact failure
+this screen exists to avoid.
+
+`items[].actions` is a per-item array supplied by the source (`approve` / `later` / `close` /
+`edit` / `answer`, varying by `kind`). The UI must render buttons **from that array** — a
+hard-coded `kind → actions` matrix goes stale silently when the source changes. `edit` and
+`answer` require a non-empty `comment`; the source rejects them with 400 otherwise.
+
+Error taxonomy — the three states are distinguished by **status code**, not by message:
+
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | `total: 0`, `items: []` | queue genuinely empty |
+| 503 | `source_unreachable` | Mac asleep / offline / timeout |
+| 503 | `source_not_configured` | `DECIDE_BRIDGE_URL`/`TOKEN` unset |
+| 502 | `source_auth` | bridge rejected our token — fix config, not the Mac |
+| 400 | `bad_action` / `bad_kind` + `detail` | source refused the decision, reason passed through |
+
 Diagnostics:
 - `npm run env:doctor` — safe env summary + suspicious model detection (e.g. `gpt-5.5`).
 - `npm run db:doctor` — read-only DB structure check.

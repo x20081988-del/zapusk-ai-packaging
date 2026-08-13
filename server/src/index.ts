@@ -29,6 +29,7 @@ import { assistantLearningRoutes } from './routes/assistantLearning.js';
 import { managerRoutes } from './routes/manager.js';
 import { aiReliabilityRoutes } from './routes/aiReliability.js';
 import { realtimeRoutes } from './routes/realtime.js';
+import { decideRoutes } from './routes/decide.js';
 
 const app = express();
 
@@ -133,6 +134,9 @@ app.use('/api/ai-reliability', aiReliabilityRoutes);
 // Sprint 49 — OpenAI Realtime ephemeral session bootstrap для WebRTC live
 // транскрипции в браузере. Основной OPENAI_API_KEY никогда не уходит клиенту.
 app.use('/api/realtime', realtimeRoutes);
+// Sprint 63.P1 — очередь решений владельца. Прокси к decide_bridge в telegram-agent;
+// источник правды остаётся там, в Prisma ничего не дублируется. SUPER_ADMIN only.
+app.use('/api/decide', decideRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
-  Mail, TrendingUp, Repeat, X, Archive, Activity, Radar,
+  Mail, TrendingUp, Repeat, X, Archive, Activity, Radar, ListChecks,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
 import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
@@ -43,6 +43,8 @@ function isItemActive(pathname: string, item: NavItem): boolean {
 const NAV: Partial<Record<UserRole, NavSection[]>> = {
   SUPER_ADMIN: [
     { items: [
+      // Sprint 63.P1 - первым пунктом: за этим владелец сюда и заходит.
+      { to: '/decide',           icon: ListChecks,        label: 'Решения' },
       { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель', end: true },
       { to: '/admin/invites',    icon: Mail,              label: 'Приглашения' },
       { to: '/admin/users',      icon: Users,             label: 'Пользователи' },

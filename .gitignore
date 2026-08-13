@@ -42,3 +42,7 @@ web/public/signals.import.json
 # stale tsc-emit (Vite uses .tsx; .js next to .tsx shadows imports)
 web/src/**/*.js
 web/tsconfig.tsbuildinfo
+
+# Рабочие артефакты supergoal-планов: планы, состояние, доказательства прогонов.
+# В репозиторий не уходят - это заметки процесса, а не код.
+.supergoal/

@@ -29,6 +29,7 @@ import DemoCabinet from './pages/DemoCabinet';
 import DemoAILeads from './pages/DemoAILeads';
 import DemoConversationAnalysis from './pages/DemoConversationAnalysis';
 import ProjectsList from './pages/ProjectsList';
+import { Decisions } from './pages/Decisions';
 import PersonalManager from './pages/PersonalManager';
 import InvestorPortfolio from './pages/InvestorPortfolio';
 import OpportunityDetail from './pages/OpportunityDetail';
@@ -45,6 +46,9 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
 
+      {/* Sprint 63.P1 - очередь решений владельца. Только SUPER_ADMIN: это его
+          личная очередь, в карточках лежат PII контактов. */}
+      <Route path="/decide" element={<RequireRole roles={['SUPER_ADMIN']}><Decisions /></RequireRole>} />
       <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
       <Route path="/projects" element={<RequireAuth><ProjectsList /></RequireAuth>} />
       <Route path="/projects/new" element={<RequireAuth><NewProject /></RequireAuth>} />

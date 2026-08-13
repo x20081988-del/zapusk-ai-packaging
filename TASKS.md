@@ -2,11 +2,46 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-06-16 (Sprint 62.P18: фикс — инвест-витрина /opportunities снова грузит проекты + восстановление сессии при 401).
+Last updated: 2026-08-13 (Sprint 63.P1: очередь решений владельца перенесена из телеграм-бота в веб-кокпит).
 
 ---
 
-## Completed (this sprint — Sprint 62.P18 фикс инвест-витрины + recovery при 401 2026-06-16)
+## Completed (this sprint — Sprint 63.P1 очередь решений в вебе 2026-08-13)
+
+**Задача** — владелец принимал решения кнопками в телеграм-боте. Веб-экран `/decide` в `telegram-agent` за всю историю открывали 9 раз: ссылка вела через cloudflared quick-туннель, который менял адрес при каждом рестарте. Решения принимались, но мимо системы.
+
+**Что сделано** — один экран «Решения» в кокпите. Источник правды остался в `~/telegram-agent`: кодовые базы не сливались, Python на Node не переписывался, пакет решений в Prisma не дублируется и нигде не кешируется.
+
+- `server/src/routes/decide.ts` — `GET /api/decide`, `POST /api/decide/action`, гейт `requireSuperAdmin`. Ходит в новый узкий мост `decide_bridge.py` (`DECIDE_BRIDGE_URL` + `DECIDE_BRIDGE_TOKEN`, секрет только на сервере).
+- `web/src/pages/Decisions.tsx` + `web/src/lib/decide.ts` — экран. Кнопки строятся из `item.actions`, присланного источником, а не из захардкоженной матрицы «вид -> кнопки»: такая матрица расходится с источником молча. Лексика действий взята из бота (`decide_morning.ACTION_LABEL`), чтобы владельцу не переучиваться.
+- `web/src/App.tsx`, `Sidebar.tsx`, `lib/auth.ts` — маршрут `/decide` под `SUPER_ADMIN`, пункт меню первым, `defaultRouteForRole('SUPER_ADMIN')` теперь `/decide` (`ADMIN` остался на `/admin`).
+- `render.yaml` — объявлены `DECIDE_BRIDGE_*` и `BOOTSTRAP_OWNER_EMAIL`; оба секрета через `sync: false`.
+- `web/vite.config.ts` — порт и адрес API читаются из окружения через `loadEnv`, добавлен `strictPort`. Дефолты прежние. Причина: на рабочем маке 5173 и 4000 постоянно заняты другим проектом под launchd.
+
+**Три состояния разведены по КОДУ ответа, а не по тексту.** Пустая очередь — `200` с `total: 0`. Недоступный источник — `503 source_unreachable`. Ненастроенный мост — `503 source_not_configured`. Экран, который на «мак спит» рисует «решений нет», врёт владельцу ровно тогда, когда решения копятся.
+
+**Verification** — `server` и `web` `tsc --noEmit` pass, `npm run build` pass (включая `demo_data_leak_check`). Матрица ролей: `SUPER_ADMIN` 200, остальные четыре 403, без авторизации 401. Мост остановлен -> 503 без `items`. Таймаут 2с на медленном источнике -> 503 за 2с. Круг на живых данных: клик «Потом» в вебе -> задача в `founder_tasks` стала `postponed` ровно на +1.00 суток, в `logs/decide_pack.log` появилась строка `решение hot:<id> -> later`. Мобильная раскладка 390px: без горизонтального скролла, кнопки 44px.
+
+## Known issues
+
+- **Боевая ветка `decide_outcomes` не проверена на живых данных.** Таблица в `telegram-agent/data.db` не создана ни разу за всю историю: исход пишется только для вида `channel` при `approve`/`edit`, а это вердикт владельца. Механизм проверен на временной копии БД через штатный шов `_log_decision_outcome(db_path=, log_fn=)` — идемпотентность по `UNIQUE(kind,item_id,day)` держит, маппинг `approve->clean` / `edit->light` верный. Закроется само, когда владелец нажмёт «Да» или «Правка» на карточке «Пост в канал».
+- **Прод ещё не выкачен.** Ждёт трёх действий владельца: включить Tailscale Funnel (мост наружу), вписать `DECIDE_BRIDGE_TOKEN` и `BOOTSTRAP_OWNER_PASSWORD` в дашборде Render, дать «да» на деплой.
+- **Латентная тихая потеря в `decide_pack.build_pack` (дефект источника, не этого спринта).** Дедуп `asked_tasks` собирает `task_id` карточек `ask` вместе с `None`. Если какой-нибудь коллектор однажды отдаст карточку без `task_id`, все `hot` и `fork` без `task_id` молча выпадут из пакета. На живых данных недостижимо: все три коллектора `task_id` проставляют. Чинится однострочным guard'ом `if i.get("task_id")`. Найдено адверсариальным QA на стендовом прогоне 13.08.
+- **После смены `BOOTSTRAP_OWNER_EMAIL` на проде будет два `SUPER_ADMIN`.** `upsertBootstrap` делает upsert по email: новый аккаунт создастся, прежний `grigory@zapusk.tech` останется нетронутым. Чистка старого — отдельное осознанное решение.
+
+---
+
+## Completed (Sprint 62.P19 фикс устаревшей smoke-ассерции INVESTOR 2026-06-16)
+
+**Симптом** — в `scripts/prod-smoke-auth.ts` ассерция `INVESTOR forbidden on founder projects` ждала `403` на `GET /api/projects`. После Sprint 62.P10 INVESTOR может ЧИТАТЬ проекты: роут отдаёт `200`, а where-фильтр (`isDemo` для демо-воркспейса / own `userId` для active) гарантирует, что инвестор не видит чужих реальных проектов. Ассерция устарела и фейлила бы smoke против текущего прода.
+
+**Фикс** — `scripts/prod-smoke-auth.ts`: проверка переименована в `INVESTOR cannot read foreign real projects` и теперь требует `200` И что каждый возвращённый проект либо `isDemo===true`, либо принадлежит самому инвестору (`userId === sub` из его JWT). Любой «чужой реальный» проект в ответе → fail. В `ProjectRow` добавлено поле `isDemo?: boolean` (роут его уже отдаёт). Смысл безопасности сохранён: «инвестор не читает чужие реальные сделки».
+
+**Verification** — type-check `scripts/prod-smoke-auth.ts` через server tsc (es2022/bundler/strict) — pass. Smoke не в CI, запускается вручную против прода (`tsx scripts/prod-smoke-auth.ts`) с ролевыми токенами.
+
+---
+
+## Completed (Sprint 62.P18 фикс инвест-витрины + recovery при 401 2026-06-16)
 
 **Симптом** — на странице «Инвест-возможности» (`/opportunities`, демо-инвестор) проекты пропали: экран показывал `401 invalid_token`. Команда/партнёры видели пустую витрину вместо демо-кейсов.
 
@@ -20,7 +55,7 @@ Last updated: 2026-06-16 (Sprint 62.P18: фикс — инвест-витрин�
 
 **Профилактика регресса** — в `scripts/prod-smoke-auth.ts` добавлена проверка `INVESTOR showcase is non-empty`: демо-инвестор → `GET /api/projects/showcase` → 200 и `projects.length >= 1`. Падает в smoke ДО того, как пустую витрину увидят партнёры.
 
-**Замечено (не чинил — отдельная задача):** ассерция `INVESTOR forbidden on founder projects` в том же smoke ждёт `403` на `GET /api/projects`, но после Sprint 62.P10 INVESTOR может ЧИТАТЬ проекты — роут отдаёт `200` (where-фильтр по own/demo вместо 403). Ассерция устарела и, вероятно, уже фейлит smoke. Контракт-гарантия (инвестор не видит чужих реальных проектов) теперь держится фильтром, а не статусом.
+**Замечено (исправлено в Sprint 62.P19):** ассерция `INVESTOR forbidden on founder projects` в том же smoke ждала `403` на `GET /api/projects`, но после Sprint 62.P10 INVESTOR может ЧИТАТЬ проекты — роут отдаёт `200` (where-фильтр по own/demo вместо 403). Ассерция переписана на проверку контракта `200` + отсутствие чужих реальных проектов.
 
 **Verification** — server tsc — pass; web tsc — pass; `npm run build` — pass (leak-check чист). Локальный smoke: `POST /api/auth/demo {role:investor}` → 200 + токен; `GET /api/projects/showcase` с токеном → 4 проекта (НеоГемовет, Планета 60, Luce Silva, Венский ветер); `GET /api/projects` тем же токеном → `[]` (подтверждает причину №2).
 

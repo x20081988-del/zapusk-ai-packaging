@@ -99,7 +99,11 @@ export function clearAuth() {
 }
 
 export function defaultRouteForRole(role: UserRole): string {
-  if (role === 'SUPER_ADMIN' || role === 'ADMIN') return '/admin';
+  // Sprint 63.P1 - владелец заходит на сайт ради очереди решений, и лишний клик по
+  // дороге это ровно то трение, из-за которого экран в telegram-agent открывали
+  // девять раз за всю историю. ADMIN остается на своей админ-панели.
+  if (role === 'SUPER_ADMIN') return '/decide';
+  if (role === 'ADMIN') return '/admin';
   if (role === 'MANAGER') return '/manager';
   if (role === 'INVESTOR') return '/opportunities';
   return '/dashboard';

@@ -46,6 +46,17 @@ export const env = {
   // Public-demo lockdown. Set DEMO_MODE=true on a public URL to block destructive ops.
   DEMO_MODE: truthy(process.env.DEMO_MODE),
 
+  // Sprint 63.P1 — мост к очереди решений владельца (decide_bridge в telegram-agent).
+  // URL публичный, секрета в нём нет — его можно держать в render.yaml. TOKEN задаётся
+  // ТОЛЬКО в дашборде Render / локальном server/.env и в репозиторий не попадает.
+  // Пустые значения — рабочее состояние: маршрут /api/decide тогда честно отвечает
+  // 503 source_not_configured вместо того, чтобы притворяться пустой очередью.
+  DECIDE_BRIDGE_URL: process.env.DECIDE_BRIDGE_URL ?? '',
+  DECIDE_BRIDGE_TOKEN: process.env.DECIDE_BRIDGE_TOKEN ?? '',
+  // Мак может спать. Висеть на нём дольше нескольких секунд бессмысленно: владельцу
+  // нужен быстрый честный ответ «источник недоступен», а не крутилка на полминуты.
+  DECIDE_BRIDGE_TIMEOUT_MS: Number(process.env.DECIDE_BRIDGE_TIMEOUT_MS ?? 8000),
+
   DEV_USER_EMAIL: process.env.DEV_USER_EMAIL ?? 'founder@zapusk.tech',
   DEV_USER_NAME: process.env.DEV_USER_NAME ?? 'Zapusk Founder',
 

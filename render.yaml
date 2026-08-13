@@ -87,6 +87,25 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      # Sprint 63.P1 — мост к очереди решений владельца (decide_bridge на маке).
+      # URL публичный, секрета в нём нет, поэтому живёт прямо здесь. TOKEN — только
+      # в дашборде, он даёт доступ к очереди решений и в git попадать не должен.
+      # Пустые значения — рабочее состояние: /api/decide тогда честно отвечает
+      # 503 source_not_configured, а не притворяется пустой очередью.
+      - key: DECIDE_BRIDGE_URL
+        value: "https://mac-zapusk.tail09627f.ts.net:10000"
+      - key: DECIDE_BRIDGE_TOKEN
+        sync: false
+      - key: DECIDE_BRIDGE_TIMEOUT_MS
+        value: "8000"
+      # Sprint 63.P1 — боевой логин владельца. Пароль задаётся в дашборде и сюда
+      # не попадает. ВНИМАНИЕ: seed делает upsert ПО EMAIL, поэтому смена этого
+      # значения создаёт нового пользователя, а прежний владелец остаётся в базе
+      # с ролью SUPER_ADMIN. Чистка старого аккаунта — отдельное осознанное решение.
+      - key: BOOTSTRAP_OWNER_EMAIL
+        value: x20081988@gmail.com
+      - key: BOOTSTRAP_OWNER_PASSWORD
+        sync: false
       - key: DEV_USER_EMAIL
         value: demo@zapusk.tech
       - key: DEV_USER_NAME
