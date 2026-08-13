@@ -51,6 +51,7 @@ export interface DecidePack {
  * момент, когда решения копятся.
  */
 export type DecideFailure =
+  | 'source_warming'
   | 'source_unreachable'
   | 'source_not_configured'
   | 'source_auth'
@@ -153,7 +154,7 @@ export function groupByKind(items: DecideItem[]): Array<{ kind: string; items: D
  */
 function toFailure(err: unknown): DecideError {
   const raw = err instanceof Error ? err.message : String(err);
-  for (const f of ['source_unreachable', 'source_not_configured', 'source_auth', 'source_rate_limited'] as const) {
+  for (const f of ['source_warming', 'source_unreachable', 'source_not_configured', 'source_auth', 'source_rate_limited'] as const) {
     if (raw.includes(f)) return new DecideError(f, raw);
   }
   return new DecideError('unknown', raw);
@@ -172,6 +173,7 @@ export function decisionErrorText(err: unknown): string {
       if (parsed.error === 'source_auth') return 'секрет моста разъехался, нужна правка настроек';
       if (parsed.error === 'source_rate_limited') return 'слишком часто, повтори через минуту';
       if (parsed.error === 'source_refused') return 'источник отклонил решение';
+      if (parsed.error === 'source_warming') return 'считается, обнови через полминуты';
       if (parsed.error) return parsed.error;
     } catch {
       // не JSON - отдадим сырой текст ниже
@@ -201,4 +203,67 @@ export async function applyDecision(input: {
   comment?: string;
 }): Promise<DecideOutcome> {
   return api.post<DecideOutcome>('/api/decide/action', input);
+}
+
+// --- отчеты, которые раньше приходили в бота ---------------------------------
+// Форма общая для всех: text есть всегда, facts - там, где у генератора есть
+// структура. Экран рисует facts, если пришли, иначе показывает text.
+
+export interface BalanceService {
+  name: string;
+  raw: string;
+  value: number | null;
+  unit: string | null;
+  low: boolean;
+  ok: boolean;
+}
+
+export interface BalancesFacts {
+  services: BalanceService[];
+  ai: {
+    ok: boolean;
+    day_usd?: number;
+    day_cap_usd?: number;
+    month_usd?: number;
+    month_forecast_usd?: number;
+    balance_usd?: number | null;
+    days_of_money?: number | null;
+  };
+  claude: {
+    ok: boolean;
+    day_no?: number;
+    of_days?: number;
+    norm_pct?: number;
+    stop_pct?: number;
+    reading_pct?: number | null;
+  };
+  generated_at: string;
+}
+
+export interface ReportEnvelope<F> {
+  ok: boolean;
+  name: string;
+  text: string;
+  facts: F | null;
+  /** Возраст измерения в секундах. Отчет строится десятки секунд и живет в кэше. */
+  age_sec?: number;
+  stale?: boolean;
+}
+
+export async function fetchReport<F>(name: string, signal?: AbortSignal): Promise<ReportEnvelope<F>> {
+  try {
+    return await api.get<ReportEnvelope<F>>(`/api/reports/${name}`, { signal });
+  } catch (e) {
+    throw toFailure(e);
+  }
+}
+
+/** «19 секунд назад» -> человеку. Возраст показываем всегда: это измерение, не поток. */
+export function ageLabel(sec?: number): string {
+  if (sec == null) return '';
+  if (sec < 90) return 'только что';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} мин назад`;
+  const h = Math.round(min / 60);
+  return h < 24 ? `${h} ч назад` : 'больше суток назад';
 }

@@ -100,7 +100,7 @@ services:
       - key: DECIDE_BRIDGE_TOKEN
         sync: false
       - key: DECIDE_BRIDGE_TIMEOUT_MS
-        value: "8000"
+        value: "15000"
       # Sprint 63.P1 — боевой логин владельца остаётся grigory@zapusk.tech.
       # НЕ менять на другой email без отдельного решения: seed делает upsert ПО
       # EMAIL, поэтому смена значения не переименовывает владельца, а СОЗДАЁТ

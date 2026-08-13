@@ -4,6 +4,7 @@ import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
+import { BalancesStrip } from '../components/ui/BalancesStrip';
 import {
   actionLabel,
   applyDecision,
@@ -139,6 +140,11 @@ export function Decisions() {
       }
     >
       <div className="max-w-3xl">
+        {/* Балансы сервисов и расход на ИИ. Отдельной страницы им не надо: владелец
+            приходит сюда каждый день, и цифра «сколько осталось» должна попадаться
+            ему на глаза по дороге к решениям, а не ждать отдельного клика. */}
+        <BalancesStrip />
+
         <p className="text-sm text-secondary mb-5">
           {status.phase === 'ready'
             ? status.pack.total > status.pack.shown
