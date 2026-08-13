@@ -313,9 +313,30 @@ adminRoutes.post('/impersonate/:userId', async (req, res) => {
   });
 });
 
-adminRoutes.get('/dashboard', async (_req, res) => {
+// Sprint 63.P2 — админ-экраны владельца показывают ТОЛЬКО реальные данные.
+//
+// Демо-кейсы («Венский ветер», «Планета 60», «НеоГемовет», Luce Silva) и демо-
+// аккаунты нужны витрине инвесторов и клиентским демо-встречам, поэтому они
+// остаются в базе и в /api/projects/showcase. Но в «Все проекты», «Лиды» и
+// «Пользователи» владельца они мешали: он смотрит на свой портфель, а видел его
+// вперемешку с витриной, и счётчики KPI были завышены на демо-проекты.
+//
+// `NOT: { isDemo: true }` вместо `isDemo: false` намеренно: поле nullable, и у
+// старых записей там NULL, который сравнение с false не поймает.
+const REAL_PROJECTS_ONLY = { NOT: { isDemo: true } } as const;
+const REAL_USERS_ONLY = { NOT: { workspaceStatus: 'demo' } } as const;
+
+/** ?includeDemo=1 возвращает витрину обратно - чтобы демо не стало неуправляемым. */
+function wantsDemo(req: import('express').Request): boolean {
+  const v = String(req.query.includeDemo ?? '').toLowerCase();
+  return v === '1' || v === 'true';
+}
+
+adminRoutes.get('/dashboard', async (req, res) => {
+  const includeDemo = wantsDemo(req);
   const [projects, users] = await Promise.all([
     prisma.project.findMany({
+      where: includeDemo ? undefined : REAL_PROJECTS_ONLY,
       orderBy: { updatedAt: 'desc' },
       include: {
         user: { select: { email: true, name: true } },
@@ -324,6 +345,7 @@ adminRoutes.get('/dashboard', async (_req, res) => {
       },
     }),
     prisma.user.findMany({
+      where: includeDemo ? undefined : REAL_USERS_ONLY,
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { projects: true } } },
     }),
@@ -343,8 +365,9 @@ adminRoutes.get('/dashboard', async (_req, res) => {
 });
 
 // MVP admin view — read-only list across all users.
-adminRoutes.get('/projects', async (_req, res) => {
+adminRoutes.get('/projects', async (req, res) => {
   const projects = await prisma.project.findMany({
+    where: wantsDemo(req) ? undefined : REAL_PROJECTS_ONLY,
     orderBy: { updatedAt: 'desc' },
     include: {
       user: { select: { email: true, name: true } },
@@ -354,8 +377,9 @@ adminRoutes.get('/projects', async (_req, res) => {
   res.json({ projects });
 });
 
-adminRoutes.get('/users', async (_req, res) => {
+adminRoutes.get('/users', async (req, res) => {
   const users = await prisma.user.findMany({
+    where: wantsDemo(req) ? undefined : REAL_USERS_ONLY,
     orderBy: { createdAt: 'desc' },
     include: { _count: { select: { projects: true } } },
   });
