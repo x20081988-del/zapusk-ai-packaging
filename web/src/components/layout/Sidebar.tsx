@@ -47,6 +47,9 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
     // все остальное - управление платформой, туда он ходит по случаю.
     { label: 'Мой день', items: [
       { to: '/decide',           icon: ListChecks,        label: 'Решения' },
+      // Sprint 63.P12 - доска founder_crm из telegram-agent, рядом с решениями:
+      // очередь отвечает «что решить», CRM - «что двигать дальше».
+      { to: '/crm',              icon: KanbanSquare,      label: 'CRM' },
       { to: '/system',           icon: HeartPulse,        label: 'Здоровье системы' },
       // Конверт у Почты, а не у Приглашений: «Почта» и «Входящие» и так путались
       // по смыслу, одинаково почтовые иконки добивали.

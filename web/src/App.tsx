@@ -30,6 +30,7 @@ import DemoAILeads from './pages/DemoAILeads';
 import DemoConversationAnalysis from './pages/DemoConversationAnalysis';
 import ProjectsList from './pages/ProjectsList';
 import { Decisions } from './pages/Decisions';
+import { Crm } from './pages/Crm';
 import { SystemHealth } from './pages/SystemHealth';
 import { MailBrief } from './pages/MailBrief';
 import { Inbound } from './pages/Inbound';
@@ -52,6 +53,8 @@ export default function App() {
       {/* Sprint 63.P1 - очередь решений владельца. Только SUPER_ADMIN: это его
           личная очередь, в карточках лежат PII контактов. */}
       <Route path="/decide" element={<RequireRole roles={['SUPER_ADMIN']}><Decisions /></RequireRole>} />
+      {/* Sprint 63.P12 - CRM владельца из telegram-agent, тот же мост и гейт. */}
+      <Route path="/crm" element={<RequireRole roles={['SUPER_ADMIN']}><Crm /></RequireRole>} />
       {/* Sprint 63.P4 - четыре аудита одним экраном вместо четырех утренних пушей. */}
       <Route path="/system" element={<RequireRole roles={['SUPER_ADMIN']}><SystemHealth /></RequireRole>} />
       {/* Sprint 63.P7 - утренний почтовый бриф вместо пуша в 10:00. */}

@@ -31,6 +31,7 @@ import { aiReliabilityRoutes } from './routes/aiReliability.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { decideRoutes } from './routes/decide.js';
 import { reportsRoutes } from './routes/reports.js';
+import { crmRoutes } from './routes/crm.js';
 
 const app = express();
 
@@ -141,6 +142,9 @@ app.use('/api/decide', decideRoutes);
 // Sprint 63.P3 - отчеты, которые раньше приходили в телеграм-бота. Тот же мост,
 // тот же гейт SUPER_ADMIN, обобщенный маршрут /api/reports/:name.
 app.use('/api/reports', reportsRoutes);
+// Sprint 63.P12 - CRM владельца (founder_crm) в кабинете. Тот же мост, источник
+// правды в telegram-agent, в Prisma ничего не дублируется. SUPER_ADMIN only.
+app.use('/api/crm', crmRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));
