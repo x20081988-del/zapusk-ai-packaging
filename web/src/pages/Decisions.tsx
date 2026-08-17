@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Inbox, RefreshCw, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Inbox, MoonStar, RefreshCw, XCircle } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -17,6 +17,7 @@ import {
   packDate,
   fetchImageObjectUrl,
   needsComment,
+  snapshotLabel,
   sortActions,
   type DecideItem,
   type DecidePack,
@@ -35,7 +36,9 @@ import {
 
 type Status =
   | { phase: 'loading' }
-  | { phase: 'ready'; pack: DecidePack }
+  // stale: мак недоступен, показан последний снимок от fetchedAt. Смотреть можно,
+  // решать нельзя - кнопки в этом режиме глушатся, действие все равно не доедет.
+  | { phase: 'ready'; pack: DecidePack; stale: boolean; fetchedAt: string | null }
   | { phase: 'failed'; failure: DecideError };
 
 /** Результат решения по одной карточке - живет рядом с ней, а не в глобальном тосте. */
@@ -85,9 +88,9 @@ export function Decisions() {
     if (isRefresh) setRefreshing(true);
     else setStatus({ phase: 'loading' });
     try {
-      const pack = await fetchPack(ctrl.signal, all);
+      const res = await fetchPack(ctrl.signal, all);
       if (ctrl.signal.aborted) return;
-      setStatus({ phase: 'ready', pack });
+      setStatus({ phase: 'ready', pack: res.pack, stale: res.stale, fetchedAt: res.fetchedAt });
     } catch (e) {
       if (ctrl.signal.aborted) return;
       setStatus({
@@ -109,7 +112,11 @@ export function Decisions() {
 
   const keyOf = (it: DecideItem) => `${it.kind}:${it.id}`;
 
+  const frozen = status.phase === 'ready' && status.stale;
+
   async function decide(item: DecideItem, action: string) {
+    // Второй пояс к задизейбленным кнопкам: по снимку не решают.
+    if (frozen) return;
     const key = keyOf(item);
     if (outcomes[key]?.state === 'busy') return;
     const comment = (drafts[key] ?? '').trim();
@@ -151,6 +158,24 @@ export function Decisions() {
         <p className="text-sm text-secondary mb-5">
           {status.phase === 'ready' ? headline(status.pack, outcomes) : 'Очередь из telegram-agent'}
         </p>
+
+        {frozen && status.phase === 'ready' && (
+          <div className="mb-4 rounded-md border border-line bg-surface px-3 py-2.5 text-sm text-secondary flex items-start gap-2.5">
+            <MoonStar className="w-4 h-4 mt-0.5 shrink-0 text-muted" />
+            <span>
+              <span className="font-medium text-primary">Мак сейчас недоступен.</span>{' '}
+              Это снимок очереди на {snapshotLabel(status.fetchedAt) || 'последний удачный момент'}.
+              Кнопки решений заработают, когда мак проснется.{' '}
+              <button
+                type="button"
+                onClick={() => void load(true, showAll)}
+                className="underline underline-offset-2 hover:text-primary"
+              >
+                Проверить снова
+              </button>
+            </span>
+          </div>
+        )}
 
         {status.phase === 'ready' && (status.pack.degraded?.length ?? 0) > 0 && (
           <div className="mb-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm text-warning">
@@ -213,7 +238,7 @@ export function Decisions() {
                 ? `За кадром еще ${status.pack.total - status.pack.items.length}.`
                 : 'Очередь на сегодня закрыта.'}
             </p>
-            {status.pack.total > status.pack.items.length && !showAll && (
+            {status.pack.total > status.pack.items.length && !showAll && !frozen && (
               <Button variant="secondary" size="sm" onClick={() => { setShowAll(true); void load(true, true); }}>
                 Показать следующие {status.pack.total - status.pack.items.length}
               </Button>
@@ -244,6 +269,7 @@ export function Decisions() {
                         outcome={outcomes[key]}
                         draft={drafts[key] ?? ''}
                         editorFor={openEditor[key] ?? null}
+                        frozen={frozen}
                         onDraft={(v) => setDrafts((p) => ({ ...p, [key]: v }))}
                         onOpenEditor={(a) => setOpenEditor((p) => ({ ...p, [key]: a }))}
                         onDecide={(a) => void decide(item, a)}
@@ -256,7 +282,8 @@ export function Decisions() {
           </div>
         )}
 
-        {status.phase === 'ready' && status.pack.total > status.pack.items.length && !showAll && (
+        {/* «Показать следующие» в stale прячем: глубже снимка сервер все равно не отдаст. */}
+        {status.phase === 'ready' && status.pack.total > status.pack.items.length && !showAll && !frozen && (
           <div className="mt-6 text-center">
             <Button variant="ghost" size="sm" onClick={() => { setShowAll(true); void load(true, true); }}>
               Показать следующие {status.pack.total - status.pack.items.length}
@@ -311,6 +338,7 @@ function DecisionCard({
   outcome,
   draft,
   editorFor,
+  frozen,
   onDraft,
   onOpenEditor,
   onDecide,
@@ -319,6 +347,8 @@ function DecisionCard({
   outcome?: Outcome;
   draft: string;
   editorFor: string | null;
+  /** Пакет показан из снимка: мак спит, действия не доедут - кнопки глушим. */
+  frozen: boolean;
   onDraft: (v: string) => void;
   onOpenEditor: (action: string | null) => void;
   onDecide: (action: string) => void;
@@ -416,7 +446,7 @@ function DecisionCard({
               // три крупные кнопки превращаются в стену.
               className="min-h-11 px-4 sm:min-h-8 sm:px-3"
               variant={action === 'approve' ? 'primary' : action === 'close' ? 'danger' : 'secondary'}
-              disabled={busy || settled || blocked}
+              disabled={busy || settled || blocked || frozen}
               onClick={() => {
                 if (action === 'close' && !confirmClose) {
                   setConfirmClose(true);

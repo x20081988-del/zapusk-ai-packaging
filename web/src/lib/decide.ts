@@ -184,16 +184,36 @@ export function decisionErrorText(err: unknown): string {
   return raw;
 }
 
-export async function fetchPack(signal?: AbortSignal, all = false): Promise<DecidePack> {
+/**
+ * Живой пакет или последний снимок. `stale: true` означает, что мак сейчас
+ * недоступен и сервер отдал сохраненную копию от `fetchedAt`: показывать можно,
+ * решать нельзя - действия по снимку до источника все равно не доедут.
+ */
+export interface PackFetch {
+  pack: DecidePack;
+  stale: boolean;
+  fetchedAt: string | null;
+}
+
+export async function fetchPack(signal?: AbortSignal, all = false): Promise<PackFetch> {
   try {
-    const res = await api.get<{ ok: boolean; pack: DecidePack }>(
+    const res = await api.get<{ ok: boolean; pack: DecidePack; stale?: boolean; fetched_at?: string }>(
       all ? '/api/decide?all=1' : '/api/decide',
       { signal },
     );
-    return res.pack;
+    return { pack: res.pack, stale: res.stale === true, fetchedAt: res.fetched_at ?? null };
   } catch (e) {
     throw toFailure(e);
   }
+}
+
+/** «2026-08-17T04:49:32.000Z» -> «08:49 17.08» в поясе владельца, для пометки снимка. */
+export function snapshotLabel(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(d.getHours())}:${two(d.getMinutes())} ${two(d.getDate())}.${two(d.getMonth() + 1)}`;
 }
 
 export interface DecideOutcome {
