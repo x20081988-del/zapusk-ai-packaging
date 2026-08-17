@@ -72,9 +72,15 @@ export function BalancesStrip() {
 
       {/* Лимит подписки Claude - цифра, по которой владелец каждое утро решает,
           сколько сегодня можно жать. В боте строка была, терять ее нельзя. */}
-      {f.claude.ok && f.claude.norm_pct != null && (
-        <span className="text-secondary">
-          Claude {f.claude.day_no}/{f.claude.of_days} суток, сегодня до {Math.round(f.claude.norm_pct)}%
+      {/* «до X%» - накопленный потолок к концу суток (stop_pct): панель Claude
+          показывает расход нарастающим итогом за окно, норма одного дня (norm_pct)
+          тут читалась как потолок и врала в 5 раз. */}
+      {f.claude.ok && f.claude.stop_pct != null && (
+        <span
+          className="text-secondary"
+          title={f.claude.norm_pct != null ? `норма дня ${Math.round(f.claude.norm_pct)}%` : undefined}
+        >
+          Claude {f.claude.day_no}/{f.claude.of_days} суток, сегодня до {Math.round(f.claude.stop_pct)}%
         </span>
       )}
 
