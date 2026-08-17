@@ -2,7 +2,17 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-08-17 (Sprint 64.P3: снимки отчетов - все разделы «Мой день» живут со спящим маком).
+Last updated: 2026-08-17 (Sprint 64.P4: удален мертвый маршрут /api/crm из Sprint 63.P12).
+
+---
+
+## Completed (Sprint 64.P4 удаление мертвого /api/crm 2026-08-17)
+
+**Задача** — снести маршрут `server/src/routes/crm.ts` (GET/POST `/api/crm`, Sprint 63.P12): экран P12 удален в Sprint 63.P13, ссылок на `/api/crm` в web/src нет (кандидат отмечен при инвентаризации P3).
+
+**Что сделано** — удален `server/src/routes/crm.ts`, из `server/src/index.ts` убраны импорт `crmRoutes` и регистрация `/api/crm` с комментарием P12. `/api/crmweb` (P13) и мост decide_bridge в telegram-agent не тронуты - маршруты `/crm` моста живые, вопрос был только про Express-прокси кокпита. Селфтест-упоминаний в кокпите не было (селфтест живет в мосте).
+
+**Verification** — server+web `tsc` pass, `npm run build` pass. Grep по репозиторию: `/api/crm` больше нигде не упоминается (кроме `/api/crmweb`).
 
 ---
 
