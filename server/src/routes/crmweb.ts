@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireSuperAdmin } from '../auth.js';
 import { callBridge, relayBridge, type BridgeResult } from '../lib/decideBridge.js';
+import { loadSnapshot, saveSnapshot } from '../lib/bridgeSnapshot.js';
 
 // Sprint 63.P13 - CRM целиком в кабинете: /pm (направления, проекты, задачи,
 // петля «Сделать»), канбан всех карточек, воронки сделок.
@@ -19,8 +20,16 @@ crmwebRoutes.use(requireSuperAdmin());
 const int = z.number().int().positive();
 const slug = z.string().trim().regex(/^[a-z0-9_-]{1,64}$/i);
 
-/** GET-passthrough: тело моста отдаем как есть, ошибки - через relayBridge. */
-function relayGet(bridgePath: (req: Request) => string | null, tag: string) {
+/**
+ * GET-passthrough: тело моста отдаем как есть, ошибки - через relayBridge.
+ *
+ * Sprint 64.P2: успешное тело сохраняется снимком (ключ = путь моста), а при
+ * недоступном маке снимок отдается с `stale: true` и `fetched_at` вместо 503 -
+ * то же поведение, что у /decide. Экраны в stale глушат мутации. `snapshot:
+ * false` выключает это для живых процессов (опрос прогона): застывший статус
+ * прогона выглядел бы как работающий агент, которого на спящем маке нет.
+ */
+function relayGet(bridgePath: (req: Request) => string | null, tag: string, snapshot = true) {
   return async (req: Request, res: Response) => {
     const t0 = Date.now();
     const path = bridgePath(req);
@@ -29,7 +38,16 @@ function relayGet(bridgePath: (req: Request) => string | null, tag: string) {
     }
     const result = await callBridge(path);
     res.setHeader('Cache-Control', 'no-store');
+    if (snapshot && result.kind === 'unreachable') {
+      const snap = await loadSnapshot(path);
+      if (snap && typeof snap.value === 'object' && snap.value !== null) {
+        console.log(`[crmweb] GET ${tag} stale snapshot from ${snap.fetched_at} ms=${Date.now() - t0}`);
+        return res.json({ ...(snap.value as Record<string, unknown>), stale: true, fetched_at: snap.fetched_at });
+      }
+      // Снимка нет - прежний честный 503 через relayBridge ниже.
+    }
     relayBridge(result, res, (body) => {
+      if (snapshot && body && typeof body === 'object') void saveSnapshot(path, body);
       console.log(`[crmweb] GET ${tag} status=200 ms=${Date.now() - t0}`);
       return res.json(body);
     }, 'crmweb');
@@ -68,7 +86,7 @@ crmwebRoutes.get('/run', relayGet((req) => {
   const id = Number(req.query.id);
   if (!int.safeParse(id).success) return null;
   return `/crmweb/run?id=${id}`;
-}, 'run'));
+}, 'run', false));
 
 // --- Мутации -----------------------------------------------------------------
 // Валидация зеркалит контракты источника (apply_action/apply_deal_action/

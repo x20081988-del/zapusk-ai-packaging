@@ -2,7 +2,17 @@
 
 Single source of truth for what's done, in progress, and next. Update this file in the same change as the work.
 
-Last updated: 2026-08-17 (Sprint 64.P1: снимок очереди решений при спящем маке).
+Last updated: 2026-08-17 (Sprint 64.P2: снимки CRM при спящем маке).
+
+---
+
+## Completed (Sprint 64.P2 снимки CRM 2026-08-17)
+
+**Задача** — владелец: «сделай то же самое для раздела CRM» (после снимка очереди решений P1).
+
+**Что сделано** — хранилище снимков обобщено в `server/src/lib/bridgeSnapshot.ts` (ключ -> файл в UPLOADS_DIR/bridge-snapshots; /decide переведен на ключ `decide`). `relayGet` в crmweb.ts сохраняет каждое успешное GET-тело снимком (ключ = путь моста) и при `unreachable` отдает снимок с `stale: true` + `fetched_at`; `/run` исключен (`snapshot: false`) - застывший статус прогона выглядел бы как работающий агент. POST-мутации при спящем маке не меняются (503). Фронт: общий `SnapshotBanner` (перевел на него и Decisions), баннеры и заморозка на /crm (пм: «Сделать», чекбоксы, закрытие, ответ прогону; поллинг прогонов в stale выключен), /crm/board (кнопки карточек, DnD), /crm/p/* (DnD, модалка сделки - этап/статус/шаг/заметка; модалка глушится и когда снимком пришел сам payload сделки).
+
+**Verification** — server+web `tsc` pass, `npm run build` pass. Живой смоук локально: живые GET сеют снимки по ключам (meta/pm/cards/deals/decide); с мертвым мостом все они отдают 200 stale с честным fetched_at, `/run` и POST дают 503, GET без снимка 503. Экраны проверены в браузере: баннеры на трех экранах CRM, кнопки раскрытой карточки канбана погашены, DnD выключен.
 
 ---
 

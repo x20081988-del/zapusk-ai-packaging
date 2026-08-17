@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireSuperAdmin } from '../auth.js';
 import { callBridge, relayBridge, fetchBridgeBinary } from '../lib/decideBridge.js';
-import { loadSnapshot, saveSnapshot } from '../lib/decideSnapshot.js';
+import { loadSnapshot, saveSnapshot } from '../lib/bridgeSnapshot.js';
 
 // Sprint 63.P1 - очередь решений владельца в вебе.
 //
@@ -44,10 +44,10 @@ decideRoutes.get('/', async (req, res) => {
   // становится ровно потому, что пометка явная, а экран в stale глушит кнопки.
   res.setHeader('Cache-Control', 'no-store');
   if (result.kind === 'unreachable') {
-    const snap = await loadSnapshot();
+    const snap = await loadSnapshot('decide');
     if (snap) {
       console.log(`[decide] GET stale snapshot from ${snap.fetched_at} ms=${Date.now() - t0}`);
-      return res.json({ ok: true, pack: snap.pack, stale: true, fetched_at: snap.fetched_at });
+      return res.json({ ok: true, pack: snap.value, stale: true, fetched_at: snap.fetched_at });
     }
     // Снимка еще нет - падаем в прежний честный 503 через relayBridge ниже.
   }
@@ -57,7 +57,7 @@ decideRoutes.get('/', async (req, res) => {
       console.warn('[decide] bridge 200 без pack');
       return res.status(502).json({ error: 'source', detail: 'источник вернул ответ без пакета' });
     }
-    void saveSnapshot(pack);
+    void saveSnapshot('decide', pack);
     console.log(`[decide] GET status=200 ms=${Date.now() - t0}`);
     return res.json({ ok: true, pack });
   }, 'decide');

@@ -97,6 +97,9 @@ export interface PmPayload {
   projects: PmProject[];
   cards: PmTask[];
   autonomy: string;
+  /** Sprint 64: мак недоступен, сервер отдал последний снимок от fetched_at. */
+  stale?: boolean;
+  fetched_at?: string;
 }
 
 /** project_payload источника - НЕ надмножество PmProject: heat/top_prio там нет. */
@@ -217,9 +220,12 @@ export interface CrmwebCard {
   last_display: string;
 }
 
-export async function fetchCrmwebCards(signal?: AbortSignal): Promise<{ generated: string; cards: CrmwebCard[] }> {
+export async function fetchCrmwebCards(
+  signal?: AbortSignal,
+): Promise<{ generated: string; cards: CrmwebCard[]; stale?: boolean; fetched_at?: string }> {
   try {
-    return await api.get<{ ok: boolean; generated: string; cards: CrmwebCard[] }>('/api/crmweb/cards', { signal });
+    return await api.get<{ ok: boolean; generated: string; cards: CrmwebCard[]; stale?: boolean; fetched_at?: string }>(
+      '/api/crmweb/cards', { signal });
   } catch (e) {
     throw toFailure(e);
   }
@@ -302,13 +308,19 @@ export interface CrmwebDealPayload {
   events: CrmwebDealEvent[];
   links: CrmwebDealLink[];
   related: CrmwebDealRelated[];
+  /** Sprint 64: мак недоступен, сервер отдал последний снимок сделки. */
+  stale?: boolean;
+  fetched_at?: string;
 }
 
-export async function fetchCrmwebDeals(pipeline: string, signal?: AbortSignal): Promise<CrmwebDeal[]> {
+export async function fetchCrmwebDeals(
+  pipeline: string,
+  signal?: AbortSignal,
+): Promise<{ deals: CrmwebDeal[]; stale: boolean; fetchedAt: string | null }> {
   try {
-    const res = await api.get<{ ok: boolean; deals: CrmwebDeal[] }>(
+    const res = await api.get<{ ok: boolean; deals: CrmwebDeal[]; stale?: boolean; fetched_at?: string }>(
       `/api/crmweb/deals?pipeline=${encodeURIComponent(pipeline)}`, { signal });
-    return res.deals;
+    return { deals: res.deals, stale: res.stale === true, fetchedAt: res.fetched_at ?? null };
   } catch (e) {
     throw toFailure(e);
   }

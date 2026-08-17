@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Inbox, MoonStar, RefreshCw, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Inbox, RefreshCw, XCircle } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { BalancesStrip } from '../components/ui/BalancesStrip';
+import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { renderInlineMarkup } from '../lib/markup';
 import {
   actionLabel,
@@ -17,7 +18,6 @@ import {
   packDate,
   fetchImageObjectUrl,
   needsComment,
-  snapshotLabel,
   sortActions,
   type DecideItem,
   type DecidePack,
@@ -160,21 +160,8 @@ export function Decisions() {
         </p>
 
         {frozen && status.phase === 'ready' && (
-          <div className="mb-4 rounded-md border border-line bg-surface px-3 py-2.5 text-sm text-secondary flex items-start gap-2.5">
-            <MoonStar className="w-4 h-4 mt-0.5 shrink-0 text-muted" />
-            <span>
-              <span className="font-medium text-primary">Мак сейчас недоступен.</span>{' '}
-              Это снимок очереди на {snapshotLabel(status.fetchedAt) || 'последний удачный момент'}.
-              Кнопки решений заработают, когда мак проснется.{' '}
-              <button
-                type="button"
-                onClick={() => void load(true, showAll)}
-                className="underline underline-offset-2 hover:text-primary"
-              >
-                Проверить снова
-              </button>
-            </span>
-          </div>
+          <SnapshotBanner subject="очереди" fetchedAt={status.fetchedAt}
+            onRetry={() => void load(true, showAll)} />
         )}
 
         {status.phase === 'ready' && (status.pack.degraded?.length ?? 0) > 0 && (

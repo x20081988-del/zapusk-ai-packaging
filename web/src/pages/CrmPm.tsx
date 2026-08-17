@@ -5,6 +5,7 @@ import { CrmNav } from '../components/crm/CrmNav';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
+import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { DecideError, decisionErrorText } from '../lib/decide';
 import { SOURCE_FAILURE_COPY } from '../lib/sourceFailure';
 import {
@@ -87,6 +88,9 @@ export function CrmPm() {
     return () => inFlight.current?.abort();
   }, [load]);
 
+  // Портфель показан из снимка: мак спит, мутации и прогоны не доедут.
+  const frozen = status.phase === 'ready' && status.pm.stale === true;
+
   // Поллинг живых прогонов: раз в 4 секунды, только пока вкладка видима и есть
   // что опрашивать. Фоновый цикл без живого прогона жег бы туннель впустую.
   const waitingRuns = useMemo(() => {
@@ -103,7 +107,9 @@ export function CrmPm() {
   }, [status, runs]);
 
   useEffect(() => {
-    if (waitingRuns.length === 0) return;
+    // В снимке «ждущий» прогон - застывшее прошлое, а /run снимков не отдает:
+    // опрос долбил бы мертвый туннель каждые 4 секунды впустую.
+    if (frozen || waitingRuns.length === 0) return;
     const tick = async () => {
       if (document.visibilityState !== 'visible') return;
       for (const r of waitingRuns) {
@@ -117,14 +123,16 @@ export function CrmPm() {
     };
     const id = setInterval(() => void tick(), 4000);
     return () => clearInterval(id);
-  }, [waitingRuns]);
+  }, [waitingRuns, frozen]);
 
   async function act(taskId: number) {
+    if (frozen) return;
     const res = await crmwebAct(taskId);
     setRuns((prev) => ({ ...prev, [taskId]: res.run }));
   }
 
   async function answer(runId: number, taskId: number, text: string) {
+    if (frozen) return;
     const res = await crmwebAnswer(runId, text);
     setRuns((prev) => ({ ...prev, [taskId]: res.run }));
   }
@@ -141,6 +149,10 @@ export function CrmPm() {
     >
       <div className="max-w-3xl">
         <CrmNav active="/crm" />
+        {frozen && status.phase === 'ready' && (
+          <SnapshotBanner subject="портфеля" fetchedAt={status.pm.fetched_at ?? null}
+            onRetry={() => void load(true)} />
+        )}
         {status.phase === 'ready' && status.pm.autonomy && (
           <p className="text-xs text-muted mb-4">{status.pm.autonomy}</p>
         )}
@@ -187,7 +199,8 @@ export function CrmPm() {
             <div className="space-y-3">
               {status.pm.directions.map((d) => (
                 <DirectionCard key={d.code} dir={d} allProjects={status.pm.projects}
-                  runs={runs} onAct={act} onAnswer={answer} onMutated={() => void load(true)} />
+                  runs={runs} frozen={frozen} onAct={act} onAnswer={answer}
+                  onMutated={() => void load(true)} />
               ))}
             </div>
           )
@@ -202,7 +215,7 @@ export function CrmPm() {
           ) : (
             <div className="space-y-3">
               {status.pm.cards.map((t) => (
-                <TaskCard key={t.id} task={t} run={runs[t.id] ?? t.run ?? null}
+                <TaskCard key={t.id} task={t} run={runs[t.id] ?? t.run ?? null} frozen={frozen}
                   onAct={act} onAnswer={answer} onMutated={() => void load(true)} />
               ))}
             </div>
@@ -230,11 +243,13 @@ function LoadingSkeleton() {
 }
 
 function DirectionCard({
-  dir, allProjects, runs, onAct, onAnswer, onMutated,
+  dir, allProjects, runs, frozen, onAct, onAnswer, onMutated,
 }: {
   dir: PmDirection;
   allProjects: PmProject[];
   runs: Record<number, PmRun>;
+  /** Портфель показан из снимка - мутации у вложенных задач глушим. */
+  frozen: boolean;
   onAct: (taskId: number) => Promise<void>;
   onAnswer: (runId: number, taskId: number, text: string) => Promise<void>;
   onMutated: () => void;
@@ -286,7 +301,7 @@ function DirectionCard({
         <div className="mt-3 space-y-2.5 border-t border-line pt-3">
           {error && <p className="text-xs text-danger">{error}</p>}
           {projects.map((p) => (
-            <ProjectRow key={p.code} project={p} runs={runs}
+            <ProjectRow key={p.code} project={p} runs={runs} frozen={frozen}
               onAct={onAct} onAnswer={onAnswer} onMutated={onMutated} />
           ))}
           {!showAll && rest.length > 0 && (
@@ -302,7 +317,7 @@ function DirectionCard({
               )}
               {full.cards.map((t) => (
                 <TaskCard key={t.id} task={t} compact run={runs[t.id] ?? t.run ?? null}
-                  onAct={onAct} onAnswer={onAnswer} onMutated={onMutated} />
+                  frozen={frozen} onAct={onAct} onAnswer={onAnswer} onMutated={onMutated} />
               ))}
             </>
           )}
@@ -316,10 +331,11 @@ function DirectionCard({
 }
 
 function ProjectRow({
-  project, runs, onAct, onAnswer, onMutated,
+  project, runs, frozen, onAct, onAnswer, onMutated,
 }: {
   project: PmProject;
   runs: Record<number, PmRun>;
+  frozen: boolean;
   onAct: (taskId: number) => Promise<void>;
   onAnswer: (runId: number, taskId: number, text: string) => Promise<void>;
   onMutated: () => void;
@@ -380,7 +396,7 @@ function ProjectRow({
           )}
           {full && full.cards.map((t) => (
             <TaskCard key={t.id} task={t} compact run={runs[t.id] ?? t.run ?? null}
-              onAct={onAct} onAnswer={onAnswer} onMutated={onMutated} />
+              frozen={frozen} onAct={onAct} onAnswer={onAnswer} onMutated={onMutated} />
           ))}
         </div>
       )}
@@ -389,11 +405,13 @@ function ProjectRow({
 }
 
 function TaskCard({
-  task, run, compact = false, onAct, onAnswer, onMutated,
+  task, run, compact = false, frozen, onAct, onAnswer, onMutated,
 }: {
   task: PmTask;
   run: PmRun | null;
   compact?: boolean;
+  /** Задача показана из снимка: чекбоксы, «Сделать» и закрытие глушим. */
+  frozen: boolean;
   onAct: (taskId: number) => Promise<void>;
   onAnswer: (runId: number, taskId: number, text: string) => Promise<void>;
   onMutated: () => void;
@@ -409,7 +427,7 @@ function TaskCard({
   const ready = task.total_n > 0 && task.done_n >= task.total_n;
 
   async function guard(fn: () => Promise<void>) {
-    if (busy) return;
+    if (busy || frozen) return;
     setBusy(true);
     setError('');
     try {
@@ -457,8 +475,9 @@ function TaskCard({
               const done = subOverride[s.id] ?? Boolean(s.done);
               return (
                 <li key={s.id}>
-                  <button type="button" disabled={busy}
+                  <button type="button" disabled={busy || frozen}
                     onClick={() => {
+                      if (frozen) return;
                       setSubOverride((p) => ({ ...p, [s.id]: !done }));
                       void guard(async () => {
                         await crmwebPmAction({ action: 'toggle_sub', id: s.id, done: !done });
@@ -490,18 +509,22 @@ function TaskCard({
       )}
 
       {/* Нить прогона - как _act_html у источника: работа, вопрос, итог, причина сбоя */}
-      {run && run.waiting && (
+      {run && run.waiting && !frozen && (
         <p className="mt-2.5 text-sm text-muted animate-pulse">Поднимаю контекст и готовлю действие...</p>
+      )}
+      {/* В снимке «работающий» прогон - застывшее прошлое, живым его не рисуем. */}
+      {run && run.waiting && frozen && (
+        <p className="mt-2.5 text-sm text-muted">Прогон был в работе на момент снимка.</p>
       )}
       {run && run.status === 'asked' && (
         <div className="mt-2.5 rounded-md border border-line p-2.5">
           <p className="text-sm text-primary">{run.question}</p>
           <div className="flex gap-2 mt-2">
             <input value={answerText} onChange={(e) => setAnswerText(e.target.value)}
-              placeholder="ответь коротко"
+              placeholder="ответь коротко" disabled={frozen}
               onKeyDown={(e) => { if (e.key === 'Enter' && answerText.trim()) void guard(() => onAnswer(run.id, task.id, answerText.trim())); }}
-              className="flex-1 rounded-md bg-surface border border-line text-sm text-primary p-2 placeholder:text-muted focus:outline-none focus:border-zapusk/50" />
-            <Button size="sm" variant="primary" className={BTN} disabled={busy || !answerText.trim()}
+              className="flex-1 rounded-md bg-surface border border-line text-sm text-primary p-2 placeholder:text-muted focus:outline-none focus:border-zapusk/50 disabled:opacity-50" />
+            <Button size="sm" variant="primary" className={BTN} disabled={busy || frozen || !answerText.trim()}
               onClick={() => void guard(() => onAnswer(run.id, task.id, answerText.trim()))}>
               Ответить
             </Button>
@@ -523,14 +546,14 @@ function TaskCard({
 
       <div className="flex flex-wrap items-center gap-2 mt-3">
         {!(run && run.waiting) && (
-          <Button size="sm" variant="primary" className={`${BTN} flex-1 sm:flex-none`} disabled={busy}
+          <Button size="sm" variant="primary" className={`${BTN} flex-1 sm:flex-none`} disabled={busy || frozen}
             onClick={() => void guard(() => onAct(task.id))}>
             {run ? 'Сделать заново' : 'Сделать'}
           </Button>
         )}
         {ready && <span className="text-xs text-success">Все шаги сделаны</span>}
         {!closing ? (
-          <Button size="sm" variant="secondary" className={`${BTN} ml-auto`} disabled={busy}
+          <Button size="sm" variant="secondary" className={`${BTN} ml-auto`} disabled={busy || frozen}
             onClick={() => setClosing(true)}>
             {ready ? 'Закрыть задачу' : 'Закрыть'}
           </Button>
@@ -539,7 +562,7 @@ function TaskCard({
             <input value={resolution} onChange={(e) => setResolution(e.target.value)}
               placeholder="как решено (одной строкой)" autoFocus
               className="flex-1 min-w-40 rounded-md bg-surface border border-line text-sm text-primary p-2 placeholder:text-muted focus:outline-none focus:border-zapusk/50" />
-            <Button size="sm" variant="primary" className={BTN} disabled={busy}
+            <Button size="sm" variant="primary" className={BTN} disabled={busy || frozen}
               onClick={() => void guard(async () => {
                 await crmwebPmAction({ action: 'close_task', task_id: task.id, resolution: resolution.trim() || undefined });
                 setClosing(false);

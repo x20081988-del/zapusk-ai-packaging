@@ -7,6 +7,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
+import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { DecideError, decisionErrorText } from '../lib/decide';
 import { SOURCE_FAILURE_COPY } from '../lib/sourceFailure';
 import {
@@ -30,7 +31,7 @@ import {
 
 type Status =
   | { phase: 'loading' }
-  | { phase: 'ready'; deals: CrmwebDeal[] }
+  | { phase: 'ready'; deals: CrmwebDeal[]; stale: boolean; fetchedAt: string | null }
   | { phase: 'failed'; failure: DecideError };
 
 const BTN = 'min-h-11 px-4 sm:min-h-8 sm:px-3';
@@ -55,13 +56,13 @@ export function CrmPipeline() {
     if (isRefresh) setRefreshing(true);
     else setStatus({ phase: 'loading' });
     try {
-      const [m, deals] = await Promise.all([
+      const [m, res] = await Promise.all([
         meta ? Promise.resolve(meta) : fetchCrmwebMeta(ctrl.signal),
         fetchCrmwebDeals(slug, ctrl.signal),
       ]);
       if (ctrl.signal.aborted) return;
       setMeta(m);
-      setStatus({ phase: 'ready', deals });
+      setStatus({ phase: 'ready', deals: res.deals, stale: res.stale, fetchedAt: res.fetchedAt });
     } catch (e) {
       if (ctrl.signal.aborted) return;
       setStatus({ phase: 'failed', failure: e instanceof DecideError ? e : new DecideError('unknown', String(e)) });
@@ -115,7 +116,11 @@ export function CrmPipeline() {
     return m;
   }, [deals, query]);
 
+  const frozen = status.phase === 'ready' && status.stale;
+
   async function apply(input: DealActionInput) {
+    // Второй пояс к задизейбленным контролам: по снимку не действуют.
+    if (frozen) return;
     setBoardError('');
     try {
       await crmwebDealAction(input);
@@ -157,9 +162,14 @@ export function CrmPipeline() {
     >
       <div>
         <CrmNav active={`/crm/p/${slug}`} />
+        {frozen && status.phase === 'ready' && (
+          <SnapshotBanner subject="воронки" fetchedAt={status.fetchedAt} onRetry={() => void load(true)} />
+        )}
         <p className="text-sm text-secondary mb-4">
           {status.phase === 'ready'
-            ? `Сделки: ${active.length}${closed > 0 ? ` (+${closed} закрыто или отложено)` : ''}. Живая воронка - клик открывает сделку, перетаскивание меняет этап в базе сразу.`
+            ? frozen
+              ? `Сделки: ${active.length}${closed > 0 ? ` (+${closed} закрыто или отложено)` : ''}.`
+              : `Сделки: ${active.length}${closed > 0 ? ` (+${closed} закрыто или отложено)` : ''}. Живая воронка - клик открывает сделку, перетаскивание меняет этап в базе сразу.`
             : 'Воронка сделок из telegram-agent'}
         </p>
 
@@ -209,7 +219,7 @@ export function CrmPipeline() {
           <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4 items-start">
             {pipeline.stages.map((s) => (
               <PipelineColumn key={s.slug} id={s.slug} label={s.label} accent="border-t-success/50"
-                list={byStage.get(s.slug) ?? []} dragOver={dragOver === s.slug}
+                list={byStage.get(s.slug) ?? []} dragOver={dragOver === s.slug} frozen={frozen}
                 onDragOverCol={() => setDragOver(s.slug)}
                 onDragLeaveCol={() => setDragOver((v) => (v === s.slug ? null : v))}
                 onDropCol={(e) => onDropStage(s.slug, e)} onOpen={setOpenDeal} />
@@ -218,7 +228,7 @@ export function CrmPipeline() {
               <PipelineColumn key={st} id={`status:${st}`}
                 label={{ won: 'Выиграно', paused: 'Пауза', lost: 'Отказ' }[st]}
                 accent={{ won: 'border-t-zapusk/60', paused: 'border-t-warning/60', lost: 'border-t-line' }[st]}
-                list={byStatus[st] ?? []} dragOver={dragOver === `status:${st}`}
+                list={byStatus[st] ?? []} dragOver={dragOver === `status:${st}`} frozen={frozen}
                 onDragOverCol={() => setDragOver(`status:${st}`)}
                 onDragLeaveCol={() => setDragOver((v) => (v === `status:${st}` ? null : v))}
                 onDropCol={(e) => onDropStatus(st, e)} onOpen={setOpenDeal} />
@@ -228,7 +238,7 @@ export function CrmPipeline() {
       </div>
 
       {openDeal !== null && (
-        <DealModal dealId={openDeal} onClose={() => setOpenDeal(null)}
+        <DealModal dealId={openDeal} frozen={frozen} onClose={() => setOpenDeal(null)}
           onMutated={() => void load(true)} />
       )}
     </AppLayout>
@@ -236,13 +246,15 @@ export function CrmPipeline() {
 }
 
 function PipelineColumn({
-  id, label, accent, list, dragOver, onDragOverCol, onDragLeaveCol, onDropCol, onOpen,
+  id, label, accent, list, dragOver, frozen, onDragOverCol, onDragLeaveCol, onDropCol, onOpen,
 }: {
   id: string;
   label: string;
   accent: string;
   list: CrmwebDeal[];
   dragOver: boolean;
+  /** Воронка показана из снимка: перетаскивание глушим, просмотр остается. */
+  frozen: boolean;
   onDragOverCol: () => void;
   onDragLeaveCol: () => void;
   onDropCol: (e: React.DragEvent) => void;
@@ -259,9 +271,9 @@ function PipelineColumn({
       </p>
       <div className="space-y-2 mt-1">
         {list.map((d) => (
-          <Card key={d.id} draggable
+          <Card key={d.id} draggable={!frozen}
             onDragStart={(e: React.DragEvent) => e.dataTransfer.setData('text/deal-id', String(d.id))}
-            className="p-2.5 cursor-grab active:cursor-grabbing">
+            className={`p-2.5 ${frozen ? '' : 'cursor-grab active:cursor-grabbing'}`}>
             <button type="button" onClick={() => onOpen(d.id)} className="w-full text-left">
               <p className="text-xs text-muted">{d.id}</p>
               <p className="text-sm font-medium text-primary">{d.title}</p>
@@ -277,7 +289,15 @@ function PipelineColumn({
   );
 }
 
-function DealModal({ dealId, onClose, onMutated }: { dealId: number; onClose: () => void; onMutated: () => void }) {
+function DealModal({
+  dealId, frozen, onClose, onMutated,
+}: {
+  dealId: number;
+  /** Воронка вокруг показана из снимка - модалка тоже только читает. */
+  frozen: boolean;
+  onClose: () => void;
+  onMutated: () => void;
+}) {
   const [payload, setPayload] = useState<CrmwebDealPayload | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -295,8 +315,12 @@ function DealModal({ dealId, onClose, onMutated }: { dealId: number; onClose: ()
     return () => ctrl.abort();
   }, [dealId]);
 
+  // Мак мог уснуть между загрузкой доски и открытием сделки: сам payload тоже
+  // может прийти снимком, тогда правки глушим независимо от состояния доски.
+  const still = frozen || payload?.stale === true;
+
   async function act(input: DealActionInput) {
-    if (busy) return;
+    if (busy || still) return;
     setBusy(true);
     setError('');
     try {
@@ -334,13 +358,13 @@ function DealModal({ dealId, onClose, onMutated }: { dealId: number; onClose: ()
 
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-muted">Этап:</label>
-            <select value={d.stage} disabled={busy}
+            <select value={d.stage} disabled={busy || still}
               onChange={(e) => void act({ action: 'set_stage', id: d.id, stage: e.target.value })}
               className="rounded-md bg-surface border border-line text-sm text-primary p-2 focus:outline-none focus:border-zapusk/50">
               {payload!.stages.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
             {(['active', 'won', 'lost', 'paused'] as const).filter((s) => s !== d.status).map((s) => (
-              <Button key={s} size="sm" variant={s === 'lost' ? 'danger' : 'secondary'} className={BTN} disabled={busy}
+              <Button key={s} size="sm" variant={s === 'lost' ? 'danger' : 'secondary'} className={BTN} disabled={busy || still}
                 onClick={() => void act({ action: 'set_status', id: d.id, status: s })}>
                 {DEAL_STATUS_LABEL[s]}
               </Button>
@@ -352,7 +376,8 @@ function DealModal({ dealId, onClose, onMutated }: { dealId: number; onClose: ()
               Следующий шаг: {d.step_display}
             </p>
             {!stepOpen ? (
-              <Button size="sm" variant="ghost" className={`${BTN} mt-1`} onClick={() => setStepOpen(true)}>
+              <Button size="sm" variant="ghost" className={`${BTN} mt-1`} disabled={still}
+                onClick={() => setStepOpen(true)}>
                 Изменить шаг
               </Button>
             ) : (
@@ -369,7 +394,7 @@ function DealModal({ dealId, onClose, onMutated }: { dealId: number; onClose: ()
                   </select>
                   <input type="date" value={stepDue} onChange={(e) => setStepDue(e.target.value)}
                     className="rounded-md bg-surface border border-line text-sm text-primary p-2" />
-                  <Button size="sm" variant="primary" className={BTN} disabled={busy || !stepText.trim()}
+                  <Button size="sm" variant="primary" className={BTN} disabled={busy || still || !stepText.trim()}
                     onClick={() => void act({
                       action: 'set_next_step', id: d.id, text: stepText.trim(),
                       owner: stepOwner, due: stepDue || undefined,
@@ -435,10 +460,10 @@ function DealModal({ dealId, onClose, onMutated }: { dealId: number; onClose: ()
 
           <div className="flex gap-2">
             <input value={note} onChange={(e) => setNote(e.target.value)}
-              placeholder="Заметка к сделке"
+              placeholder="Заметка к сделке" disabled={still}
               onKeyDown={(e) => { if (e.key === 'Enter' && note.trim()) { void act({ action: 'add_note', id: d.id, text: note.trim() }); setNote(''); } }}
-              className="flex-1 rounded-md bg-surface border border-line text-sm text-primary p-2 placeholder:text-muted focus:outline-none focus:border-zapusk/50" />
-            <Button size="sm" variant="secondary" className={BTN} disabled={busy || !note.trim()}
+              className="flex-1 rounded-md bg-surface border border-line text-sm text-primary p-2 placeholder:text-muted focus:outline-none focus:border-zapusk/50 disabled:opacity-50" />
+            <Button size="sm" variant="secondary" className={BTN} disabled={busy || still || !note.trim()}
               onClick={() => { void act({ action: 'add_note', id: d.id, text: note.trim() }); setNote(''); }}>
               Добавить
             </Button>

@@ -5,6 +5,7 @@ import { CrmNav } from '../components/crm/CrmNav';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
+import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { DecideError, decisionErrorText } from '../lib/decide';
 import { SOURCE_FAILURE_COPY } from '../lib/sourceFailure';
 import {
@@ -24,7 +25,7 @@ import {
 
 type Status =
   | { phase: 'loading' }
-  | { phase: 'ready'; generated: string; cards: CrmwebCard[] }
+  | { phase: 'ready'; generated: string; cards: CrmwebCard[]; stale: boolean; fetchedAt: string | null }
   | { phase: 'failed'; failure: DecideError };
 
 const BTN = 'min-h-11 px-4 sm:min-h-8 sm:px-3';
@@ -61,7 +62,10 @@ export function CrmBoard() {
     try {
       const res = await fetchCrmwebCards(ctrl.signal);
       if (ctrl.signal.aborted) return;
-      setStatus({ phase: 'ready', generated: res.generated, cards: res.cards });
+      setStatus({
+        phase: 'ready', generated: res.generated, cards: res.cards,
+        stale: res.stale === true, fetchedAt: res.fetched_at ?? null,
+      });
     } catch (e) {
       if (ctrl.signal.aborted) return;
       setStatus({ phase: 'failed', failure: e instanceof DecideError ? e : new DecideError('unknown', String(e)) });
@@ -76,7 +80,11 @@ export function CrmBoard() {
     return () => inFlight.current?.abort();
   }, [load]);
 
+  const frozen = status.phase === 'ready' && status.stale;
+
   async function act(card: CrmwebCard, input: CardActionInput) {
+    // Второй пояс к задизейбленным кнопкам: по снимку не действуют.
+    if (frozen) return;
     setErrors((p) => ({ ...p, [card.id]: '' }));
     try {
       await crmwebCardAction(input);
@@ -144,9 +152,14 @@ export function CrmBoard() {
     >
       <div>
         <CrmNav active="/crm/board" />
+        {frozen && status.phase === 'ready' && (
+          <SnapshotBanner subject="доски" fetchedAt={status.fetchedAt} onRetry={() => void load(true)} />
+        )}
         <p className="text-sm text-secondary mb-4">
           {status.phase === 'ready'
-            ? `Живая доска - клик и перетаскивание меняют статус в базе сразу. Всего ${all.length}.`
+            ? frozen
+              ? `Всего ${all.length}.`
+              : `Живая доска - клик и перетаскивание меняют статус в базе сразу. Всего ${all.length}.`
             : 'Все карточки CRM из telegram-agent'}
         </p>
 
@@ -216,7 +229,7 @@ export function CrmBoard() {
                 <div className="space-y-2 mt-1">
                   {(byBucket[b.slug] ?? []).map((c) => (
                     <BoardCard key={c.id} card={c} error={errors[c.id] ?? ''}
-                      expanded={expanded === c.id}
+                      expanded={expanded === c.id} frozen={frozen}
                       onToggle={() => setExpanded((cur) => (cur === c.id ? null : c.id))}
                       onAct={(input) => void act(c, input)} />
                   ))}
@@ -234,11 +247,13 @@ export function CrmBoard() {
 }
 
 function BoardCard({
-  card, error, expanded, onToggle, onAct,
+  card, error, expanded, frozen, onToggle, onAct,
 }: {
   card: CrmwebCard;
   error: string;
   expanded: boolean;
+  /** Доска показана из снимка: мак спит, действия не доедут - все глушим. */
+  frozen: boolean;
   onToggle: () => void;
   onAct: (input: CardActionInput) => void;
 }) {
@@ -255,9 +270,9 @@ function BoardCard({
 
   return (
     <Card
-      draggable
+      draggable={!frozen}
       onDragStart={(e: React.DragEvent) => e.dataTransfer.setData('text/card-id', String(card.id))}
-      className="p-3 cursor-grab active:cursor-grabbing"
+      className={`p-3 ${frozen ? '' : 'cursor-grab active:cursor-grabbing'}`}
     >
       <button type="button" onClick={onToggle} className="w-full text-left">
         <div className="flex items-baseline gap-1.5 flex-wrap text-xs text-muted">
@@ -289,34 +304,34 @@ function BoardCard({
         <div className="mt-2.5 border-t border-line pt-2.5">
           <div className="flex flex-wrap gap-1.5">
             {btns.done && (
-              <Button size="sm" variant="secondary" className={BTN}
+              <Button size="sm" variant="secondary" className={BTN} disabled={frozen}
                 onClick={() => onAct({ action: 'complete_step', id: card.id })}>
                 Сделал шаг
               </Button>
             )}
             {btns.snooze && (
-              <Button size="sm" variant="secondary" className={BTN}
+              <Button size="sm" variant="secondary" className={BTN} disabled={frozen}
                 onClick={() => onAct({ action: 'snooze', id: card.id })}>
                 Отложить
               </Button>
             )}
             {btns.decline && (
-              <Button size="sm" variant="danger" className={BTN}
+              <Button size="sm" variant="danger" className={BTN} disabled={frozen}
                 onClick={() => onAct({ action: 'decline', id: card.id })}>
                 Отказ
               </Button>
             )}
             {btns.reactivate && (
-              <Button size="sm" variant="secondary" className={BTN}
+              <Button size="sm" variant="secondary" className={BTN} disabled={frozen}
                 onClick={() => onAct({ action: 'reactivate', id: card.id })}>
                 Вернуть
               </Button>
             )}
-            <Button size="sm" variant="ghost" className={BTN}
+            <Button size="sm" variant="ghost" className={BTN} disabled={frozen}
               onClick={() => setEditor((e) => (e === 'step' ? null : 'step'))}>
               Шаг
             </Button>
-            <Button size="sm" variant="ghost" className={BTN}
+            <Button size="sm" variant="ghost" className={BTN} disabled={frozen}
               onClick={() => setEditor((e) => (e === 'stage' ? null : 'stage'))}>
               Стадия
             </Button>
