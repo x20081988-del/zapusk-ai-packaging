@@ -273,6 +273,11 @@ export interface ReportEnvelope<F> {
   /** Возраст измерения в секундах. Отчет строится десятки секунд и живет в кэше. */
   age_sec?: number;
   stale?: boolean;
+  /**
+   * Sprint 64: присутствует ТОЛЬКО у серверного снимка (мак недоступен). Обычный
+   * stale-кэш моста этой метки не несет - по ней экран отличает «мак спит».
+   */
+  fetched_at?: string;
 }
 
 export async function fetchReport<F>(name: string, signal?: AbortSignal): Promise<ReportEnvelope<F>> {

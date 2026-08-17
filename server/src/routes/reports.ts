@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireSuperAdmin } from '../auth.js';
 import { callBridge, relayBridge } from '../lib/decideBridge.js';
+import { loadSnapshot, saveSnapshot } from '../lib/bridgeSnapshot.js';
 
 // Sprint 63.P3 - отчеты, которые раньше приходили владельцу в телеграм-бота.
 //
@@ -32,6 +33,25 @@ reportsRoutes.get('/:name', async (req, res) => {
   const t0 = Date.now();
   const result = await callBridge(`/report/${name}`);
   res.setHeader('Cache-Control', 'no-store');
+  // Sprint 64.P3: мак недоступен - отдаем последний снимок отчета. Возраст замера
+  // НАРАЩИВАЕМ на время, прошедшее со снимка: «измерено 3 часа назад» остается
+  // правдой и у снимка. fetched_at добавляется ТОЛЬКО у снимка - для экрана это
+  // признак «мак спит», отличимый от штатного stale-кэша самого моста.
+  if (result.kind === 'unreachable') {
+    const snap = await loadSnapshot(`report-${name}`);
+    if (snap && typeof snap.value === 'object' && snap.value !== null) {
+      const saved = snap.value as { age_sec?: number | null };
+      const elapsed = Math.max(0, Math.round((Date.now() - Date.parse(snap.fetched_at)) / 1000));
+      console.log(`[reports] GET ${name} stale snapshot from ${snap.fetched_at} ms=${Date.now() - t0}`);
+      return res.json({
+        ...saved,
+        age_sec: (typeof saved.age_sec === 'number' ? saved.age_sec : 0) + elapsed,
+        stale: true,
+        fetched_at: snap.fetched_at,
+      });
+    }
+    // Снимка нет - прежний честный 503 через relayBridge ниже.
+  }
   relayBridge(result, res, (body) => {
     const payload = body as
       | { text?: unknown; facts?: unknown; age_sec?: unknown; stale?: unknown }
@@ -44,13 +64,15 @@ reportsRoutes.get('/:name', async (req, res) => {
     // Возраст и признак протухания пробрасываем как есть: отчет строится десятки
     // секунд и живет в кэше моста, поэтому экран обязан показать, КОГДА измеряли.
     // Отдать цифру без метки времени значит выдать снимок за живой поток.
-    return res.json({
+    const envelope = {
       ok: true,
       name,
       text: payload.text,
       facts: payload.facts ?? null,
       age_sec: typeof payload.age_sec === 'number' ? payload.age_sec : null,
       stale: payload.stale === true,
-    });
+    };
+    void saveSnapshot(`report-${name}`, envelope);
+    return res.json(envelope);
   }, 'reports');
 });

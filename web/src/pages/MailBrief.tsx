@@ -3,6 +3,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { ageLabel, fetchReport, type ReportEnvelope } from '../lib/decide';
 import { renderInlineMarkup } from '../lib/markup';
 
@@ -81,6 +82,9 @@ export function MailBrief() {
       }
     >
       <div className="max-w-3xl">
+        {state === 'ready' && data?.fetched_at && (
+          <SnapshotBanner subject="брифа" fetchedAt={data.fetched_at} onRetry={() => void load(true)} />
+        )}
         <p className="text-sm text-secondary mb-4">
           Важное из четырех ящиков: Яндекс и три Gmail. Только чтение, письма никуда
           не уходят.{' '}

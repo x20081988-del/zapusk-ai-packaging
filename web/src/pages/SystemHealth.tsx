@@ -3,6 +3,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { ageLabel, fetchReport, type ReportEnvelope } from '../lib/decide';
 import { renderInlineMarkup } from '../lib/markup';
 
@@ -80,6 +81,13 @@ export function SystemHealth() {
     return () => inFlight.current?.abort();
   }, [load]);
 
+  // fetched_at несет только серверный снимок (мак недоступен) - берем самый свежий.
+  const snapshotAt = Object.values(slots)
+    .map((s) => (s?.phase === 'ready' ? s.report.fetched_at : undefined))
+    .filter((v): v is string => Boolean(v))
+    .sort()
+    .pop() ?? null;
+
   return (
     <AppLayout
       title="Здоровье системы"
@@ -96,6 +104,9 @@ export function SystemHealth() {
       }
     >
       <div className="max-w-3xl space-y-4">
+        {snapshotAt && (
+          <SnapshotBanner subject="сводок" fetchedAt={snapshotAt} onRetry={() => void load(true)} />
+        )}
         <p className="text-sm text-secondary">
           Четыре разбора, которые раньше приходили отдельными сообщениями в бота.
           Показывают состояние на момент замера, а не поток событий.
