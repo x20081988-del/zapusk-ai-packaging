@@ -127,7 +127,8 @@ const pmActionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('toggle_sub'), id: int, done: z.boolean() }),
 ]);
 
-const actSchema = z.object({ task_id: int });
+// kind: 'do' - «Сделать», 'decompose' - «Разбери» (разложить на подзадачи).
+const actSchema = z.object({ task_id: int, kind: z.enum(['do', 'decompose']).optional() });
 const answerSchema = z.object({ run_id: int, text: z.string().trim().min(1).max(2000) });
 
 function relayPost(schema: z.ZodTypeAny, bridgePath: string, tag: string) {

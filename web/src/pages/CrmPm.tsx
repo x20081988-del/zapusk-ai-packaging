@@ -116,6 +116,12 @@ export function CrmPm() {
         try {
           const fresh = await fetchCrmwebRun(r.id);
           setRuns((prev) => ({ ...prev, [fresh.task_id]: fresh }));
+          // «Разбери» завершился - подзадачи уже в реестре, но на доске их еще
+          // нет: без перечитки чек-лист появился бы только после ручного
+          // «Обновить», и результат разбора выглядел бы потерянным.
+          if (fresh.kind === 'decompose' && fresh.status === 'done' && r.waiting) {
+            void load(true);
+          }
         } catch {
           // недоступный опрос не должен ронять экран - попробуем следующим тиком
         }
@@ -125,9 +131,9 @@ export function CrmPm() {
     return () => clearInterval(id);
   }, [waitingRuns, frozen]);
 
-  async function act(taskId: number) {
+  async function act(taskId: number, kind: 'do' | 'decompose' = 'do') {
     if (frozen) return;
-    const res = await crmwebAct(taskId);
+    const res = await crmwebAct(taskId, kind);
     setRuns((prev) => ({ ...prev, [taskId]: res.run }));
   }
 
@@ -250,7 +256,7 @@ function DirectionCard({
   runs: Record<number, PmRun>;
   /** Портфель показан из снимка - мутации у вложенных задач глушим. */
   frozen: boolean;
-  onAct: (taskId: number) => Promise<void>;
+  onAct: (taskId: number, kind?: 'do' | 'decompose') => Promise<void>;
   onAnswer: (runId: number, taskId: number, text: string) => Promise<void>;
   onMutated: () => void;
 }) {
@@ -336,7 +342,7 @@ function ProjectRow({
   project: PmProject;
   runs: Record<number, PmRun>;
   frozen: boolean;
-  onAct: (taskId: number) => Promise<void>;
+  onAct: (taskId: number, kind?: 'do' | 'decompose') => Promise<void>;
   onAnswer: (runId: number, taskId: number, text: string) => Promise<void>;
   onMutated: () => void;
 }) {
@@ -412,7 +418,7 @@ function TaskCard({
   compact?: boolean;
   /** Задача показана из снимка: чекбоксы, «Сделать» и закрытие глушим. */
   frozen: boolean;
-  onAct: (taskId: number) => Promise<void>;
+  onAct: (taskId: number, kind?: 'do' | 'decompose') => Promise<void>;
   onAnswer: (runId: number, taskId: number, text: string) => Promise<void>;
   onMutated: () => void;
 }) {
@@ -497,8 +503,14 @@ function TaskCard({
           </ul>
         </div>
       ) : (
-        <div className="mt-2.5 rounded bg-warning/10 text-warning text-sm px-2.5 py-1.5">
-          Не разложена на шаги. Скажи «разбери» - распишу подзадачи и возьму свою часть.
+        <div className="mt-2.5 rounded bg-warning/10 text-sm px-2.5 py-1.5 flex flex-wrap items-center gap-2">
+          <span className="text-warning">Не разложена на шаги.</span>
+          {!(run && run.waiting) && (
+            <Button size="sm" variant="secondary" className={BTN} disabled={busy || frozen}
+              onClick={() => void guard(() => onAct(task.id, 'decompose'))}>
+              Разбери на шаги
+            </Button>
+          )}
         </div>
       )}
 
@@ -510,7 +522,11 @@ function TaskCard({
 
       {/* Нить прогона - как _act_html у источника: работа, вопрос, итог, причина сбоя */}
       {run && run.waiting && !frozen && (
-        <p className="mt-2.5 text-sm text-muted animate-pulse">Поднимаю контекст и готовлю действие...</p>
+        <p className="mt-2.5 text-sm text-muted animate-pulse">
+          {run.kind === 'decompose'
+            ? 'Раскладываю задачу на шаги...'
+            : 'Поднимаю контекст и готовлю действие...'}
+        </p>
       )}
       {/* В снимке «работающий» прогон - застывшее прошлое, живым его не рисуем. */}
       {run && run.waiting && frozen && (
@@ -552,10 +568,12 @@ function TaskCard({
           </Button>
         )}
         {ready && <span className="text-xs text-success">Все шаги сделаны</span>}
+        {/* «Закрыть» владелец не считывал как «задача реализована» (26.08: «нет
+            кнопки, что задача уже реализована») - кнопка называется «Сделано». */}
         {!closing ? (
           <Button size="sm" variant="secondary" className={`${BTN} ml-auto`} disabled={busy || frozen}
             onClick={() => setClosing(true)}>
-            {ready ? 'Закрыть задачу' : 'Закрыть'}
+            {ready ? 'Сделано, закрыть' : 'Сделано'}
           </Button>
         ) : (
           <div className="flex gap-2 w-full sm:w-auto sm:ml-auto">
@@ -568,7 +586,7 @@ function TaskCard({
                 setClosing(false);
                 onMutated();
               })}>
-              Закрыть
+              Сделано
             </Button>
           </div>
         )}

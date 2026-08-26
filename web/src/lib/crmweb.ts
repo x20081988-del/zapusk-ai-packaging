@@ -22,6 +22,7 @@ export interface PmRun {
   id: number;
   task_id: number;
   status: string; // queued | running | asked | done | failed
+  kind?: string; // do | decompose («Разбери» - разложить на подзадачи)
   route: string;
   question: string;
   answer: string;
@@ -187,8 +188,11 @@ export async function crmwebPmAction(input: PmActionInput): Promise<{ ok: boolea
   return api.post('/api/crmweb/pm-action', input);
 }
 
-export async function crmwebAct(taskId: number): Promise<{ ok: boolean; run: PmRun; fresh: boolean }> {
-  return api.post('/api/crmweb/act', { task_id: taskId });
+export async function crmwebAct(
+  taskId: number,
+  kind: 'do' | 'decompose' = 'do',
+): Promise<{ ok: boolean; run: PmRun; fresh: boolean }> {
+  return api.post('/api/crmweb/act', { task_id: taskId, kind });
 }
 
 export async function crmwebAnswer(runId: number, text: string): Promise<{ ok: boolean; run: PmRun }> {
