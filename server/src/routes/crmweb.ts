@@ -55,6 +55,8 @@ function relayGet(bridgePath: (req: Request) => string | null, tag: string, snap
 }
 
 crmwebRoutes.get('/cards', relayGet(() => '/crmweb/cards', 'cards'));
+// «Фокус дня» на /decide: сделки, где сегодня ход владельца, + горячие задачи.
+crmwebRoutes.get('/focus', relayGet(() => '/crmweb/focus', 'focus'));
 crmwebRoutes.get('/meta', relayGet(() => '/crmweb/meta', 'meta'));
 crmwebRoutes.get('/pm', relayGet(() => '/crmweb/pm', 'pm'));
 

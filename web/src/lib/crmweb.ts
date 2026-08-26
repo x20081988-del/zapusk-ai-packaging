@@ -231,6 +231,31 @@ export async function fetchCrmwebCards(
   }
 }
 
+// «Фокус дня» (/decide): сделки, где сегодня ход владельца, + горячие задачи.
+// Как и весь модуль - формы источника, ничего не пересчитываем.
+export interface FocusDeal extends CrmwebCard {
+  due_state: string; // over | today
+  due_label: string; // «просрочен на N дней» | «сегодня»
+}
+
+export interface CrmwebFocus {
+  generated: number;
+  deals: FocusDeal[];
+  deals_total: number;
+  no_step_n: number;
+  tasks: PmTask[];
+  stale?: boolean;
+  fetched_at?: string;
+}
+
+export async function fetchCrmwebFocus(signal?: AbortSignal): Promise<CrmwebFocus> {
+  try {
+    return await api.get<CrmwebFocus>('/api/crmweb/focus', { signal });
+  } catch (e) {
+    throw toFailure(e);
+  }
+}
+
 export type CardActionInput =
   | { action: 'decline' | 'reactivate' | 'snooze' | 'complete_step'; id: number }
   | { action: 'set_stage'; id: number; stage: string }

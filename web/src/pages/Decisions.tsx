@@ -5,6 +5,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { BalancesStrip } from '../components/ui/BalancesStrip';
+import { FocusStrip } from '../components/crm/FocusStrip';
 import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { renderInlineMarkup } from '../lib/markup';
 import {
@@ -154,6 +155,10 @@ export function Decisions() {
             приходит сюда каждый день, и цифра «сколько осталось» должна попадаться
             ему на глаза по дороге к решениям, а не ждать отдельного клика. */}
         <BalancesStrip />
+
+        {/* Фокус дня: сделки, где сегодня ход владельца, и горящие задачи. CRM
+            перестает быть отдельным походом - день виден с той же страницы. */}
+        <FocusStrip />
 
         <p className="text-sm text-secondary mb-5">
           {status.phase === 'ready' ? headline(status.pack, outcomes) : 'Очередь из telegram-agent'}
