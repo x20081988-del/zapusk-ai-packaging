@@ -106,6 +106,10 @@ export function needsComment(action: string): boolean {
 
 // Заголовки групп - из KIND_LABEL источника, чтобы веб и бот называли одно одинаково.
 export const KIND_LABEL: Record<string, string> = {
+  // Люди пришли из people_pack (05.09.2026): контакт, что с ним было, шаг и
+  // готовый черновик. Без подписи группа рисовалась заголовком «person» в самом
+  // низу экрана, потому что неизвестный вид уезжает в конец порядка.
+  person: 'Люди',
   hot: 'Горит',
   ask: 'Вопрос по задаче',
   deal: 'Просроченный шаг сделки',
@@ -119,7 +123,7 @@ export const KIND_LABEL: Record<string, string> = {
 
 // Порядок разбора loss-first, тот же, что в decide_pack.KIND_ORDER: сначала то, что
 // теряет деньги сегодня, приемка сделанного в конец.
-const KIND_ORDER = ['hot', 'ask', 'deal', 'draft', 'channel', 'candidate', 'gap', 'fork', 'accept'];
+const KIND_ORDER = ['person', 'hot', 'ask', 'deal', 'draft', 'channel', 'candidate', 'gap', 'fork', 'accept'];
 
 /** ISO-дата пакета в вид, которым владелец пользуется в текстах: 13.08. */
 export function packDate(iso: string): string {
