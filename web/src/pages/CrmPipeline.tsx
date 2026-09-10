@@ -338,9 +338,10 @@ function DealModal({
   const d = payload?.deal;
 
   return (
-    <Modal open onClose={onClose} title={d ? d.title : `Сделка #${dealId}`}>
-      {!d && !error && <p className="text-sm text-muted p-2">загружаю...</p>}
-      {error && <p className="text-sm text-danger p-2">{error}</p>}
+    <Modal open onClose={onClose} title={d ? d.title : `Сделка #${dealId}`}
+      bodyClassName="p-4 sm:p-5">
+      {!d && !error && <p className="text-sm text-muted">загружаю...</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
       {d && (
         <div className="space-y-3 text-sm">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
@@ -376,7 +377,7 @@ function DealModal({
               Следующий шаг: {d.step_display}
             </p>
             {!stepOpen ? (
-              <Button size="sm" variant="ghost" className={`${BTN} mt-1`} disabled={still}
+              <Button size="sm" variant="secondary" className={`${BTN} mt-1.5`} disabled={still}
                 onClick={() => setStepOpen(true)}>
                 Изменить шаг
               </Button>
