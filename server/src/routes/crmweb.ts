@@ -84,6 +84,25 @@ crmwebRoutes.get('/pm/project', relayGet((req) => {
   return `/crmweb/pm/project?code=${encodeURIComponent(code)}`;
 }, 'pm/project'));
 
+// Отделы (28.09.2026): срез реестра по функциям - клиенты, эфиры, юристы...
+// days - окно «сделано за N дней», источник сам ограничивает 7..365.
+const days = z.coerce.number().int().min(7).max(365);
+crmwebRoutes.get('/depts', relayGet((req) => {
+  const raw = req.query.days;
+  if (raw === undefined) return '/crmweb/depts';
+  const parsed = days.safeParse(raw);
+  return parsed.success ? `/crmweb/depts?days=${parsed.data}` : null;
+}, 'depts'));
+
+crmwebRoutes.get('/dept', relayGet((req) => {
+  const code = String(req.query.code ?? '');
+  if (!slug.safeParse(code).success) return null;
+  const raw = req.query.days;
+  if (raw === undefined) return `/crmweb/dept?code=${encodeURIComponent(code)}`;
+  const parsed = days.safeParse(raw);
+  return parsed.success ? `/crmweb/dept?code=${encodeURIComponent(code)}&days=${parsed.data}` : null;
+}, 'dept'));
+
 crmwebRoutes.get('/run', relayGet((req) => {
   const id = Number(req.query.id);
   if (!int.safeParse(id).success) return null;
@@ -129,6 +148,8 @@ const pmActionSchema = z.discriminatedUnion('action', [
 
 // kind: 'do' - «Сделать», 'decompose' - «Разбери» (разложить на подзадачи).
 const actSchema = z.object({ task_id: int, kind: z.enum(['do', 'decompose']).optional() });
+// Перенос задачи в другой отдел: коды отделов проверяет источник (DEPT_BY_CODE).
+const deptActionSchema = z.object({ action: z.literal('set_dept'), task_id: int, dept: slug });
 const answerSchema = z.object({ run_id: int, text: z.string().trim().min(1).max(2000) });
 
 function relayPost(schema: z.ZodTypeAny, bridgePath: string, tag: string) {
@@ -168,3 +189,4 @@ crmwebRoutes.post('/deal-action', relayPost(dealActionSchema, '/crmweb/deal_acti
 crmwebRoutes.post('/pm-action', relayPost(pmActionSchema, '/crmweb/pm_action', 'pm-action'));
 crmwebRoutes.post('/act', relayPost(actSchema, '/crmweb/act', 'act'));
 crmwebRoutes.post('/answer', relayPost(answerSchema, '/crmweb/answer', 'answer'));
+crmwebRoutes.post('/dept-action', relayPost(deptActionSchema, '/crmweb/dept_action', 'dept-action'));

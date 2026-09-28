@@ -33,6 +33,8 @@ import { Decisions } from './pages/Decisions';
 import { CrmPm } from './pages/CrmPm';
 import { CrmBoard } from './pages/CrmBoard';
 import { CrmPipeline } from './pages/CrmPipeline';
+import { CrmDepts } from './pages/CrmDepts';
+import { CrmDept } from './pages/CrmDept';
 import { SystemHealth } from './pages/SystemHealth';
 import { MailBrief } from './pages/MailBrief';
 import { Inbound } from './pages/Inbound';
@@ -60,6 +62,9 @@ export default function App() {
       <Route path="/crm" element={<RequireRole roles={['SUPER_ADMIN']}><CrmPm /></RequireRole>} />
       <Route path="/crm/board" element={<RequireRole roles={['SUPER_ADMIN']}><CrmBoard /></RequireRole>} />
       <Route path="/crm/p/:slug" element={<RequireRole roles={['SUPER_ADMIN']}><CrmPipeline /></RequireRole>} />
+      {/* Sprint 66 - CRM по отделам: текущее, сделанное за период, документы. */}
+      <Route path="/crm/depts" element={<RequireRole roles={['SUPER_ADMIN']}><CrmDepts /></RequireRole>} />
+      <Route path="/crm/depts/:code" element={<RequireRole roles={['SUPER_ADMIN']}><CrmDept /></RequireRole>} />
       {/* Sprint 63.P4 - четыре аудита одним экраном вместо четырех утренних пушей. */}
       <Route path="/system" element={<RequireRole roles={['SUPER_ADMIN']}><SystemHealth /></RequireRole>} />
       {/* Sprint 63.P7 - утренний почтовый бриф вместо пуша в 10:00. */}

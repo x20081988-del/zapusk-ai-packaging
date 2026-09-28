@@ -199,6 +199,129 @@ export async function crmwebAnswer(runId: number, text: string): Promise<{ ok: b
   return api.post('/api/crmweb/answer', { run_id: runId, text });
 }
 
+// --- Отделы (/crm/depts) -----------------------------------------------------
+// Срез реестра по функциям (crm_departments в telegram-agent): отдел считается
+// для каждой задачи, ручная привязка главнее правил. Формы - как отдал источник.
+
+export interface DeptTop {
+  id: number;
+  title: string;
+  heat: string;
+  heat_label: string;
+}
+
+export interface DeptSummary {
+  code: string;
+  name: string;
+  desc: string;
+  open_n: number;
+  over_n: number;
+  today_n: number;
+  backlog_n: number;
+  done_n: number;
+  dropped_n: number;
+  docs_n: number;
+  doc_needed_n: number;
+  heat: string;
+  last_done_ts: number;
+  last_done_label: string;
+  top: DeptTop[];
+}
+
+export interface DeptsPayload {
+  ok: boolean;
+  generated: string;
+  days: number;
+  departments: DeptSummary[];
+  stale?: boolean;
+  fetched_at?: string;
+}
+
+/** Карточка задачи отдела: PmTask плюс отдел и «какой документ просит». */
+export interface DeptTask extends PmTask {
+  dept: string;
+  dept_manual: boolean;
+  doc_needed: string;
+}
+
+export interface DeptDone {
+  id: number;
+  date: string;
+  ts: number;
+  status: string;
+  title: string;
+  text: string;
+  resolution: string;
+  stream: string;
+}
+
+export interface DeptDoc {
+  id: number;
+  name: string;
+  date: string;
+  ts: number;
+  exts: string[];
+  versions: number;
+  source: string; // reports | downloads | mail
+  kind: string;
+  dept: string;
+  missing: boolean;
+  folder: string;
+}
+
+export interface DeptDocNeeded {
+  id: number;
+  title: string;
+  doc: string;
+  heat: string;
+  heat_label: string;
+}
+
+export interface DeptPayload {
+  code: string;
+  name: string;
+  desc: string;
+  generated: string;
+  days: number;
+  open_n: number;
+  over_n: number;
+  cards: DeptTask[];
+  docs_needed: DeptDocNeeded[];
+  backlog: Array<{ id: number; title: string; priority: number }>;
+  done: DeptDone[];
+  dropped_n: number;
+  dropped: DeptDone[];
+  docs: DeptDoc[];
+  departments: Array<{ code: string; name: string }>;
+  stale?: boolean;
+  fetched_at?: string;
+}
+
+export async function fetchCrmwebDepts(days?: number, signal?: AbortSignal): Promise<DeptsPayload> {
+  try {
+    const q = days ? `?days=${days}` : '';
+    return await api.get<DeptsPayload>(`/api/crmweb/depts${q}`, { signal });
+  } catch (e) {
+    throw toFailure(e);
+  }
+}
+
+export async function fetchCrmwebDept(code: string, days?: number, signal?: AbortSignal): Promise<DeptPayload> {
+  try {
+    const q = days ? `&days=${days}` : '';
+    const res = await api.get<{ ok: boolean; department: DeptPayload; stale?: boolean; fetched_at?: string }>(
+      `/api/crmweb/dept?code=${encodeURIComponent(code)}${q}`, { signal });
+    // Снимок сервер клеит на конверт, а не внутрь department - поднимаем флаги.
+    return { ...res.department, stale: res.stale, fetched_at: res.fetched_at };
+  } catch (e) {
+    throw toFailure(e);
+  }
+}
+
+export async function crmwebSetDept(taskId: number, dept: string): Promise<{ ok: boolean; detail?: string }> {
+  return api.post('/api/crmweb/dept-action', { action: 'set_dept', task_id: taskId, dept });
+}
+
 export async function fetchCrmwebRun(runId: number, signal?: AbortSignal): Promise<PmRun> {
   const res = await api.get<{ ok: boolean; run: PmRun }>(`/api/crmweb/run?id=${runId}`, { signal });
   return res.run;

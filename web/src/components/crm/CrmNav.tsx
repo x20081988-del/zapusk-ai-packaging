@@ -26,6 +26,8 @@ export function CrmNav({ active }: { active: string }) {
   }, []);
 
   const items: Array<{ to: string; label: string; n?: number }> = [
+    // Отделы первыми (владелец 28.09.2026): это его основной срез CRM.
+    { to: '/crm/depts', label: 'Отделы' },
     { to: '/crm', label: 'Проекты' },
     { to: '/crm/board', label: 'Все карточки' },
     ...(meta?.pipelines ?? []).map((p) => ({ to: `/crm/p/${p.slug}`, label: p.label, n: p.active })),
@@ -36,7 +38,7 @@ export function CrmNav({ active }: { active: string }) {
       {items.map((it) => (
         <Link key={it.to} to={it.to}
           className={`rounded-full px-3 py-1.5 text-sm border transition-colors ${
-            active === it.to
+            active === it.to || (it.to !== '/crm' && active.startsWith(it.to + '/'))
               ? 'border-zapusk/60 bg-zapusk/10 text-primary'
               : 'border-line text-secondary hover:text-primary'
           }`}>

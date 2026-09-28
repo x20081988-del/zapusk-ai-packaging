@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
-  MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain,
+  MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain, Building2,
   Mail, TrendingUp, Repeat, X, Archive, Activity, Radar, ListChecks, HeartPulse, Inbox, PhoneIncoming,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
@@ -49,7 +49,9 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/decide',           icon: ListChecks,        label: 'Решения' },
       // Sprint 63.P12 - доска founder_crm из telegram-agent, рядом с решениями:
       // очередь отвечает «что решить», CRM - «что двигать дальше».
-      { to: '/crm',              icon: KanbanSquare,      label: 'CRM' },
+      { to: '/crm',              icon: KanbanSquare,      label: 'CRM', matchExclude: ['/crm/depts'] },
+      // 28.09.2026 - CRM по отделам: клиенты, эфиры, юристы... текущее и сделанное.
+      { to: '/crm/depts',        icon: Building2,         label: 'Отделы' },
       { to: '/system',           icon: HeartPulse,        label: 'Здоровье системы' },
       // Конверт у Почты, а не у Приглашений: «Почта» и «Входящие» и так путались
       // по смыслу, одинаково почтовые иконки добивали.
