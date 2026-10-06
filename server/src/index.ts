@@ -86,6 +86,11 @@ app.get('/health', (_req, res) => {
       realProviderEnabled: status.realProviderEnabled,
       warning: status.warning,
       warningSeverity: status.warningSeverity,
+      // Sprint 67 - what the live transcription resolves to by default
+      // (template may still pin another model). Lets ops confirm a deploy
+      // from outside without auth; model ids are not secrets.
+      realtimeTranscribeDefault: env.OPENAI_MODEL_REALTIME_TRANSCRIBE,
+      liveTranscribeDelay: env.OPENAI_LIVE_TRANSCRIBE_DELAY,
     },
   });
 });

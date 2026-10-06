@@ -37,6 +37,81 @@ export interface RealtimeSessionInfo {
   promptLength?: number;
   promptTrimmed?: boolean;
   turnDetectionSupported?: boolean;
+  // Sprint 67 - gpt-live-transcribe streams continuously without server VAD;
+  // the server tells the browser to close turns itself (input_audio_buffer.commit).
+  clientCommitRequired?: boolean;
+  clientSilenceMs?: number;
+  clientIdleMs?: number;
+  clientMaxTurnMs?: number;
+  delay?: string | null;
+  keywordsCount?: number;
+}
+
+function clampNumber(raw: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+export interface RealtimeStartOptions {
+  /**
+   * Sprint 67 - AudioContext created synchronously inside the user's click
+   * (iOS keeps a context created outside a gesture suspended, and then the
+   * mic-level endpointer would never see audio). The session owns it from
+   * here on and closes it on stop().
+   */
+  audioContext?: AudioContext | null;
+}
+
+/** Create an AudioContext right now (call from a click handler). Null when unsupported. */
+export function createGestureAudioContext(): AudioContext | null {
+  try {
+    const w = window as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext };
+    const Ctor = w.AudioContext ?? w.webkitAudioContext;
+    if (!Ctor) return null;
+    const ctx = new Ctor();
+    if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+// Microphone level meter for client-side endpointing. Reads RMS from an
+// AnalyserNode; level() returns 0 while the graph is not running (suspended
+// context), which the caller treats as «no mic signal, use the delta-idle fallback».
+interface MicLevelMeter {
+  level(): number;
+  stop(): void;
+}
+
+function startMicLevelMeter(stream: MediaStream, external: AudioContext | null | undefined): MicLevelMeter | null {
+  const ctx = external ?? createGestureAudioContext();
+  if (!ctx) return null;
+  let source: MediaStreamAudioSourceNode;
+  let analyser: AnalyserNode;
+  try {
+    source = ctx.createMediaStreamSource(stream);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+  } catch {
+    if (!external) void ctx.close().catch(() => undefined);
+    return null;
+  }
+  const buf = new Float32Array(analyser.fftSize);
+  return {
+    level() {
+      if (ctx.state === 'suspended') void ctx.resume().catch(() => undefined);
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i += 1) sum += buf[i] * buf[i];
+      return Math.sqrt(sum / buf.length);
+    },
+    stop() {
+      try { source.disconnect(); } catch { /* ignore */ }
+      void ctx.close().catch(() => undefined);
+    },
+  };
 }
 
 /**
@@ -147,6 +222,7 @@ function realtimeLog(event: string, details: Record<string, unknown> = {}) {
 
 export async function startRealtimeTranscription(
   callbacks: RealtimeCallbacks,
+  options: RealtimeStartOptions = {},
 ): Promise<RealtimeSession> {
   if (typeof RTCPeerConnection === 'undefined') {
     throw new RealtimeUnavailableError('webrtc_unsupported', 0);
@@ -179,15 +255,23 @@ export async function startRealtimeTranscription(
     promptLength: session.promptLength,
     promptTrimmed: session.promptTrimmed,
     turnDetectionSupported: session.turnDetectionSupported,
+    clientCommitRequired: session.clientCommitRequired,
+    delay: session.delay,
+    keywordsCount: session.keywordsCount,
   });
 
   let mediaStream: MediaStream | null = null;
   let pc: RTCPeerConnection | null = null;
   let dc: RTCDataChannel | null = null;
   let closed = false;
+  let endpointTimer: number | null = null;
+  let micMeter: MicLevelMeter | null = null;
   const stop = () => {
     if (closed) return;
     closed = true;
+    if (endpointTimer !== null) { clearInterval(endpointTimer); endpointTimer = null; }
+    if (micMeter) { try { micMeter.stop(); } catch { /* ignore */ } micMeter = null; }
+    else if (options.audioContext) { void options.audioContext.close().catch(() => undefined); }
     try { dc?.close(); } catch { /* ignore */ }
     try { pc?.close(); } catch { /* ignore */ }
     if (mediaStream) {
@@ -294,6 +378,93 @@ export async function startRealtimeTranscription(
     // Аккумулируем delta'ы текущего сегмента, чтобы UI получал растущий
     // interim, а не голые чанки. На .completed — сбрасываем буфер.
     let interimBuffer = '';
+    // Sprint 67 - client-side endpointing for gpt-live-transcribe. The model
+    // streams deltas while the person talks and never closes a turn by
+    // itself: without a commit the text would stay one growing interim line.
+    // Primary signal: microphone level. After clientSilenceMs of quiet with
+    // pending text we send input_audio_buffer.commit; the .completed event
+    // (~0.7 s later) lands through the regular final path. The commit must
+    // be quick: audio captured after it belongs to the next turn, so a late
+    // commit cuts the next phrase mid-word (seen with a delta-idle scheme
+    // that fired ~1.9 s after speech ended). Fallback when the audio graph
+    // reports no level at all: commit after clientIdleMs without deltas.
+    // A monologue longer than clientMaxTurnMs is committed at a sentence end.
+    const clientCommit = session.clientCommitRequired === true;
+    const clientSilenceMs = clampNumber(session.clientSilenceMs, 300, 3000, 700);
+    const clientIdleMs = clampNumber(session.clientIdleMs, 600, 5000, 1400);
+    const clientMaxTurnMs = clampNumber(session.clientMaxTurnMs, 5000, 120_000, 20_000);
+    const SPEECH_RMS_MIN = 0.012;
+    let lastDeltaAt = 0;
+    let turnStartedAt = 0;
+    let commitSentAt = 0;
+    let micAlive = false;
+    let noiseFloor = 0.004;
+    let lastSpeechAt = 0;
+    let speechSinceCommit = false;
+    if (clientCommit) {
+      micMeter = startMicLevelMeter(mediaStream, options.audioContext);
+      realtimeLog('endpointer-init', { traceId: session.traceId, micMeter: Boolean(micMeter), clientSilenceMs, clientIdleMs, clientMaxTurnMs });
+    } else if (options.audioContext) {
+      void options.audioContext.close().catch(() => undefined);
+    }
+    const sendCommit = (reason: string): void => {
+      if (!dc || dc.readyState !== 'open') return;
+      const pendingChars = interimBuffer.trim().length;
+      if (!pendingChars) return;
+      try {
+        dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+      } catch {
+        return;
+      }
+      commitSentAt = Date.now();
+      realtimeLog('client-commit', {
+        traceId: session.traceId,
+        reason,
+        pendingChars,
+        idleMs: lastDeltaAt ? Date.now() - lastDeltaAt : null,
+        silenceMs: lastSpeechAt ? Date.now() - lastSpeechAt : null,
+        turnMs: turnStartedAt ? Date.now() - turnStartedAt : null,
+        micAlive,
+      });
+    };
+    const endpointTick = (): void => {
+      if (closed) return;
+      const now = Date.now();
+      if (micMeter) {
+        const rms = micMeter.level();
+        if (rms > 0) {
+          if (!micAlive) {
+            micAlive = true;
+            realtimeLog('endpointer-mic-alive', { traceId: session.traceId });
+          }
+          // Slow-rising, fast-falling noise floor so a quiet room does not
+          // register as speech and a noisy one does not stall the commit.
+          noiseFloor = rms < noiseFloor ? Math.max(rms, 0.001) : Math.min(noiseFloor * 1.01, 0.02);
+          if (rms > Math.max(SPEECH_RMS_MIN, noiseFloor * 3.5)) {
+            lastSpeechAt = now;
+            speechSinceCommit = true;
+          }
+        }
+      }
+      const pending = interimBuffer.trim();
+      if (!pending) return;
+      // A commit is in flight until its .completed resets the counters;
+      // never double-commit the same audio (OpenAI rejects an empty buffer).
+      if (commitSentAt && now - commitSentAt < 3000) return;
+      if (micAlive) {
+        if (speechSinceCommit && lastSpeechAt && now - lastSpeechAt >= clientSilenceMs) {
+          speechSinceCommit = false;
+          sendCommit('silence');
+          return;
+        }
+      } else if (lastDeltaAt && now - lastDeltaAt >= clientIdleMs) {
+        sendCommit('idle');
+        return;
+      }
+      const turnMs = turnStartedAt ? now - turnStartedAt : 0;
+      if (turnMs >= clientMaxTurnMs && /[.!?…]\s*$/u.test(pending)) { speechSinceCommit = false; sendCommit('max-turn'); return; }
+      if (turnMs >= clientMaxTurnMs * 2) { speechSinceCommit = false; sendCommit('max-turn-hard'); }
+    };
     // P0 hotfix — instrumentation. После реального звонка 2026-04-08
     // обнаружили, что UI содержал лишь 2 сегмента вместо ~15. Без диагностики
     // невозможно понять: модель прислала мало completed-событий или они
@@ -309,7 +480,10 @@ export async function startRealtimeTranscription(
       // OpenAI producing the first delta. Show explicit «слушаю, говорите»
       // hint so user knows the system is ready to receive audio.
       phase('awaiting_first_audio');
-      realtimeLog('data-channel-open', { traceId: session.traceId });
+      realtimeLog('data-channel-open', { traceId: session.traceId, clientCommit, clientSilenceMs, clientIdleMs, clientMaxTurnMs });
+      if (clientCommit && endpointTimer === null) {
+        endpointTimer = window.setInterval(endpointTick, 100);
+      }
     };
     dc.onclose = () => realtimeLog('data-channel-close', {
       traceId: session.traceId,
@@ -371,6 +545,8 @@ export async function startRealtimeTranscription(
             }
             interimBuffer = candidate;
             deltaCount++;
+            lastDeltaAt = Date.now();
+            if (!turnStartedAt) turnStartedAt = lastDeltaAt;
             callbacks.onInterim(interimBuffer);
           }
           return;
@@ -381,6 +557,9 @@ export async function startRealtimeTranscription(
           // interim-vs-final mutation diff (P0.3).
           const interimSnapshot = interimBuffer;
           interimBuffer = '';
+          lastDeltaAt = 0;
+          turnStartedAt = 0;
+          commitSentAt = 0;
           // Sprint 62.P9.HOTFIX — leakage guard on final segments. Same
           // check as the interim path. If OpenAI emitted the prompt back
           // as a «completed» event (it CAN happen even when interim deltas

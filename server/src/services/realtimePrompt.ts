@@ -142,3 +142,38 @@ function isSectionHeader(line: string): boolean {
 function looksLikeBulletOrList(line: string): boolean {
   return /^[•·\-—–*]\s+/u.test(line) || (line.includes(',') && !line.endsWith('.'));
 }
+
+// Sprint 67 - gpt-live-transcribe takes the biasing dictionary as
+// `keywords: string[]` (literal terms the model should prefer), while its
+// `prompt` is a free-form description of the recording. We reuse the same
+// dictionary extraction as buildRealtimePrompt and split it into terms, plus
+// lines like «Бренды на латинице: Zapusk, DLFY.» from the template body.
+// Base terms are always present so a trimmed template never loses the brand.
+export const LIVE_TRANSCRIBE_BASE_KEYWORDS: readonly string[] = ['Zapusk', 'Запуск', 'Pre-IPO', 'DLFY', 'Главснаб'];
+const MAX_KEYWORDS = 120;
+const MAX_KEYWORD_CHARS = 60;
+const MAX_KEYWORD_WORDS = 4;
+
+export function buildRealtimeKeywords(rawBody: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string): void => {
+    const term = raw.replace(/^[«»"'\s]+|[«»"'.\s]+$/gu, '').trim();
+    if (term.length < 2 || term.length > MAX_KEYWORD_CHARS) return;
+    if (term.split(/\s+/u).length > MAX_KEYWORD_WORDS) return; // sentences are not keywords
+    const key = term.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(term);
+  };
+  for (const term of LIVE_TRANSCRIBE_BASE_KEYWORDS) push(term);
+  for (const line of (rawBody ?? '').split(/\r?\n/)) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    if (!/бренд|термин|названи|им[её]н|keyword|brand|glossar/iu.test(line.slice(0, idx))) continue;
+    for (const term of line.slice(idx + 1).split(/[,;]/u)) push(term);
+  }
+  const built = buildRealtimePrompt(rawBody);
+  for (const term of built.prompt.split(/[,;]/u)) push(term);
+  return out.slice(0, MAX_KEYWORDS);
+}

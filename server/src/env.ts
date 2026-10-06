@@ -141,7 +141,36 @@ export const env = {
   // silence_duration_ms (we keep 700ms — natural pause length). Same model
   // is used for upload transcription via /v1/audio/transcriptions, so the
   // two surfaces stay consistent.
-  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-4o-transcribe',
+  //
+  // Sprint 67 (2026-10-06) - live transcription moves to `gpt-live-transcribe`
+  // (OpenAI, released 2026-07-29, $0.017/min, same price as gpt-4o-transcribe).
+  // Measured on a 15.7 s Russian utterance: gpt-4o-transcribe + server_vad
+  // emits its FIRST delta 17.6 s after speech starts (the model only runs
+  // once VAD closes the segment), gpt-live-transcribe streams the first
+  // word at 0.5-0.8 s and keeps streaming while the person talks. The model
+  // rejects turn_detection, so the browser commits turns itself (see
+  // REALTIME_CLIENT_IDLE_MS) and the dictionary goes in as `keywords`.
+  // Rollback without redeploy: OPENAI_MODEL_REALTIME_TRANSCRIBE=gpt-4o-transcribe.
+  OPENAI_MODEL_REALTIME_TRANSCRIBE: process.env.OPENAI_MODEL_REALTIME_TRANSCRIBE ?? 'gpt-live-transcribe',
+  // delay: minimal | low | medium | high | xhigh. `low`: first word ~0.8 s and
+  // clean turn boundaries; `minimal` is ~0.3 s faster but cut a word at the
+  // boundary in the bench. Upload transcription of files stays on gpt-4o-transcribe.
+  OPENAI_LIVE_TRANSCRIBE_DELAY: process.env.OPENAI_LIVE_TRANSCRIBE_DELAY ?? 'low',
+  // Short description of the recording for gpt-live-transcribe `prompt`
+  // (max 1024 chars). Free-form context, NOT instructions: imperative prose
+  // leaked into the transcript on the old model (Sprint 62.P9).
+  OPENAI_LIVE_TRANSCRIBE_CONTEXT: process.env.OPENAI_LIVE_TRANSCRIBE_CONTEXT ?? '',
+  // Client-side endpointing for gpt-live-transcribe. Primary signal is the
+  // microphone level: the browser sends input_audio_buffer.commit after
+  // SILENCE ms of quiet once it has pending interim text (the old server VAD
+  // waited 900 ms). Fallback when the browser audio graph is not running
+  // (iOS without a gesture): commit after IDLE ms without new deltas; this
+  // path lands ~0.5 s later because of the model lag, so IDLE stays above
+  // the longest delta gap seen during speech (1.0 s). MAX_TURN caps a
+  // monologue so finals keep landing at sentence ends.
+  REALTIME_CLIENT_SILENCE_MS: Number(process.env.REALTIME_CLIENT_SILENCE_MS ?? 700),
+  REALTIME_CLIENT_IDLE_MS: Number(process.env.REALTIME_CLIENT_IDLE_MS ?? 1400),
+  REALTIME_CLIENT_MAX_TURN_MS: Number(process.env.REALTIME_CLIENT_MAX_TURN_MS ?? 20_000),
   OPENAI_MODEL_TRANSCRIBE: process.env.OPENAI_MODEL_TRANSCRIBE ?? 'gpt-4o-transcribe',
 
   // Deepgram pre-recorded transcription. nova-2 supports Russian + diarization.

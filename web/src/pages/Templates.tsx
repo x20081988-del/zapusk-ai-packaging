@@ -70,8 +70,9 @@ function isTemplateModelHonored(key: string | null | undefined): boolean {
 // All values verified against the OpenAI /v1/audio/transcriptions + /v1/realtime
 // API model lists (May 2026).
 const TRANSCRIPTION_MODEL_PRESETS: Array<{ value: string; label: string }> = [
-  { value: 'gpt-4o-transcribe',       label: 'gpt-4o-transcribe · качество, по умолчанию' },
-  { value: 'gpt-4o-mini-transcribe',  label: 'gpt-4o-mini-transcribe · быстрее, дешевле' },
+  { value: 'gpt-live-transcribe',     label: 'gpt-live-transcribe · живой поток слов, по умолчанию' },
+  { value: 'gpt-4o-transcribe',       label: 'gpt-4o-transcribe · сегментами после паузы, прежний' },
+  { value: 'gpt-4o-mini-transcribe',  label: 'gpt-4o-mini-transcribe · сегментами, быстрее и дешевле' },
   { value: 'whisper-1',               label: 'whisper-1 · legacy / совместимость' },
 ];
 const TRANSCRIPTION_PRESETS_DATALIST_ID = 'transcription-model-presets';

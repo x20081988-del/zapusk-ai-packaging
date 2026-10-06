@@ -628,8 +628,9 @@ adminRoutes.get('/health/details', requireRole(['admin', 'MANAGER']), (_req, res
 //
 // Sprint 62.P7 — recommended preset model values (kept in sync with
 // web/src/pages/Templates.tsx TRANSCRIPTION_MODEL_PRESETS):
-//   • gpt-4o-transcribe      — качество, по умолчанию
-//   • gpt-4o-mini-transcribe — быстрее, дешевле
+//   • gpt-live-transcribe    — живой поток слов, по умолчанию (Sprint 67)
+//   • gpt-4o-transcribe      — сегментами после паузы (прежний default)
+//   • gpt-4o-mini-transcribe — сегментами, быстрее, дешевле
 //   • whisper-1              — legacy / совместимость
 // The endpoint accepts any string in `model` field — callers may also test
 // custom model IDs (e.g. fine-tunes) by passing them directly.
@@ -660,7 +661,7 @@ adminRoutes.post('/transcription/test', async (req, res) => {
 
   const envVar = mode === 'realtime' ? 'OPENAI_MODEL_REALTIME_TRANSCRIBE' : 'OPENAI_MODEL_TRANSCRIBE';
   const envModel = (mode === 'realtime' ? env.OPENAI_MODEL_REALTIME_TRANSCRIBE : env.OPENAI_MODEL_TRANSCRIBE)?.trim() || null;
-  const effectiveModel = overrideModel || templateModel || envModel || 'gpt-4o-transcribe';
+  const effectiveModel = overrideModel || templateModel || envModel || (mode === 'realtime' ? 'gpt-live-transcribe' : 'gpt-4o-transcribe');
   const source: 'override' | 'template' | 'env' | 'hard_fallback' =
     overrideModel ? 'override' : templateModel ? 'template' : envModel ? 'env' : 'hard_fallback';
 

@@ -4,7 +4,7 @@ import { env } from '../env.js';
 import { authMiddleware, getUser } from '../auth.js';
 import { recordAudit } from '../lib/audit.js';
 import { requireNotInvestor } from '../lib/ownership.js';
-import { buildRealtimePrompt } from '../services/realtimePrompt.js';
+import { buildRealtimePrompt, buildRealtimeKeywords } from '../services/realtimePrompt.js';
 import { withRateLimit } from '../lib/rateLimit.js';
 
 // Sprint 49 — OpenAI Realtime live transcription session bootstrap.
@@ -27,12 +27,33 @@ const REALTIME_TEMPLATE_KEY = 'realtime_transcription';
 // внутри session.type='transcription'.
 const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/client_secrets';
 // Hard fallback на случай, если и template.model, и env пустые.
-// Sprint 50 hotfix — back to gpt-4o-transcribe for live transcription.
-// It accepts `prompt` (terminology dictionary lands) and `turn_detection`
-// (server VAD with tunable silence_duration_ms — natural pauses don't
-// chop the transcript). gpt-realtime-whisper rejected both, producing
-// short fragmented segments and losing Russian business names.
-const REALTIME_TRANSCRIBE_HARD_FALLBACK = 'gpt-4o-transcribe';
+// Sprint 67 (2026-10-06) - gpt-live-transcribe. Бенчмарк на русской реплике
+// 15.7 с: gpt-4o-transcribe + server_vad отдает ПЕРВЫЙ delta через 17.6 с от
+// начала речи (модель стартует только когда VAD закрыл сегмент), а
+// gpt-live-transcribe стримит первое слово через 0.5-0.8 с и дальше идет
+// вместе с речью. Цена та же ($0.017/min). Модель не принимает
+// turn_detection: реплику закрывает браузер (input_audio_buffer.commit по
+// затишью в потоке delta), словарь уходит как `keywords`, `prompt` у нее -
+// описание записи, а не инструкции. Сегментные модели (gpt-4o-transcribe,
+// mini, whisper-1) остаются рабочим путем через шаблон или env.
+const REALTIME_TRANSCRIBE_HARD_FALLBACK = 'gpt-live-transcribe';
+
+function isLiveTranscribeModel(model: string): boolean {
+  return /^gpt-live-transcribe/u.test(model);
+}
+
+type LiveDelay = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+const LIVE_DELAYS: ReadonlySet<string> = new Set<string>(['minimal', 'low', 'medium', 'high', 'xhigh']);
+function resolveLiveDelay(raw: string | undefined): LiveDelay {
+  const v = (raw ?? '').trim();
+  return LIVE_DELAYS.has(v) ? (v as LiveDelay) : 'low';
+}
+
+// Context line for gpt-live-transcribe `prompt`. Descriptive, no imperatives.
+const LIVE_TRANSCRIBE_CONTEXT =
+  'Деловой разговор на русском языке: менеджер инвестиционной платформы Zapusk (Запуск) и инвестор ' +
+  'обсуждают инвестиционное предложение, Pre-IPO сделки, краудинвестинг, условия, сроки и суммы.';
+const LIVE_PROMPT_MAX_CHARS = 1000;
 
 function resolveTranscriptionModel(templateModel: string | null): string {
   const fromTemplate = templateModel?.trim();
@@ -67,6 +88,7 @@ const REALTIME_TURN_DETECTION_UNSUPPORTED_MODELS = new Set<string>([
 ]);
 
 function supportsRealtimeTurnDetection(model: string): boolean {
+  if (isLiveTranscribeModel(model)) return false; // Sprint 67 - browser commits turns
   return !REALTIME_TURN_DETECTION_UNSUPPORTED_MODELS.has(model);
 }
 
@@ -156,11 +178,30 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
   // turn_detection}. language='ru' всегда. prompt — только когда модель его
   // поддерживает. turn_detection — только когда модель его поддерживает.
   // Никаких response.create / output audio — transcription-only.
-  const transcriptionConfig: { model: string; language: string; prompt?: string } = {
-    model,
-    language: 'ru',
-  };
-  if (promptSupported && built.prompt) transcriptionConfig.prompt = built.prompt;
+  // Sprint 67 - gpt-live-transcribe has its own config shape: languages[]
+  // instead of language, `keywords` for the dictionary, `delay` for the
+  // latency/accuracy trade-off and turn_detection explicitly null.
+  const liveModel = isLiveTranscribeModel(model);
+  const liveDelay = resolveLiveDelay(env.OPENAI_LIVE_TRANSCRIBE_DELAY);
+  const liveKeywords = liveModel ? buildRealtimeKeywords(tpl.body) : [];
+  const transcriptionConfig: {
+    model: string;
+    language?: string;
+    languages?: string[];
+    prompt?: string;
+    keywords?: string[];
+    delay?: LiveDelay;
+  } = liveModel
+    ? { model, languages: ['ru'], delay: liveDelay }
+    : { model, language: 'ru' };
+  if (liveModel) {
+    const context = (env.OPENAI_LIVE_TRANSCRIBE_CONTEXT.trim() || LIVE_TRANSCRIBE_CONTEXT).slice(0, LIVE_PROMPT_MAX_CHARS);
+    if (context) transcriptionConfig.prompt = context;
+    if (liveKeywords.length) transcriptionConfig.keywords = liveKeywords;
+  } else if (promptSupported && built.prompt) {
+    transcriptionConfig.prompt = built.prompt;
+  }
+  const promptSentLength = transcriptionConfig.prompt?.length ?? 0;
 
   const audioInput: {
     transcription: typeof transcriptionConfig;
@@ -169,9 +210,17 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
       threshold: number;
       prefix_padding_ms: number;
       silence_duration_ms: number;
-    };
+    } | null;
   } = { transcription: transcriptionConfig };
-  if (turnDetectionSupported) {
+  if (liveModel) {
+    audioInput.turn_detection = null;
+    console.log(
+      `[transcription/live] traceId=${traceId} model=${model} delay=${liveDelay} ` +
+      `keywords=${liveKeywords.length} promptChars=${promptSentLength} ` +
+      `clientSilenceMs=${env.REALTIME_CLIENT_SILENCE_MS} clientIdleMs=${env.REALTIME_CLIENT_IDLE_MS} ` +
+      `clientMaxTurnMs=${env.REALTIME_CLIENT_MAX_TURN_MS}`,
+    );
+  } else if (turnDetectionSupported) {
     // Sprint 57 P0.2 — Realtime VAD config audit + rationale.
     //
     //   type: 'server_vad'
@@ -334,8 +383,9 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
     console.info(
       `[realtime] session issued traceId=${traceId} actorId=${getUser(req).id} ` +
       `model=${model} modelSource=${modelSource} templateVersion=${tpl.version} ` +
-      `promptSupported=${promptSupported} promptLength=${built.length} promptTrimmed=${built.trimmed} ` +
-      `turnDetectionSupported=${turnDetectionSupported} expiresAt=${expiresAt ?? 'unknown'} ` +
+      `promptSupported=${promptSupported} promptLength=${promptSentLength} promptTrimmed=${built.trimmed} ` +
+      `turnDetectionSupported=${turnDetectionSupported} live=${liveModel} delay=${liveModel ? liveDelay : 'n/a'} ` +
+      `keywords=${liveKeywords.length} expiresAt=${expiresAt ?? 'unknown'} ` +
       `transport=webrtc endpoint=/v1/realtime/calls`,
     );
 
@@ -346,11 +396,18 @@ realtimeRoutes.post('/transcription-session', withRateLimit('realtime_token'), a
       expiresAt,
       templateVersion: tpl.version,
       promptSupported,
-      promptLength: built.length,
+      promptLength: promptSentLength,
       promptTrimmed: built.trimmed,
       promptSkippedReason,
       turnDetectionSupported,
       turnDetectionSkippedReason,
+      // Sprint 67 - browser-side endpointing contract for gpt-live-transcribe.
+      clientCommitRequired: liveModel,
+      clientSilenceMs: env.REALTIME_CLIENT_SILENCE_MS,
+      clientIdleMs: env.REALTIME_CLIENT_IDLE_MS,
+      clientMaxTurnMs: env.REALTIME_CLIENT_MAX_TURN_MS,
+      delay: liveModel ? liveDelay : null,
+      keywordsCount: liveKeywords.length,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown';

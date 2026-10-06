@@ -23,7 +23,7 @@ import { startCallAudioRecorder, type CallAudioRecorder } from '../lib/callAudio
 import { startAudioQualityMeter, type AudioQualityMeter, type AudioQualityClass } from '../lib/audioQualityMeter';
 import { createOutcome, OUTCOME_OPTIONS, OUTCOME_LABELS, type OutcomeType } from '../lib/assistantOutcomes';
 import { newIdempotencyKey } from '../lib/api';
-import { startRealtimeTranscription, type RealtimeSession, type RealtimeConnectionPhase } from '../lib/realtimeTranscription';
+import { startRealtimeTranscription, createGestureAudioContext, type RealtimeSession, type RealtimeConnectionPhase } from '../lib/realtimeTranscription';
 import { markFirstInterimRender, markFirstFinalRender } from '../lib/realtimeTiming';
 import { composeAnalyzeTranscript, getAnalyzeTranscriptStats } from '../lib/salesAssistantTranscript';
 import { newSegmentId, recordLifecycle } from '../lib/transcriptPipeline';
@@ -1479,6 +1479,9 @@ export default function SalesAssistant() {
   }
 
   async function start() {
+    // Sprint 67 - created synchronously inside the click so iOS lets it run;
+    // the realtime session uses it for the mic-level endpointer and closes it.
+    const gestureAudioContext = createGestureAudioContext();
     shouldListenRef.current = true;
     setPermError(null);
     const currentLiveSessionId = liveSessionIdRef.current + 1;
@@ -1560,7 +1563,7 @@ export default function SalesAssistant() {
           // what's happening during the silent setup window.
           setRealtimePhase(p);
         },
-      });
+      }, { audioContext: gestureAudioContext });
       realtimeRef.current = session;
       capturedSession = session;
       setTranscriptionProvider('realtime');
@@ -1598,6 +1601,7 @@ export default function SalesAssistant() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';
       console.warn('[sales-assistant] realtime unavailable, falling back to web-speech:', msg);
+      if (gestureAudioContext) void gestureAudioContext.close().catch(() => undefined);
       setTranscriptionProvider('web-speech');
       setRealtimeModel(null);
       startRecognition();
@@ -1620,7 +1624,9 @@ export default function SalesAssistant() {
   async function finishMeeting() {
     if (finishingRef.current) return; // уже летит запрос
     if (meetingState === 'finalized') return; // уже сохранили
-    const transcriptText = fullTranscript();
+    // Sprint 67 - with gpt-live-transcribe the current turn lives as interim
+    // until the browser commits it, so the finalize payload must include it.
+    const transcriptText = transcriptWithInterim();
     if (transcriptText.trim().length < 10) {
       setPermError(labels.finalizeTooShort);
       return;
@@ -1779,6 +1785,26 @@ export default function SalesAssistant() {
   }
 
   function stop() {
+    // Sprint 67 - gpt-live-transcribe keeps the current turn as interim until
+    // the browser commits it; on stop that text becomes a final line instead
+    // of vanishing with setInterim('') below. Must run before the session id
+    // bump, otherwise the stale guard would drop it.
+    const pendingInterim = interimRef.current.trim();
+    if (pendingInterim && realtimeRef.current) {
+      const segmentId = newSegmentId();
+      const sessionTag = `live-${liveSessionIdRef.current}`;
+      recordLifecycle({
+        segmentId,
+        sessionId: sessionTag,
+        source: 'realtime',
+        stage: 'raw_received',
+        status: 'ok',
+        text: pendingInterim,
+        reason: 'promoted_on_stop',
+      });
+      setTranscript((prev) => appendFinalSegment(prev, pendingInterim, 'realtime', segmentId, sessionTag));
+      interimRef.current = '';
+    }
     shouldListenRef.current = false;
     liveSessionIdRef.current++;
     // Hotfix — preserve liveSessionStarted=true if the founder already
@@ -2311,7 +2337,9 @@ export default function SalesAssistant() {
                   браузерный путь (Chrome/Edge/Safari) с худшей точностью. */}
               {transcriptionProvider === 'realtime' && (
                 <span title={realtimeModel ?? undefined}>
-                  <StatusBadge tone="ai" dot>OpenAI Realtime</StatusBadge>
+                  <StatusBadge tone="ai" dot>
+                    {realtimeModel?.startsWith('gpt-live-transcribe') ? 'OpenAI Live, слова по ходу речи' : 'OpenAI Realtime'}
+                  </StatusBadge>
                 </span>
               )}
               {transcriptionProvider === 'web-speech' && (
