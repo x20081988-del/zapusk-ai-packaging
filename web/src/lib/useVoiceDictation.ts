@@ -60,6 +60,10 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
   // after long silence (>8s); we keep this so we can distinguish "filler
   // phrase after silence" from "user actually said it mid-sentence".
   const lastFinalTsRef = useRef<number | null>(null);
+  // Sprint 67 - latest interim of the OpenAI session. gpt-live-transcribe
+  // keeps the current turn as interim until the browser commits it, so a
+  // stop before the commit must hand that tail to the consumer (Codex F4).
+  const realtimeInterimRef = useRef('');
 
   const [active, setActive] = useState(false);
   const [status, setStatus] = useState<DictationStatus>('idle');
@@ -95,7 +99,28 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
     providerRef.current = null;
   }
 
+  // One delivery path for realtime finals and the promoted tail: same
+  // hallucination filter, same consumer callback.
+  function deliverRealtimeFinal(text: string, origin: 'final' | 'promoted_on_stop'): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const decision = evaluateHallucination(trimmed, {
+      surface: 'dictation',
+      lastFinalTs: lastFinalTsRef.current,
+    });
+    if (decision.drop) {
+      console.warn('[dictation/hallucination-dropped]', { reason: decision.reason, preview: trimmed.slice(0, 60), surface: 'dictation', provider: 'openai', origin });
+      return;
+    }
+    lastFinalTsRef.current = Date.now();
+    onTranscriptRef.current(trimmed);
+  }
+
   function stop() {
+    if (providerRef.current === 'openai' && realtimeInterimRef.current.trim()) {
+      deliverRealtimeFinal(realtimeInterimRef.current, 'promoted_on_stop');
+    }
+    realtimeInterimRef.current = '';
     cleanupConnections();
     setProviderState(null);
     setActive(false);
@@ -210,28 +235,16 @@ export function useVoiceDictation(onTranscript: (text: string) => void) {
       const session = await startRealtimeTranscription({
         onInterim: (text) => {
           if (!activeRef.current) return;
+          realtimeInterimRef.current = text;
           setInterim(text);
           setStatus(text ? 'recognizing' : 'listening');
         },
         onFinal: (text) => {
           if (!activeRef.current) return;
-          const trimmed = text.trim();
-          if (trimmed) {
-            // Sprint 61.HOTFIX — apply shared hallucination filter to realtime
-            // dictation. Root cause of «Наши переговоры продолжаются» /
-            // «сидим» / «Это задача» appearing in textarea: this path bypassed
-            // the filter that lives in SalesAssistant.appendFinalSegment.
-            const decision = evaluateHallucination(trimmed, {
-              surface: 'dictation',
-              lastFinalTs: lastFinalTsRef.current,
-            });
-            if (decision.drop) {
-              console.warn('[dictation/hallucination-dropped]', { reason: decision.reason, preview: trimmed.slice(0, 60), surface: 'dictation', provider: 'openai' });
-            } else {
-              lastFinalTsRef.current = Date.now();
-              onTranscriptRef.current(trimmed);
-            }
-          }
+          deliverRealtimeFinal(text, 'final');
+          // The session re-sends the interim of a turn that already started
+          // right after this final; keep the ref in sync through onInterim.
+          realtimeInterimRef.current = '';
           setInterim('');
           setStatus('listening');
         },

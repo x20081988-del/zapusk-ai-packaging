@@ -24,3 +24,19 @@ afconvert -f WAVE -d LEI16@24000 -c 1 ru.aiff ru_24k.wav
   Файл `/tmp/stt_bench/pauses_24k.wav` - три фразы с паузами 1,6 с и 1,0 с.
 
 Сырые логи событий пишутся в `/tmp/stt_bench/events_<n>.json`.
+
+## Стенд логики клиента (после ревью Codex 06.10.2026)
+
+`client_logic_harness.mjs` гоняет скомпилированный `realtimeTranscription.ts` в Node с
+подменой WebRTC, микрофона и AudioContext: блокировка commit до .completed и синтез
+финала по таймауту (F1), буферы по item_id (F2), гистерезис уровня и адаптация шума
+только вне речи (F3), путь сегментных моделей, пустой .completed.
+
+```bash
+cd ~/Projects/zapusk-ai-packaging
+web/node_modules/.bin/esbuild web/src/lib/realtimeTranscription.ts --bundle --format=esm \
+  --platform=neutral --target=es2022 --external:./api --outfile=/tmp/stt_bench/rt_bundle.mjs
+sed -i '' 's#from "./api"#from "./api.js"#' /tmp/stt_bench/rt_bundle.mjs
+cp scripts/stt-latency-bench/harness_api_stub.js /tmp/stt_bench/api.js
+node scripts/stt-latency-bench/client_logic_harness.mjs     # ожидается 14/14
+```

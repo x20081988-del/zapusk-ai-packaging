@@ -377,6 +377,29 @@ export async function startRealtimeTranscription(
 
     // Аккумулируем delta'ы текущего сегмента, чтобы UI получал растущий
     // interim, а не голые чанки. На .completed — сбрасываем буфер.
+    // Interim text per OpenAI item. Deltas carry item_id even before the
+    // commit and the next turn arrives under a new id, so a .completed clears
+    // only its own item and never the text of a turn that already started
+    // (Codex review F2). interimBuffer stays the joined view for the UI.
+    const itemText = new Map<string, string>();
+    const itemFirstDeltaAt = new Map<string, number>();
+    const committedItems = new Set<string>();
+    const FALLBACK_ITEM_ID = '__item__';
+    const joinedInterim = (): string => Array.from(itemText.values()).join('');
+    const oldestItemId = (): string | null => {
+      const first = itemText.keys().next();
+      return first.done ? null : first.value;
+    };
+    // Text of items not yet committed: what the next commit would cover.
+    const pendingText = (): string => {
+      let out = '';
+      for (const [id, text] of itemText) if (!committedItems.has(id)) out += text;
+      return out;
+    };
+    const pendingTurnStartedAt = (): number => {
+      for (const [id, at] of itemFirstDeltaAt) if (!committedItems.has(id)) return at;
+      return 0;
+    };
     let interimBuffer = '';
     // Sprint 67 - client-side endpointing for gpt-live-transcribe. The model
     // streams deltas while the person talks and never closes a turn by
@@ -393,12 +416,21 @@ export async function startRealtimeTranscription(
     const clientSilenceMs = clampNumber(session.clientSilenceMs, 300, 3000, 700);
     const clientIdleMs = clampNumber(session.clientIdleMs, 600, 5000, 1400);
     const clientMaxTurnMs = clampNumber(session.clientMaxTurnMs, 5000, 120_000, 20_000);
+    // Mic level: speech starts above max(SPEECH_RMS_MIN, floor*3) and ends
+    // below 60% of that (hysteresis). The noise floor adapts ONLY while not
+    // speaking and is capped, so steady speech can never raise the threshold
+    // above itself and read as silence (Codex review F3).
     const SPEECH_RMS_MIN = 0.012;
+    const NOISE_FLOOR_CAP = 0.008;
+    // A commit stays in flight until its .completed. If OpenAI never answers,
+    // after this timeout the item's own deltas become the final (Codex F1).
+    const COMMIT_ACK_TIMEOUT_MS = 8000;
     let lastDeltaAt = 0;
-    let turnStartedAt = 0;
     let commitSentAt = 0;
+    let commitItemId: string | null = null;
     let micAlive = false;
-    let noiseFloor = 0.004;
+    let noiseFloor = 0.003;
+    let speaking = false;
     let lastSpeechAt = 0;
     let speechSinceCommit = false;
     if (clientCommit) {
@@ -409,7 +441,8 @@ export async function startRealtimeTranscription(
     }
     const sendCommit = (reason: string): void => {
       if (!dc || dc.readyState !== 'open') return;
-      const pendingChars = interimBuffer.trim().length;
+      if (commitSentAt) return;
+      const pendingChars = pendingText().trim().length;
       if (!pendingChars) return;
       try {
         dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
@@ -417,13 +450,14 @@ export async function startRealtimeTranscription(
         return;
       }
       commitSentAt = Date.now();
+      commitItemId = null;
       realtimeLog('client-commit', {
         traceId: session.traceId,
         reason,
         pendingChars,
         idleMs: lastDeltaAt ? Date.now() - lastDeltaAt : null,
         silenceMs: lastSpeechAt ? Date.now() - lastSpeechAt : null,
-        turnMs: turnStartedAt ? Date.now() - turnStartedAt : null,
+        turnMs: pendingTurnStartedAt() ? Date.now() - pendingTurnStartedAt() : null,
         micAlive,
       });
     };
@@ -437,20 +471,28 @@ export async function startRealtimeTranscription(
             micAlive = true;
             realtimeLog('endpointer-mic-alive', { traceId: session.traceId });
           }
-          // Slow-rising, fast-falling noise floor so a quiet room does not
-          // register as speech and a noisy one does not stall the commit.
-          noiseFloor = rms < noiseFloor ? Math.max(rms, 0.001) : Math.min(noiseFloor * 1.01, 0.02);
-          if (rms > Math.max(SPEECH_RMS_MIN, noiseFloor * 3.5)) {
+          const onThreshold = Math.max(SPEECH_RMS_MIN, noiseFloor * 3);
+          if (!speaking && rms > onThreshold) speaking = true;
+          else if (speaking && rms < onThreshold * 0.6) speaking = false;
+          if (speaking) {
             lastSpeechAt = now;
             speechSinceCommit = true;
+          } else {
+            noiseFloor = rms < noiseFloor ? Math.max(rms, 0.001) : Math.min(noiseFloor * 1.005, NOISE_FLOOR_CAP);
           }
         }
       }
-      const pending = interimBuffer.trim();
+      if (commitSentAt) {
+        if (now - commitSentAt < COMMIT_ACK_TIMEOUT_MS) return;
+        const staleId = commitItemId ?? oldestItemId();
+        realtimeLog('commit-ack-timeout', { traceId: session.traceId, itemId: staleId, waitedMs: now - commitSentAt });
+        commitSentAt = 0;
+        commitItemId = null;
+        if (staleId) finalizeItem(staleId, '', 'ack_timeout');
+        return;
+      }
+      const pending = pendingText().trim();
       if (!pending) return;
-      // A commit is in flight until its .completed resets the counters;
-      // never double-commit the same audio (OpenAI rejects an empty buffer).
-      if (commitSentAt && now - commitSentAt < 3000) return;
       if (micAlive) {
         if (speechSinceCommit && lastSpeechAt && now - lastSpeechAt >= clientSilenceMs) {
           speechSinceCommit = false;
@@ -461,9 +503,151 @@ export async function startRealtimeTranscription(
         sendCommit('idle');
         return;
       }
+      const turnStartedAt = pendingTurnStartedAt();
       const turnMs = turnStartedAt ? now - turnStartedAt : 0;
       if (turnMs >= clientMaxTurnMs && /[.!?…]\s*$/u.test(pending)) { speechSinceCommit = false; sendCommit('max-turn'); return; }
       if (turnMs >= clientMaxTurnMs * 2) { speechSinceCommit = false; sendCommit('max-turn-hard'); }
+    };
+    // One item becomes one final segment. Called from the .completed event
+    // and from the commit ack timeout (then transcriptIn is empty and the
+    // item's own deltas are used). Only this item's text leaves the interim;
+    // text of a turn that already started stays visible.
+    const finalizeItem = (itemId: string, transcriptIn: string, origin: 'completed' | 'ack_timeout'): void => {
+      let rawTranscript = transcriptIn.trim();
+      // Snapshot interim BEFORE we drop it — needed for the
+      // interim-vs-final mutation diff (P0.3).
+      const interimSnapshot = itemText.get(itemId) ?? '';
+      itemText.delete(itemId);
+      itemFirstDeltaAt.delete(itemId);
+      committedItems.delete(itemId);
+      if (commitSentAt && (commitItemId === itemId || commitItemId === null)) {
+        commitSentAt = 0;
+        commitItemId = null;
+      }
+      interimBuffer = joinedInterim();
+      if (!itemText.size) lastDeltaAt = 0;
+      // Sprint 67 - on the live model the interim IS the model's own
+      // streamed text for the turn we just committed. An empty .completed
+      // (or a missing one) must not erase it: promote the snapshot instead
+      // of dropping the segment. Segment-based models keep the old drop,
+      // their interim may be noise OpenAI chose to discard.
+      if (!rawTranscript.length && clientCommit && interimSnapshot.trim().length) {
+        rawTranscript = interimSnapshot.trim();
+        realtimeLog(origin === 'completed' ? 'empty-completed-interim-promoted' : 'ack-timeout-interim-promoted', {
+          traceId: session.traceId,
+          itemId,
+          chars: rawTranscript.length,
+        });
+      }
+      // Sprint 62.P9.HOTFIX — leakage guard on final segments. Same
+      // check as the interim path. If OpenAI emitted the prompt back
+      // as a «completed» event (it CAN happen even when interim deltas
+      // were clean if the model decides to flush the whole context),
+      // we drop the segment entirely. callbacks.onFinal is NOT called.
+      if (rawTranscript.length) {
+        const finalLeak = detectPromptLeakage(rawTranscript);
+        if (finalLeak.detected) {
+          realtimeLog('prompt-leakage-detected', {
+            stage: 'final',
+            hits: finalLeak.hits,
+            matchedSamples: finalLeak.matchedSamples,
+            transcriptLen: rawTranscript.length,
+          });
+          callbacks.onInterim(interimBuffer);
+          return;
+        }
+      }
+      if (rawTranscript.length) {
+        // Sprint 62 P0 — first final segment milestone.
+        if (finalSegmentCount === 0) {
+          timing.mark('firstFinal', { chars: rawTranscript.length });
+        }
+        finalSegmentCount++;
+        // Sprint 58 P0.1/P0.2 — assign segmentId at the FIRST stage
+        // (raw_received). All downstream stages reuse this same ID
+        // so we can trace one phrase end-to-end via getSegmentLifecycle.
+        const segmentId = newSegmentId();
+        recordLifecycle({
+          segmentId,
+          sessionId: session.traceId ?? 'unknown',
+          source: 'realtime',
+          stage: 'raw_received',
+          status: 'ok',
+          text: rawTranscript,
+          ...(origin === 'ack_timeout' ? { reason: 'commit_ack_timeout' } : {}),
+        });
+        // Sprint 53 Voice QA — нормализуем известные мис-распознавания
+        // брендов («ГласНаб» → «Главснаб» и т.п.) до того как сегмент
+        // попадает в UI / в analyze-payload.
+        const normalized = normalizeTranscript(rawTranscript);
+        recordLifecycle({
+          segmentId,
+          sessionId: session.traceId ?? 'unknown',
+          source: 'realtime',
+          stage: 'normalized',
+          status: 'ok',
+          text: normalized,
+          ...(normalized !== rawTranscript ? { reason: 'brand_normalize_applied' } : {}),
+        });
+        // Sprint 62.HOTFIX P0.1 — interim/final truncation reconciliation.
+        // OpenAI Realtime occasionally returns a .completed with a
+        // dramatically truncated transcript relative to the interim
+        // buffer we just accumulated (prod case 2026-05-18). Detect and
+        // recover by preferring interim text. See reconcileTruncatedFinal.
+        const reconciled = reconcileTruncatedFinal(interimSnapshot, normalized);
+        const toAppend = reconciled.text;
+        if (reconciled.recovered) {
+          recordLifecycle({
+            segmentId,
+            sessionId: session.traceId ?? 'unknown',
+            source: 'realtime',
+            stage: 'normalized',
+            status: 'ok',
+            text: toAppend,
+            reason: `truncation_recovered: interim=${interimSnapshot.length}c final=${normalized.length}c ratio=${reconciled.ratio.toFixed(1)}`,
+          });
+          try {
+            console.warn('[transcription/truncation-recovered]', {
+              segmentId,
+              sessionId: session.traceId,
+              interimChars: interimSnapshot.length,
+              finalChars: normalized.length,
+              ratio: reconciled.ratio.toFixed(2),
+              interimPreview: interimSnapshot.slice(0, 80),
+              finalPreview: normalized.slice(0, 80),
+            });
+          } catch { /* ignore */ }
+        }
+        // Sprint 58 P0.3 — interim-vs-final mutation diff (kept).
+        // High mutation = OpenAI rewrote what it heard. Surfaces silent
+        // paraphrasing. Threshold + suspicious flag inside helper.
+        if (interimSnapshot) {
+          const diff = compareInterimVsFinal(interimSnapshot, normalized);
+          if (diff.suspiciousMutation) {
+            console.warn('[transcription/interim-final-mutation]', {
+              segmentId,
+              sessionId: session.traceId,
+              similarity: diff.similarity.toFixed(3),
+              mutationRatio: diff.mutationRatio.toFixed(3),
+              interimChars: diff.interimChars,
+              finalChars: diff.finalChars,
+              interimPreview: interimSnapshot.slice(0, 60),
+              finalPreview: normalized.slice(0, 60),
+            });
+          }
+        }
+        callbacks.onFinal(toAppend, segmentId);
+      } else {
+        try {
+          console.debug('[transcription/segment-dropped]', {
+            traceId: session.traceId,
+            idx: finalSegmentCount,
+            reason: origin === 'completed' ? 'empty_completed_event' : 'ack_timeout_without_text',
+          });
+        } catch { /* ignore */ }
+      }
+      // Text of the next turn (if any) stays on screen as interim.
+      callbacks.onInterim(interimBuffer);
     };
     // P0 hotfix — instrumentation. После реального звонка 2026-04-08
     // обнаружили, что UI содержал лишь 2 сегмента вместо ~15. Без диагностики
@@ -500,6 +684,10 @@ export async function startRealtimeTranscription(
     dc.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as RealtimeEvent;
+        if (msg.type === 'input_audio_buffer.committed' && typeof msg.item_id === 'string' && msg.item_id) {
+          committedItems.add(msg.item_id);
+          if (commitSentAt && !commitItemId) commitItemId = msg.item_id;
+        }
         if (msg.type && !TRANSCRIPT_EVENT_TYPES.has(msg.type)) {
           // Sprint 59 P0.8 — structured session-event log. Tag everything
           // non-transcript from OpenAI so we can spot session.created /
@@ -538,138 +726,29 @@ export async function startRealtimeTranscription(
                 matchedSamples: leakage.matchedSamples,
                 candidateLen: candidate.length,
               });
-              // Reset interim buffer so the UI clears any partial leak.
+              // Reset interim buffers so the UI clears any partial leak.
+              itemText.clear();
+              itemFirstDeltaAt.clear();
               interimBuffer = '';
               callbacks.onInterim('');
               return;
             }
+            const itemId = typeof msg.item_id === 'string' && msg.item_id ? msg.item_id : FALLBACK_ITEM_ID;
+            const now = Date.now();
+            if (!itemText.has(itemId)) itemFirstDeltaAt.set(itemId, now);
+            itemText.set(itemId, (itemText.get(itemId) ?? '') + msg.delta);
             interimBuffer = candidate;
             deltaCount++;
-            lastDeltaAt = Date.now();
-            if (!turnStartedAt) turnStartedAt = lastDeltaAt;
+            lastDeltaAt = now;
             callbacks.onInterim(interimBuffer);
           }
           return;
         }
         if (msg.type === 'conversation.item.input_audio_transcription.completed') {
-          const rawTranscript = typeof msg.transcript === 'string' ? msg.transcript.trim() : '';
-          // Snapshot interim BEFORE we reset it — needed for the
-          // interim-vs-final mutation diff (P0.3).
-          const interimSnapshot = interimBuffer;
-          interimBuffer = '';
-          lastDeltaAt = 0;
-          turnStartedAt = 0;
-          commitSentAt = 0;
-          // Sprint 62.P9.HOTFIX — leakage guard on final segments. Same
-          // check as the interim path. If OpenAI emitted the prompt back
-          // as a «completed» event (it CAN happen even when interim deltas
-          // were clean if the model decides to flush the whole context),
-          // we drop the segment entirely. callbacks.onFinal is NOT called.
-          if (rawTranscript.length) {
-            const finalLeak = detectPromptLeakage(rawTranscript);
-            if (finalLeak.detected) {
-              realtimeLog('prompt-leakage-detected', {
-                stage: 'final',
-                hits: finalLeak.hits,
-                matchedSamples: finalLeak.matchedSamples,
-                transcriptLen: rawTranscript.length,
-              });
-              callbacks.onInterim('');
-              return;
-            }
-          }
-          if (rawTranscript.length) {
-            // Sprint 62 P0 — first final segment milestone.
-            if (finalSegmentCount === 0) {
-              timing.mark('firstFinal', { chars: rawTranscript.length });
-            }
-            finalSegmentCount++;
-            // Sprint 58 P0.1/P0.2 — assign segmentId at the FIRST stage
-            // (raw_received). All downstream stages reuse this same ID
-            // so we can trace one phrase end-to-end via getSegmentLifecycle.
-            const segmentId = newSegmentId();
-            recordLifecycle({
-              segmentId,
-              sessionId: session.traceId ?? 'unknown',
-              source: 'realtime',
-              stage: 'raw_received',
-              status: 'ok',
-              text: rawTranscript,
-            });
-            // Sprint 53 Voice QA — нормализуем известные мис-распознавания
-            // брендов («ГласНаб» → «Главснаб» и т.п.) до того как сегмент
-            // попадает в UI / в analyze-payload.
-            const normalized = normalizeTranscript(rawTranscript);
-            recordLifecycle({
-              segmentId,
-              sessionId: session.traceId ?? 'unknown',
-              source: 'realtime',
-              stage: 'normalized',
-              status: 'ok',
-              text: normalized,
-              ...(normalized !== rawTranscript ? { reason: 'brand_normalize_applied' } : {}),
-            });
-            // Sprint 62.HOTFIX P0.1 — interim/final truncation reconciliation.
-            // OpenAI Realtime occasionally returns a .completed with a
-            // dramatically truncated transcript relative to the interim
-            // buffer we just accumulated (prod case 2026-05-18: said
-            // «Здравствуйте, меня зовут Григорий, проверяю транскрипцию»,
-            // got «Транскрипция»). Detect and recover by preferring
-            // interim text. See reconcileTruncatedFinal for gates.
-            const reconciled = reconcileTruncatedFinal(interimSnapshot, normalized);
-            const toAppend = reconciled.text;
-            if (reconciled.recovered) {
-              recordLifecycle({
-                segmentId,
-                sessionId: session.traceId ?? 'unknown',
-                source: 'realtime',
-                stage: 'normalized',
-                status: 'ok',
-                text: toAppend,
-                reason: `truncation_recovered: interim=${interimSnapshot.length}c final=${normalized.length}c ratio=${reconciled.ratio.toFixed(1)}`,
-              });
-              try {
-                console.warn('[transcription/truncation-recovered]', {
-                  segmentId,
-                  sessionId: session.traceId,
-                  interimChars: interimSnapshot.length,
-                  finalChars: normalized.length,
-                  ratio: reconciled.ratio.toFixed(2),
-                  interimPreview: interimSnapshot.slice(0, 80),
-                  finalPreview: normalized.slice(0, 80),
-                });
-              } catch { /* ignore */ }
-            }
-            // Sprint 58 P0.3 — interim-vs-final mutation diff (kept).
-            // High mutation = OpenAI rewrote what it heard. Surfaces silent
-            // paraphrasing. Threshold + suspicious flag inside helper.
-            if (interimSnapshot) {
-              const diff = compareInterimVsFinal(interimSnapshot, normalized);
-              if (diff.suspiciousMutation) {
-                console.warn('[transcription/interim-final-mutation]', {
-                  segmentId,
-                  sessionId: session.traceId,
-                  similarity: diff.similarity.toFixed(3),
-                  mutationRatio: diff.mutationRatio.toFixed(3),
-                  interimChars: diff.interimChars,
-                  finalChars: diff.finalChars,
-                  interimPreview: interimSnapshot.slice(0, 60),
-                  finalPreview: normalized.slice(0, 60),
-                });
-              }
-            }
-            callbacks.onFinal(toAppend, segmentId);
-          } else {
-            try {
-              console.debug('[transcription/segment-dropped]', {
-                traceId: session.traceId,
-                idx: finalSegmentCount,
-                reason: 'empty_completed_event',
-              });
-            } catch { /* ignore */ }
-          }
-          // После завершения сегмента очищаем interim в UI.
-          callbacks.onInterim('');
+          const itemId = typeof msg.item_id === 'string' && msg.item_id
+            ? msg.item_id
+            : (oldestItemId() ?? FALLBACK_ITEM_ID);
+          finalizeItem(itemId, typeof msg.transcript === 'string' ? msg.transcript : '', 'completed');
           return;
         }
         if (msg.type === 'error') {
@@ -754,6 +833,7 @@ export async function startRealtimeTranscription(
 
 interface RealtimeEvent {
   type?: string;
+  item_id?: string;
   delta?: string;
   transcript?: string;
   error?: { code?: string; message?: string; type?: string };

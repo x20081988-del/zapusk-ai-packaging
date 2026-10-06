@@ -92,6 +92,9 @@ app.get('/health', (_req, res) => {
       realtimeTranscribeDefault: env.OPENAI_MODEL_REALTIME_TRANSCRIBE,
       liveTranscribeDelay: env.OPENAI_LIVE_TRANSCRIBE_DELAY,
     },
+    // Render sets RENDER_GIT_COMMIT on every deploy; lets ops confirm which
+    // commit is live without the dashboard. Null locally.
+    gitCommit: process.env.RENDER_GIT_COMMIT ?? null,
   });
 });
 
