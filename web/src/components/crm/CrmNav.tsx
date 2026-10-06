@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { fetchCrmwebMeta, type CrmwebMeta } from '../../lib/crmweb';
+import { ChoiceChip } from '../ui/Chip';
 
 // Чипы-переходы раздела CRM - как _nav_html у crm_web: Проекты, Все карточки и
 // пять воронок с числом активных сделок. Активный чип подсвечен.
+//
+// Design pass 06.10.2026: ряд не переносится, а прокручивается вбок. На телефоне
+// восемь чипов в три строки съедали треть экрана до первой карточки.
 
 // Последний справочник живет в модуле: навигация рисуется мгновенно при переходе
 // между экранами, свежие числа доезжают следом. Счетчики тут ориентир, не отчет.
@@ -34,16 +37,19 @@ export function CrmNav({ active }: { active: string }) {
   ];
 
   return (
-    <nav className="flex flex-wrap gap-2 mb-4">
+    <nav
+      aria-label="Разделы CRM"
+      className="flex gap-2 mb-4 overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap"
+    >
       {items.map((it) => (
-        <Link key={it.to} to={it.to}
-          className={`rounded-full px-3 py-1.5 text-sm border transition-colors ${
-            active === it.to || (it.to !== '/crm' && active.startsWith(it.to + '/'))
-              ? 'border-zapusk/60 bg-zapusk/10 text-primary'
-              : 'border-line text-secondary hover:text-primary'
-          }`}>
-          {it.label}{typeof it.n === 'number' && <b className="ml-1">{it.n}</b>}
-        </Link>
+        <ChoiceChip
+          key={it.to}
+          to={it.to}
+          count={it.n}
+          active={active === it.to || (it.to !== '/crm' && active.startsWith(it.to + '/'))}
+        >
+          {it.label}
+        </ChoiceChip>
       ))}
     </nav>
   );

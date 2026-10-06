@@ -61,7 +61,7 @@ export default function Login() {
 
         <div className="bg-surface border border-line rounded-xl p-7 shadow-lifted">
           <div className="mb-6">
-            <h1 className="text-2xl font-bold text-primary tracking-tight">Вход в ZAPUSK AI</h1>
+            <h1 className="font-display text-2xl font-bold text-primary tracking-tight">Вход в ZAPUSK AI</h1>
             <p className="text-sm text-secondary mt-1.5">
               Для клиентов, менеджеров и команды платформы.
             </p>
@@ -94,7 +94,7 @@ export default function Login() {
 
           <div className="mt-5 text-center text-sm text-secondary">
             Нет доступа?{' '}
-            <Link to="/signup" className="text-zapusk-400 hover:text-zapusk-300 font-semibold">
+            <Link to="/signup" className="text-zapusk-400 hover:text-zapusk-600 font-semibold">
               Запросить демо
             </Link>
           </div>

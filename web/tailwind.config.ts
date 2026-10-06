@@ -18,7 +18,7 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Montserrat', 'system-ui', 'sans-serif'],
+        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         display: ['Montserrat', 'system-ui', 'sans-serif'],
       },
       colors: {
@@ -29,6 +29,9 @@ const config: Config = {
         elevated: channel('elevated'),
         line:     channel('line'),
         hairline: channel('hairline'),
+        // segmented controls: track = recessed strip, thumb = active segment
+        track:    channel('track'),
+        thumb:    channel('thumb'),
 
         // Text
         primary:   channel('text-primary'),

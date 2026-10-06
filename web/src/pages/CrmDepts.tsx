@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, FileText, Inbox, RefreshCw } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { CrmNav } from '../components/crm/CrmNav';
-import { HEAT_DOT, HEAT_TEXT } from '../components/crm/TaskCard';
+import { DueChip } from '../components/crm/DueChip';
+import { HEAT_DOT } from '../components/crm/TaskCard';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ChoiceChip } from '../components/ui/Chip';
 import { EmptyState } from '../components/ui/EmptyState';
 import { SnapshotBanner } from '../components/ui/SnapshotBanner';
 import { DecideError } from '../lib/decide';
@@ -16,6 +18,10 @@ import { fetchCrmwebDepts, type DeptSummary, type DeptsPayload } from '../lib/cr
 // сопровождение клиентов, запуск эфиров, юридический...»). Отдел считает источник
 // (crm_departments в telegram-agent) для КАЖДОЙ задачи реестра, а не только для
 // портфеля проектов. Экран - витрина: счетчики, три горящие задачи, переход в отдел.
+//
+// Design pass 06.10.2026: счетчики стали тремя плитками с крупной цифрой вместо
+// строки «текущих 27 · 16 просрочено · сделано 56 за 90 дн.» - одиннадцать таких
+// строк не сканировались. Красным остается только число просрочки.
 
 type Status =
   | { phase: 'loading' }
@@ -44,14 +50,12 @@ export function storeDays(d: number) {
 
 export function DaysPicker({ value, onChange }: { value: number; onChange: (d: number) => void }) {
   return (
-    <div className="flex items-center gap-1.5 text-xs">
-      <span className="text-muted mr-1">сделано за</span>
+    <div className="flex items-center gap-1.5">
+      <span className="text-xs text-muted mr-1">сделано за</span>
       {DAYS_OPTIONS.map((d) => (
-        <button key={d} type="button" onClick={() => onChange(d)}
-          className={`rounded-full px-2.5 py-1 border transition-colors ${
-            value === d ? 'border-zapusk/60 bg-zapusk/10 text-primary' : 'border-line text-secondary hover:text-primary'}`}>
+        <ChoiceChip key={d} size="sm" active={value === d} onClick={() => onChange(d)}>
           {d} дн.
-        </button>
+        </ChoiceChip>
       ))}
     </div>
   );
@@ -155,9 +159,9 @@ function LoadingSkeleton() {
       {[0, 1, 2, 3, 4, 5].map((i) => (
         <Card key={i} className="p-4">
           <div className="animate-pulse space-y-2.5">
-            <div className="h-4 w-1/2 bg-surface rounded" />
-            <div className="h-3 w-3/4 bg-surface rounded" />
-            <div className="h-3 w-2/3 bg-surface rounded" />
+            <div className="h-4 w-1/2 bg-hairline rounded" />
+            <div className="h-3 w-3/4 bg-hairline rounded" />
+            <div className="h-3 w-2/3 bg-hairline rounded" />
           </div>
         </Card>
       ))}
@@ -165,48 +169,62 @@ function LoadingSkeleton() {
   );
 }
 
+function Stat({ label, value, tone = 'text-primary', title }: { label: string; value: number; tone?: string; title?: string }) {
+  return (
+    <div className="rounded-md border border-hairline bg-canvas/70 px-2.5 py-2 min-w-0" title={title}>
+      <div className={`font-display text-lg font-semibold font-num leading-none ${tone}`}>{value}</div>
+      <div className="text-[11px] text-muted mt-1 truncate">{label}</div>
+    </div>
+  );
+}
+
 function DeptCard({ dept, days }: { dept: DeptSummary; days: number }) {
   const quiet = dept.open_n === 0 && dept.done_n === 0 && dept.docs_n === 0;
   return (
-    <Card className={`p-4 flex flex-col ${dept.over_n > 0 ? 'border-l-2 border-l-danger/70' : ''}`}>
-      <Link to={`/crm/depts/${dept.code}`} className="block">
+    <Card className="p-4 flex flex-col">
+      <Link to={`/crm/depts/${dept.code}`} className="block group">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full shrink-0 ${HEAT_DOT[dept.heat] ?? HEAT_DOT.none}`} />
-          <span className="text-sm font-semibold text-primary">{dept.name}</span>
+          <span className="text-[15px] font-semibold text-primary group-hover:text-zapusk-400 transition-colors">
+            {dept.name}
+          </span>
           <ChevronRight className="w-4 h-4 text-muted shrink-0 ml-auto" />
         </div>
-        <p className="text-xs text-secondary mt-1">{dept.desc}</p>
+        <p className="text-xs text-muted mt-1 leading-snug">{dept.desc}</p>
       </Link>
 
-      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-xs">
-        <span className="text-primary">
-          текущих <b>{dept.open_n}</b>
-          {dept.over_n > 0 && <span className="text-danger"> · {dept.over_n} просрочено</span>}
-          {dept.over_n === 0 && dept.today_n > 0 && <span className="text-warning"> · {dept.today_n} сегодня</span>}
-        </span>
-        <span className="text-secondary">сделано <b>{dept.done_n}</b> за {days} дн.</span>
-        <span className="text-secondary inline-flex items-center gap-1">
-          <FileText className="w-3 h-3" /> {dept.docs_n} док.
+      <div className="grid grid-cols-3 gap-2 mt-3">
+        <Stat label="Текущих" value={dept.open_n} />
+        <Stat label="Просрочено" value={dept.over_n} tone={dept.over_n > 0 ? 'text-danger' : 'text-muted'} />
+        <Stat label={`Сделано за ${days} дн.`} value={dept.done_n} title={`сделано за ${days} дней`} />
+      </div>
+
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2.5 text-xs text-muted">
+        {dept.over_n === 0 && dept.today_n > 0 && (
+          <span className="text-warning">сегодня <b className="font-num">{dept.today_n}</b></span>
+        )}
+        <span className="inline-flex items-center gap-1">
+          <FileText className="w-3 h-3" /> <span className="font-num">{dept.docs_n}</span> док.
         </span>
         {dept.doc_needed_n > 0 && (
-          <span className="text-warning">к подготовке: {dept.doc_needed_n}</span>
+          <span className="text-warning">к подготовке <b className="font-num">{dept.doc_needed_n}</b></span>
         )}
-        {dept.backlog_n > 0 && <span className="text-muted">бэклог {dept.backlog_n}</span>}
+        {dept.backlog_n > 0 && <span>бэклог <span className="font-num">{dept.backlog_n}</span></span>}
       </div>
 
       {dept.top.length > 0 && (
-        <ul className="mt-3 space-y-1 border-t border-line pt-2.5">
+        <ul className="mt-3 space-y-1.5 border-t border-hairline pt-3">
           {dept.top.map((t) => (
-            <li key={t.id} className="text-sm leading-snug">
-              <span className={`text-xs mr-1.5 ${HEAT_TEXT[t.heat] ?? 'text-muted'}`}>{t.heat_label}</span>
-              <span className="text-secondary">{t.title}</span>
+            <li key={t.id} className="flex items-start gap-2 min-w-0">
+              <DueChip state={t.heat} label={t.heat_label} className="mt-0.5" />
+              <span className="text-[13px] text-secondary leading-snug min-w-0 line-clamp-2">{t.title}</span>
             </li>
           ))}
         </ul>
       )}
       {quiet && <p className="mt-3 text-xs text-muted">Пока пусто.</p>}
 
-      <p className="mt-auto pt-2.5 text-xs text-muted">{dept.last_done_label}</p>
+      <p className="mt-auto pt-3 text-xs text-muted">{dept.last_done_label}</p>
     </Card>
   );
 }

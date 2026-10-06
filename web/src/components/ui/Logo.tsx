@@ -15,7 +15,7 @@ export function Logo({ className, compact }: { className?: string; compact?: boo
       />
       {!compact && (
         <div className="leading-tight">
-          <div className="text-[14px] font-bold tracking-tight text-primary">
+          <div className="font-display text-[14px] font-bold tracking-tight text-primary">
             Платформа <span className="font-extrabold">ZAPUSK AI</span>
           </div>
         </div>

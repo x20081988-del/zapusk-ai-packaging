@@ -2,7 +2,11 @@ import clsx from 'clsx';
 import { forwardRef } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'ai' | 'danger';
+// Design pass 06.10.2026: one strong action per row. Primary and AI are flat brand
+// fills (no gradient, no glow): the glow made every CTA shout and a row of three
+// CTAs on the assistant screen read as a traffic light. Destructive actions get
+// a quiet ghost ("danger-ghost") so they never compete with "Да".
+type Variant = 'primary' | 'secondary' | 'ghost' | 'ai' | 'danger' | 'danger-ghost';
 type Size = 'sm' | 'md' | 'lg';
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -15,19 +19,21 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const VARIANTS: Record<Variant, string> = {
   primary:
-    'bg-grad-zapusk text-canvas font-semibold shadow-glow hover:brightness-110 active:brightness-95',
+    'bg-zapusk text-white font-semibold shadow-soft hover:bg-zapusk-600 active:bg-zapusk-700',
   secondary:
-    'bg-surface text-primary border border-line hover:border-zapusk/50 hover:bg-elevated',
+    'bg-surface text-primary border border-line shadow-soft hover:bg-hairline',
   ghost:
-    'bg-transparent text-secondary hover:text-primary hover:bg-surface',
+    'bg-transparent text-secondary hover:text-primary hover:bg-hairline',
   ai:
-    'bg-grad-ai text-canvas font-semibold shadow-ai-glow hover:brightness-110',
+    'bg-ai text-white font-semibold shadow-soft hover:bg-ai-dim',
   danger:
     'bg-danger/10 text-danger border border-danger/30 hover:bg-danger/20',
+  'danger-ghost':
+    'bg-transparent text-danger hover:bg-danger/10',
 };
 
 const SIZES: Record<Size, string> = {
-  sm: 'h-8 px-3 text-xs rounded-md gap-1.5',
+  sm: 'h-8 px-3 text-[13px] rounded-md gap-1.5',
   md: 'h-10 px-4 text-sm rounded-md gap-2',
   lg: 'h-12 px-6 text-[15px] rounded-lg gap-2.5',
 };
@@ -41,8 +47,8 @@ export const Button = forwardRef<HTMLButtonElement, Props>(function Button(
       ref={ref}
       disabled={disabled || loading}
       className={clsx(
-        'inline-flex items-center justify-center font-medium transition-all duration-150 ease-smooth select-none',
-        'disabled:opacity-50 disabled:cursor-not-allowed',
+        'inline-flex items-center justify-center font-medium whitespace-nowrap transition-colors duration-150 ease-smooth select-none',
+        'disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none',
         VARIANTS[variant],
         SIZES[size],
         className,

@@ -52,7 +52,7 @@ export function BalancesStrip() {
   const ai = f.ai;
 
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+    <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs font-num">
       {f.services.map((s) => (
         <span
           key={s.name}

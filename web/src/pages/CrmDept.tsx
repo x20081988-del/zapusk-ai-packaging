@@ -3,11 +3,13 @@ import { Link, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, FileText, Inbox, RefreshCw } from 'lucide-react';
 import { AppLayout } from '../components/layout/AppLayout';
 import { CrmNav } from '../components/crm/CrmNav';
-import { BTN, HEAT_TEXT, TaskCard } from '../components/crm/TaskCard';
+import { BTN, TaskCard } from '../components/crm/TaskCard';
+import { DueChip } from '../components/crm/DueChip';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { SnapshotBanner } from '../components/ui/SnapshotBanner';
+import { SegmentedTabs } from '../components/ui/Chip';
 import { DecideError, decisionErrorText } from '../lib/decide';
 import { SOURCE_FAILURE_COPY } from '../lib/sourceFailure';
 import {
@@ -177,13 +179,16 @@ export function CrmDept() {
               <DaysPicker value={days} onChange={(d) => { storeDays(d); setDays(d); }} />
             </div>
 
-            <div className="flex gap-2 mb-5">
-              <TabButton active={tab === 'open'} onClick={() => setTab('open')}
-                label="Текущие" n={status.dept.cards.length} />
-              <TabButton active={tab === 'done'} onClick={() => setTab('done')}
-                label="Сделано" n={status.dept.done.length} />
-              <TabButton active={tab === 'docs'} onClick={() => setTab('docs')}
-                label="Документы" n={status.dept.docs.length} />
+            <div className="mb-5">
+              <SegmentedTabs<Tab>
+                value={tab}
+                onChange={setTab}
+                items={[
+                  { value: 'open', label: 'Текущие', count: status.dept.cards.length },
+                  { value: 'done', label: 'Сделано', count: status.dept.done.length },
+                  { value: 'docs', label: 'Документы', count: status.dept.docs.length },
+                ]}
+              />
             </div>
 
             {tab === 'open' && (
@@ -199,24 +204,14 @@ export function CrmDept() {
   );
 }
 
-function TabButton({ active, onClick, label, n }: { active: boolean; onClick: () => void; label: string; n: number }) {
-  return (
-    <button type="button" onClick={onClick}
-      className={`flex-1 rounded-md px-3 py-2 text-sm border transition-colors ${
-        active ? 'border-zapusk/60 bg-zapusk/10 text-primary' : 'border-line text-secondary hover:text-primary'}`}>
-      {label} <span className="ml-1 text-muted">{n}</span>
-    </button>
-  );
-}
-
 function LoadingSkeleton() {
   return (
     <div className="space-y-3" aria-busy="true" aria-label="Загрузка отдела">
       {[0, 1, 2].map((i) => (
         <Card key={i} className="p-4">
           <div className="animate-pulse space-y-2.5">
-            <div className="h-4 w-1/3 bg-surface rounded" />
-            <div className="h-3 w-2/3 bg-surface rounded" />
+            <div className="h-4 w-1/3 bg-hairline rounded" />
+            <div className="h-3 w-2/3 bg-hairline rounded" />
           </div>
         </Card>
       ))}
@@ -245,10 +240,12 @@ function OpenTab({
           </p>
           <ul className="mt-2 space-y-1">
             {dept.docs_needed.map((x) => (
-              <li key={x.id} className="text-sm leading-snug">
-                <span className="text-primary">{x.doc}</span>
-                <span className="text-secondary"> · {x.title}</span>
-                <span className={`text-xs ml-1.5 ${HEAT_TEXT[x.heat] ?? 'text-muted'}`}>{x.heat_label}</span>
+              <li key={x.id} className="flex items-start gap-2 text-sm leading-snug min-w-0">
+                <DueChip state={x.heat} label={x.heat_label} className="mt-0.5" />
+                <span className="min-w-0">
+                  <span className="text-primary">{x.doc}</span>
+                  <span className="text-secondary"> · {x.title}</span>
+                </span>
               </li>
             ))}
           </ul>

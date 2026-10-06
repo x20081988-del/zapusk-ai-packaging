@@ -142,8 +142,8 @@ function PanelCard({ panel, slot }: { panel: Panel; slot?: Slot }) {
 
       {(!slot || slot.phase === 'loading') && (
         <div className="animate-pulse space-y-2" aria-busy="true">
-          <div className="h-3 w-2/3 bg-surface rounded" />
-          <div className="h-3 w-1/2 bg-surface rounded" />
+          <div className="h-3 w-2/3 bg-hairline rounded" />
+          <div className="h-3 w-1/2 bg-hairline rounded" />
         </div>
       )}
 

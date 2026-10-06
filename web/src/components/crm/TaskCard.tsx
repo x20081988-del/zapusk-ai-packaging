@@ -3,6 +3,7 @@ import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { decisionErrorText } from '../../lib/decide';
 import { crmwebPmAction, PM_OWNER_LABEL, type PmRun, type PmTask } from '../../lib/crmweb';
+import { DueChip, shortDue } from './DueChip';
 
 // Карточка задачи реестра - одна на все экраны CRM: «Проекты и задачи» и «Отделы».
 // Вынесена из CrmPm 28.09.2026 (Sprint 66): отделам нужна та же карточка с теми же
@@ -70,16 +71,17 @@ export function TaskCard({
         {task.unseen && (
           <span className="rounded bg-warning/10 text-warning px-1.5 py-0.5">{task.unseen}</span>
         )}
-        <span className="ml-auto">#{task.id}</span>
+        <span className="ml-auto font-num">#{task.id}</span>
       </div>
 
-      <h3 className="text-sm font-semibold text-primary mt-1.5">{task.title}</h3>
+      <h3 className="text-[15px] font-semibold text-primary mt-1.5 leading-snug">{task.title}</h3>
       {task.rest && <p className="text-sm text-secondary mt-1 leading-relaxed">{task.rest}</p>}
 
       <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
-        <span className={`rounded px-2 py-1 ${HEAT_PLAQUE[task.heat] ?? HEAT_PLAQUE.none}`}>
-          {task.due_ts ? `${task.due_date} · ${task.due_label}` : task.heat_label}
-        </span>
+        <DueChip
+          state={task.heat}
+          label={task.due_ts ? `${task.due_date} · ${shortDue(task.due_label)}` : task.heat_label}
+        />
         {task.total_n > 0 && task.turn_label && (
           <span className="text-muted">ход: <b className="text-secondary">{task.turn_label}</b></span>
         )}
@@ -88,7 +90,7 @@ export function TaskCard({
       {task.total_n > 0 ? (
         <div className="mt-2.5">
           <div className="flex items-center gap-2">
-            <div className="flex-1 h-1.5 rounded bg-surface overflow-hidden">
+            <div className="flex-1 h-1.5 rounded bg-hairline overflow-hidden">
               <div className="h-full bg-zapusk rounded" style={{ width: `${task.pct}%` }} />
             </div>
             <span className="text-xs text-muted shrink-0">{task.done_n} из {task.total_n}</span>

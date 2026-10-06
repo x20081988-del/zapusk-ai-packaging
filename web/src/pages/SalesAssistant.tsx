@@ -2234,7 +2234,7 @@ export default function SalesAssistant() {
                 iconLeft={<Sparkles size={14} />}
                 onClick={() => runPrepare()}
                 loading={isPreparing}
-                className={clsx(actionButtonClass, 'shadow-ai-glow')}
+                className={actionButtonClass}
                 title={!hasMeaningfulPrepContext
                   ? 'Вставьте контекст встречи (минимум 20 символов), затем нажмите «Подготовиться»'
                   : 'AI соберёт цели, опорные вопросы и план разговора'}
@@ -2264,7 +2264,9 @@ export default function SalesAssistant() {
               </Button>
             )}
             <Button
-              variant="primary"
+              // Одна оранжевая кнопка в ряду: пока транскрипта нет, «Завершить»
+              // стоит серой, а не полупрозрачной оранжевой третьей рядом с «Начать».
+              variant={hasFinalTranscript ? 'primary' : 'secondary'}
               iconLeft={<Save size={14} />}
               onClick={finishMeeting}
               loading={finishing}

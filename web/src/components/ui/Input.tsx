@@ -9,6 +9,13 @@ interface FieldProps {
   required?: boolean;
 }
 
+// Design pass 06.10.2026: fields sit on the card colour (ink) instead of the
+// recessed canvas grey, and focus adds a soft brand ring so the active field is
+// obvious on the phone.
+const FIELD =
+  'w-full bg-ink border border-line rounded-md text-sm text-primary placeholder:text-faint ' +
+  'transition-[border-color,box-shadow] focus:outline-none focus:border-zapusk/60 focus:ring-2 focus:ring-zapusk/15';
+
 interface InputProps extends InputHTMLAttributes<HTMLInputElement>, FieldProps {}
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
@@ -27,12 +34,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       <input
         ref={ref}
         id={inputId}
-        className={clsx(
-          'w-full h-10 px-3.5 bg-canvas border border-line rounded-md text-sm text-primary placeholder:text-faint',
-          'transition-colors focus:outline-none focus:border-zapusk/60 focus:bg-ink',
-          error && 'border-danger/60',
-          className,
-        )}
+        className={clsx(FIELD, 'h-10 px-3.5', error && 'border-danger/60', className)}
         {...rest}
         onWheel={handleWheel}
       />
@@ -53,12 +55,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
         ref={ref}
         id={inputId}
         rows={rows}
-        className={clsx(
-          'w-full px-3.5 py-2.5 bg-canvas border border-line rounded-md text-sm text-primary placeholder:text-faint resize-y',
-          'transition-colors focus:outline-none focus:border-zapusk/60 focus:bg-ink',
-          error && 'border-danger/60',
-          className,
-        )}
+        className={clsx(FIELD, 'px-3.5 py-2.5 resize-y', error && 'border-danger/60', className)}
         {...rest}
       />
     </Field>
@@ -79,16 +76,11 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       <select
         ref={ref}
         id={inputId}
-        className={clsx(
-          'w-full h-10 px-3 bg-canvas border border-line rounded-md text-sm text-primary',
-          'transition-colors focus:outline-none focus:border-zapusk/60 focus:bg-ink',
-          error && 'border-danger/60',
-          className,
-        )}
+        className={clsx(FIELD, 'h-10 px-3', error && 'border-danger/60', className)}
         {...rest}
       >
         {options.map((o) => (
-          <option key={o.value} value={o.value} className="bg-canvas text-primary">
+          <option key={o.value} value={o.value} className="bg-ink text-primary">
             {o.label}
           </option>
         ))}

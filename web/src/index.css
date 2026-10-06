@@ -4,6 +4,8 @@
 
 /* ──────────────────────────────────────────────────────────────
  * ZAPUSK theme tokens
+ * Type: Inter for UI text (dense Cyrillic, tabular numerals), Montserrat only
+ * for display: wordmark, page titles, big figures (design pass 06.10.2026).
  * Default product experience = light. Dark cockpit stays available via switch.
  * Every Tailwind colour utility reads these via rgb(var(--…)/<alpha>).
  * ─────────────────────────────────────────────────────────────*/
@@ -14,10 +16,12 @@
   /* surfaces */
   --color-canvas:   10 11 16;
   --color-ink:      15 17 23;
-  --color-surface:  19 22 31;
-  --color-elevated: 25 29 40;
-  --color-line:     35 40 58;
-  --color-hairline: 27 32 48;
+  --color-surface:  20 23 33;
+  --color-elevated: 26 30 42;
+  --color-line:     38 43 62;
+  --color-hairline: 29 33 48;
+  --color-track:    13 15 21;
+  --color-thumb:    38 43 62;
 
   /* text */
   --color-text-primary:   245 246 250;
@@ -80,6 +84,8 @@
   --color-elevated: 255 255 255;
   --color-line:     228 228 231;
   --color-hairline: 244 244 245;
+  --color-track:    241 241 243;
+  --color-thumb:    255 255 255;
 
   /* text — near-black, balanced greys */
   --color-text-primary:   10 10 11;
@@ -87,20 +93,21 @@
   --color-text-muted:     113 113 122;
   --color-text-faint:     161 161 170;
 
-  /* brand — same orange (reads great on white) */
+  /* brand — same orange. zapusk-400 is the accent TEXT token: on white the
+   * bright 255 122 69 fails contrast (2.6:1), so light maps it deeper. */
   --color-zapusk:      255 90 31;
   --color-zapusk-dim:  200 68 18;
   --color-zapusk-glow: 255 122 69;
   --color-zapusk-50:   255 241 235;
   --color-zapusk-100:  255 217 197;
-  --color-zapusk-400:  255 122 69;
+  --color-zapusk-400:  217 62 8;
   --color-zapusk-600:  224 62 4;
   --color-zapusk-700:  179 50 10;
 
-  /* AI accent — same violet */
+  /* AI accent — same violet; ai-glow is the violet TEXT token, deeper on white */
   --color-ai:      124 92 255;
   --color-ai-dim:   90 63 224;
-  --color-ai-glow: 154 130 255;
+  --color-ai-glow: 104 76 236;
 
   /* semantic — slightly deeper in light so they read against white */
   --color-success:     5 150 105;
@@ -141,15 +148,13 @@ html, body, #root {
 
 body {
   margin: 0;
-  font-family: 'Montserrat', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background-color: rgb(var(--color-canvas));
   background-image: var(--app-mesh, none);
   background-attachment: fixed;
   color: rgb(var(--color-text-primary));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: 'ss01', 'cv01';
-  letter-spacing: -0.01em;
   transition: background-color 0.18s ease, color 0.18s ease;
 }
 
@@ -177,6 +182,10 @@ body {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
 }
+
+/* horizontal chip rows scroll on the phone without a visible bar */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
 .text-glow {
   text-shadow: 0 0 24px rgba(255, 90, 31, 0.4);

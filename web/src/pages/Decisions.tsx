@@ -160,9 +160,12 @@ export function Decisions() {
             перестает быть отдельным походом - день виден с той же страницы. */}
         <FocusStrip />
 
-        <p className="text-sm text-secondary mb-5">
-          {status.phase === 'ready' ? headline(status.pack, outcomes) : 'Очередь из telegram-agent'}
-        </p>
+        <div className="mb-5">
+          <h2 className="font-display text-xl font-semibold tracking-tight text-primary">
+            {status.phase === 'ready' ? headline(status.pack, outcomes) : 'Очередь решений'}
+          </h2>
+          <p className="text-xs text-muted mt-1">Сверху то, что без ответа теряется первым.</p>
+        </div>
 
         {frozen && status.phase === 'ready' && (
           <SnapshotBanner subject="очереди" fetchedAt={status.fetchedAt}
@@ -242,10 +245,12 @@ export function Decisions() {
           <div className="space-y-7">
             {groupByKind(status.pack.items).map((group) => (
               <section key={group.kind}>
-                <h2 className="text-xs uppercase tracking-wide text-muted mb-1">
-                  {kindLabel(group.kind)}
-                  <span className="ml-2 text-muted/70">{group.items.length}</span>
-                </h2>
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-[13px] font-semibold text-primary">{kindLabel(group.kind)}</h3>
+                  <span className="inline-flex items-center h-5 px-1.5 rounded-full bg-hairline text-[11px] font-medium font-num text-muted">
+                    {group.items.length}
+                  </span>
+                </div>
                 {/* Подсказка одна на группу: действия у вида общие, и та же фраза
                     на каждой карточке четыре раза подряд - шум, а не помощь. */}
                 {group.items[0]?.hint && (
@@ -313,9 +318,9 @@ function LoadingSkeleton() {
       {[0, 1, 2].map((i) => (
         <Card key={i} className="p-4">
           <div className="animate-pulse space-y-2.5">
-            <div className="h-3 w-1/3 bg-surface rounded" />
-            <div className="h-4 w-3/4 bg-surface rounded" />
-            <div className="h-3 w-1/2 bg-surface rounded" />
+            <div className="h-3 w-1/3 bg-hairline rounded" />
+            <div className="h-4 w-3/4 bg-hairline rounded" />
+            <div className="h-3 w-1/2 bg-hairline rounded" />
           </div>
         </Card>
       ))}
@@ -361,9 +366,9 @@ function DecisionCard({
   const bodyText = !item.body ? '' : expanded || !longBody ? item.body : item.body.slice(0, BODY_CLAMP);
 
   return (
-    <Card className={`p-4 ${settled ? 'opacity-70' : ''}`}>
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-sm font-semibold text-primary">{item.who}</span>
+    <Card className={`p-4 sm:p-5 transition-opacity ${settled ? 'opacity-60' : ''}`}>
+      <div className="flex items-baseline gap-x-2 gap-y-0.5 flex-wrap">
+        <span className="text-[15px] font-semibold text-primary">{item.who}</span>
         {item.context && <span className="text-xs text-muted">{item.context}</span>}
       </div>
 
@@ -378,7 +383,7 @@ function DecisionCard({
         // видел бы `**SPV**` звездочками. Длинное тело сворачиваем: решение по
         // простыне не читается, но и резать текст насовсем нельзя - «развернуть»
         // отдает его целиком.
-        <p className="text-sm text-secondary mt-2 whitespace-pre-wrap leading-relaxed break-words">
+        <p className="mt-2.5 rounded-md border border-hairline bg-canvas/70 px-3 py-2.5 text-sm text-secondary whitespace-pre-wrap leading-relaxed break-words">
           {renderInlineMarkup(bodyText)}
           {longBody && !expanded && '...'}
           {longBody && (
@@ -421,8 +426,8 @@ function DecisionCard({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2 mt-3.5">
-        {sortActions(item.actions).map((action) => {
+      <div className="flex flex-wrap items-center gap-2 mt-4">
+        {sortActions(item.actions).filter((action) => action !== 'close').map((action) => {
           const wantsComment = needsComment(action);
           const editorOpen = editorFor === action;
           // Действие с комментарием сначала раскрывает поле, и только вторым нажатием
@@ -433,18 +438,12 @@ function DecisionCard({
               key={action}
               size="sm"
               // На телефоне цель должна быть не меньше 44px: владелец разбирает очередь
-              // с телефона, а рядом с «Да» стоит необратимое «Закрыть». На широком
-              // экране возвращаемся к компактному размеру, иначе двадцать карточек по
-              // три крупные кнопки превращаются в стену.
+              // с телефона. На широком экране возвращаемся к компактному размеру, иначе
+              // двадцать карточек по три крупные кнопки превращаются в стену.
               className="min-h-11 px-4 sm:min-h-8 sm:px-3"
-              variant={action === 'approve' ? 'primary' : action === 'close' ? 'danger' : 'secondary'}
+              variant={action === 'approve' ? 'primary' : 'secondary'}
               disabled={busy || settled || blocked || frozen}
               onClick={() => {
-                if (action === 'close' && !confirmClose) {
-                  setConfirmClose(true);
-                  return;
-                }
-                if (action === 'close') setConfirmClose(false);
                 if (wantsComment && !editorOpen) {
                   onOpenEditor(action);
                   return;
@@ -452,7 +451,7 @@ function DecisionCard({
                 onDecide(action);
               }}
             >
-              {action === 'close' && confirmClose ? 'Точно закрыть?' : actionLabel(action)}
+              {actionLabel(action)}
             </Button>
           );
         })}
@@ -471,6 +470,27 @@ function DecisionCard({
             <XCircle className="w-3.5 h-3.5" />
             {outcome.text}
           </span>
+        )}
+
+        {/* «Закрыть» необратимо и стоит отдельно: справа, без заливки, чтобы не спорить
+            за внимание с «Да». Первый клик - вопрос, второй - действие. */}
+        {item.actions.includes('close') && (
+          <Button
+            size="sm"
+            className="min-h-11 px-3 sm:min-h-8 ml-auto"
+            variant={confirmClose ? 'danger' : 'danger-ghost'}
+            disabled={busy || settled || frozen}
+            onClick={() => {
+              if (!confirmClose) {
+                setConfirmClose(true);
+                return;
+              }
+              setConfirmClose(false);
+              onDecide('close');
+            }}
+          >
+            {confirmClose ? 'Точно закрыть?' : actionLabel('close')}
+          </Button>
         )}
       </div>
     </Card>

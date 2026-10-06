@@ -6,6 +6,7 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { SnapshotBanner } from '../components/ui/SnapshotBanner';
+import { SegmentedTabs } from '../components/ui/Chip';
 import { DecideError, decisionErrorText } from '../lib/decide';
 import { SOURCE_FAILURE_COPY } from '../lib/sourceFailure';
 import {
@@ -145,17 +146,15 @@ export function CrmPm() {
         )}
 
         {status.phase === 'ready' && (
-          <div className="flex gap-2 mb-5">
-            <button type="button" onClick={() => setTab('dirs')}
-              className={`flex-1 rounded-md px-3 py-2 text-sm border transition-colors ${
-                tab === 'dirs' ? 'border-zapusk/60 bg-zapusk/10 text-primary' : 'border-line text-secondary hover:text-primary'}`}>
-              Направления <span className="ml-1 text-muted">{status.pm.directions.length}</span>
-            </button>
-            <button type="button" onClick={() => setTab('tasks')}
-              className={`flex-1 rounded-md px-3 py-2 text-sm border transition-colors ${
-                tab === 'tasks' ? 'border-zapusk/60 bg-zapusk/10 text-primary' : 'border-line text-secondary hover:text-primary'}`}>
-              Задачи в работе <span className="ml-1 text-muted">{status.pm.cards.length}</span>
-            </button>
+          <div className="mb-5">
+            <SegmentedTabs
+              value={tab}
+              onChange={setTab}
+              items={[
+                { value: 'dirs', label: 'Направления', count: status.pm.directions.length },
+                { value: 'tasks', label: 'Задачи в работе', count: status.pm.cards.length },
+              ]}
+            />
           </div>
         )}
 
@@ -219,9 +218,9 @@ function LoadingSkeleton() {
       {[0, 1, 2, 3].map((i) => (
         <Card key={i} className="p-4">
           <div className="animate-pulse space-y-2.5">
-            <div className="h-4 w-1/3 bg-surface rounded" />
-            <div className="h-3 w-2/3 bg-surface rounded" />
-            <div className="h-3 w-1/2 bg-surface rounded" />
+            <div className="h-4 w-1/3 bg-hairline rounded" />
+            <div className="h-3 w-2/3 bg-hairline rounded" />
+            <div className="h-3 w-1/2 bg-hairline rounded" />
           </div>
         </Card>
       ))}

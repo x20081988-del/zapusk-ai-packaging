@@ -1,13 +1,15 @@
-import { Link, useLocation } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   LayoutDashboard, FolderPlus, FolderOpen, FileCode2, ShieldCheck, BookOpen, Headphones, Radio,
   BriefcaseBusiness, Users, Settings, UserRound, Presentation, ClipboardList, CalendarDays,
   MessageCircle, Handshake, KanbanSquare, PackageCheck, ClipboardCheck, Brain, Building2,
-  Mail, TrendingUp, Repeat, X, Archive, Activity, Radar, ListChecks, HeartPulse, Inbox, PhoneIncoming,
+  Mail, TrendingUp, Repeat, X, Archive, Activity, Radar, ListChecks, HeartPulse, PhoneIncoming,
+  ChevronDown, LogOut,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
-import { getAuth, roleLabel, type UserRole } from '../../lib/auth';
+import { getAuth, clearAuth, roleLabel, type UserRole } from '../../lib/auth';
 
 // Sprint 50 hotfix — sidebar active-state used to be `NavLink` with default
 // prefix-match. That meant `/projects` highlighted on `/projects/new`
@@ -26,7 +28,12 @@ interface NavItem {
   end?: boolean;
   matchExclude?: string[];
 }
-interface NavSection { label?: string; items: NavItem[] }
+interface NavSection {
+  label?: string;
+  items: NavItem[];
+  /** Design pass 06.10.2026: the section folds, state remembered per browser. */
+  collapsible?: boolean;
+}
 
 function isItemActive(pathname: string, item: NavItem): boolean {
   if (item.matchExclude?.some((ex) => pathname === ex || pathname.startsWith(ex + '/'))) {
@@ -44,7 +51,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
   SUPER_ADMIN: [
     // Две секции вместо плоского списка: четыре экрана дня тонули в четырнадцати
     // админских пунктах. «Мой день» - то, ради чего владелец заходит каждый день;
-    // все остальное - управление платформой, туда он ходит по случаю.
+    // все остальное - управление платформой, туда он ходит по случаю, поэтому
+    // с 06.10.2026 секция свернута по умолчанию и раскрывается по клику.
     { label: 'Мой день', items: [
       { to: '/decide',           icon: ListChecks,        label: 'Решения' },
       // Sprint 63.P12 - доска founder_crm из telegram-agent, рядом с решениями:
@@ -58,7 +66,7 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
       { to: '/mail',             icon: Mail,              label: 'Почта' },
       { to: '/inbound',          icon: PhoneIncoming,     label: 'Заявки и чаты' },
     ]},
-    { label: 'Админка платформы', items: [
+    { label: 'Админка платформы', collapsible: true, items: [
       { to: '/admin',            icon: ShieldCheck,       label: 'Админ-панель', end: true },
       { to: '/admin/invites',    icon: UserRound,         label: 'Приглашения' },
       { to: '/admin/users',      icon: Users,             label: 'Пользователи' },
@@ -148,6 +156,17 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
   ],
 };
 
+const COLLAPSE_KEY = 'zapusk.nav.collapsed';
+
+function readCollapsed(): Record<string, boolean> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '{}') as unknown;
+    return raw && typeof raw === 'object' ? (raw as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
 interface SidebarProps {
   /** Sprint 14: mobile-drawer mode. */
   mobile?: boolean;
@@ -157,11 +176,13 @@ interface SidebarProps {
 
 export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   const auth = getAuth();
+  const navigate = useNavigate();
   const role = auth?.role ?? 'FOUNDER';
   // Sprint 50 hotfix — active state is computed manually instead of relying
   // on NavLink's prefix-match default. See isItemActive() above for the rule
   // (exact / prefix / with sibling exclusions).
   const { pathname } = useLocation();
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed);
   const baseSections = NAV[role] ?? NAV.FOUNDER ?? [];
   // Sprint 24: в demo-режиме скрываем «Новый проект» — фаундер не создаёт
   // реальные проекты в показательной витрине.
@@ -176,85 +197,132 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
     }))
     .filter((section) => section.items.length > 0);
 
+  function toggleSection(label: string) {
+    setCollapsed((prev) => {
+      // Свернутая секция - состояние по умолчанию, поэтому отсутствие ключа = свернуто.
+      const next = { ...prev, [label]: !(prev[label] ?? true) };
+      try {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
+      } catch {
+        // без localStorage запоминаем на один заход
+      }
+      return next;
+    });
+  }
+
+  const displayName = auth?.name && auth.name !== auth.email ? auth.name : (auth?.email ?? '');
+  const initial = (displayName || '?').charAt(0).toUpperCase();
+
   const sidebarBody = (
     <>
-      <div className="px-5 py-5 border-b border-hairline flex items-center justify-between">
+      <div className="px-5 h-14 border-b border-hairline flex items-center justify-between shrink-0">
         <Logo />
         {mobile && (
           <button
             onClick={onClose}
             aria-label="Закрыть меню"
-            className="w-9 h-9 rounded-md flex items-center justify-center text-secondary hover:text-primary hover:bg-surface transition-colors"
+            className="w-9 h-9 rounded-md flex items-center justify-center text-secondary hover:text-primary hover:bg-hairline transition-colors"
           >
             <X size={18} />
           </button>
         )}
       </div>
 
-      <nav className="flex-1 px-3 py-5 space-y-1 overflow-y-auto">
-        <SectionLabel>{roleLabel(role)}</SectionLabel>
-        {visibleSections.map((section, sectionIndex) => (
-          <div key={section.label ?? `section-${sectionIndex}`} className={sectionIndex > 0 ? 'pt-5' : ''}>
-            {section.label && <SectionLabel>{section.label}</SectionLabel>}
-            {section.items.map((item) => {
-              const { to, icon: Icon, label } = item;
-              const active = isItemActive(pathname, item);
-              return (
-                <Link
-                  key={to}
-                  to={to}
-                  onClick={mobile ? onClose : undefined}
-                  aria-current={active ? 'page' : undefined}
-                  className={clsx(
-                    'flex items-center gap-3 px-3 h-10 rounded-md text-sm transition-all',
-                    active
-                      ? 'bg-zapusk/10 text-primary border border-zapusk/30 shadow-glow'
-                      : 'text-secondary hover:text-primary hover:bg-surface',
-                  )}
+      <nav className="flex-1 px-3 py-4 overflow-y-auto">
+        {visibleSections.map((section, sectionIndex) => {
+          const label = section.label;
+          const hasActive = section.items.some((it) => isItemActive(pathname, it));
+          // Раздел с текущим экраном всегда раскрыт: прятать подсветку активного
+          // пункта за свернутой шапкой значит потерять ориентир «где я».
+          const isOpen = !section.collapsible || hasActive || !(collapsed[label ?? ''] ?? true);
+          return (
+            <div key={label ?? `section-${sectionIndex}`} className={sectionIndex > 0 ? 'pt-4' : ''}>
+              {label && section.collapsible ? (
+                <button
+                  type="button"
+                  onClick={() => toggleSection(label)}
+                  aria-expanded={isOpen}
+                  className="w-full flex items-center justify-between px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-faint hover:text-muted transition-colors"
                 >
-                  <Icon size={16} className="shrink-0" />
-                  {label}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
+                  <span>{label}</span>
+                  <ChevronDown size={14} className={clsx('transition-transform', !isOpen && '-rotate-90')} />
+                </button>
+              ) : label ? (
+                <SectionLabel>{label}</SectionLabel>
+              ) : null}
+              {isOpen && (
+                <div className="space-y-0.5">
+                  {section.items.map((item) => (
+                    <NavLinkItem key={item.to} item={item} active={isItemActive(pathname, item)} onClick={mobile ? onClose : undefined} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
 
-        <div className="pt-6">
+        <div className="pt-4">
           <SectionLabel>Ресурсы</SectionLabel>
           <a
             href="https://zapusk.tech"
             target="_blank"
             rel="noreferrer"
             onClick={mobile ? onClose : undefined}
-            className="flex items-center gap-3 px-3 h-10 rounded-md text-sm text-secondary hover:text-primary hover:bg-surface transition-all"
+            className="flex items-center gap-2.5 px-3 h-9 rounded-md text-[13.5px] text-secondary hover:text-primary hover:bg-hairline transition-colors"
           >
-            <BookOpen size={16} className="shrink-0" />
+            <BookOpen size={16} className="shrink-0 text-muted" />
             База знаний
           </a>
         </div>
       </nav>
 
       {role !== 'SUPER_ADMIN' && (
-      <div className="mx-3 mb-4 p-4 rounded-lg border border-line bg-grad-ink relative overflow-hidden">
-        <div className="absolute -top-8 -right-8 w-24 h-24 bg-zapusk/20 rounded-full blur-2xl" />
-        {role === 'FOUNDER' ? <UserRound size={16} className="text-zapusk-400 mb-2" />
-          : role === 'MANAGER' ? <Handshake size={16} className="text-zapusk-400 mb-2" />
-          : role === 'INVESTOR' ? <TrendingUp size={16} className="text-zapusk-400 mb-2" />
-          : <KanbanSquare size={16} className="text-zapusk-400 mb-2" />}
-        <div className="text-[13px] font-semibold text-primary leading-tight">
-          {role === 'FOUNDER' ? 'Ваш менеджер'
-            : role === 'MANAGER' ? 'Команда сопровождения'
-            : role === 'INVESTOR' ? 'Поддержка инвестора'
-            : 'ZAPUSK AI Admin'}
+        <div className="mx-3 mb-3 p-3.5 rounded-lg border border-line bg-canvas/60">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-primary leading-tight">
+            {role === 'FOUNDER' ? <UserRound size={15} className="text-zapusk shrink-0" />
+              : role === 'MANAGER' ? <Handshake size={15} className="text-zapusk shrink-0" />
+              : role === 'INVESTOR' ? <TrendingUp size={15} className="text-zapusk shrink-0" />
+              : <KanbanSquare size={15} className="text-zapusk shrink-0" />}
+            {role === 'FOUNDER' ? 'Ваш менеджер'
+              : role === 'MANAGER' ? 'Команда сопровождения'
+              : role === 'INVESTOR' ? 'Поддержка инвестора'
+              : 'ZAPUSK AI Admin'}
+          </div>
+          <div className="text-[11.5px] text-muted mt-1 leading-snug">
+            {role === 'FOUNDER' ? 'Екатерина · упаковка и лиды'
+              : role === 'MANAGER' ? 'Фокус на проектах и следующих шагах.'
+              : role === 'INVESTOR' ? 'Помощь с инвестициями через ZAPUSK AI.'
+              : 'Роли, проекты, шаблоны и статусы.'}
+          </div>
         </div>
-        <div className="text-[11px] text-muted mt-1 leading-snug">
-          {role === 'FOUNDER' ? 'Екатерина · упаковка и лиды'
-            : role === 'MANAGER' ? 'Фокус на проектах и следующих шагах.'
-            : role === 'INVESTOR' ? 'Помощь с инвестициями через ZAPUSK AI.'
-            : 'Роли, проекты, шаблоны и статусы.'}
+      )}
+
+      {/* Аккаунт живет внизу сайдбара: на десктопе всегда виден, на телефоне
+          доступен из того же меню, и у «Выйти» наконец есть место на телефоне. */}
+      {auth && (
+        <div className="px-3 py-3 border-t border-hairline shrink-0">
+          <div className="flex items-center gap-2.5 px-2">
+            <div className="w-8 h-8 rounded-full bg-zapusk text-white text-xs font-bold flex items-center justify-center shrink-0">
+              {initial}
+            </div>
+            <div className="min-w-0 flex-1" title={auth.email}>
+              <div className="text-[13px] font-medium text-primary truncate">{displayName}</div>
+              <div className="text-[11px] text-muted truncate">{roleLabel(role)}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                clearAuth();
+                navigate('/login');
+              }}
+              title="Выйти"
+              aria-label="Выйти"
+              className="w-8 h-8 rounded-md flex items-center justify-center text-muted hover:text-danger hover:bg-hairline transition-colors shrink-0"
+            >
+              <LogOut size={15} />
+            </button>
+          </div>
         </div>
-      </div>
       )}
     </>
   );
@@ -274,7 +342,7 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
         />
         <aside
           className={clsx(
-            'absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-ink border-r border-line flex flex-col shadow-xl transition-transform',
+            'absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-ink border-r border-line flex flex-col shadow-lifted transition-transform',
             open ? 'translate-x-0' : '-translate-x-full',
           )}
           role="dialog"
@@ -294,9 +362,29 @@ export function Sidebar({ mobile, open, onClose }: SidebarProps = {}) {
   );
 }
 
+function NavLinkItem({ item, active, onClick }: { item: NavItem; active: boolean; onClick?: () => void }) {
+  const Icon = item.icon;
+  return (
+    <Link
+      to={item.to}
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={clsx(
+        'flex items-center gap-2.5 px-3 h-9 rounded-md text-[13.5px] transition-colors',
+        active
+          ? 'bg-zapusk/10 text-primary font-medium'
+          : 'text-secondary hover:text-primary hover:bg-hairline',
+      )}
+    >
+      <Icon size={16} className={clsx('shrink-0', active ? 'text-zapusk' : 'text-muted')} />
+      <span className="truncate">{item.label}</span>
+    </Link>
+  );
+}
+
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-faint">
+    <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-faint">
       {children}
     </div>
   );
