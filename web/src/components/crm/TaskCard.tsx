@@ -20,11 +20,6 @@ export const HEAT_DOT: Record<string, string> = {
   over: 'bg-danger', today: 'bg-warning', soon: 'bg-warning',
   ok: 'bg-success', none: 'bg-muted/60',
 };
-export const HEAT_PLAQUE: Record<string, string> = {
-  over: 'bg-danger/10 text-danger', today: 'bg-warning/10 text-warning',
-  soon: 'bg-warning/10 text-warning', ok: 'bg-success/10 text-success',
-  none: 'bg-surface text-muted',
-};
 
 export function TaskCard({
   task, run, compact = false, frozen, onAct, onAnswer, onMutated, footer,

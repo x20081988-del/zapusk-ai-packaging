@@ -4,6 +4,24 @@ export function formatMoney(n: number | null | undefined, currency = 'RUB'): str
   return `${n.toLocaleString('ru-RU')} ${sym}`;
 }
 
+// Короткая форма суммы для узких плиток (design pass 06.10.2026). В витрине
+// инвестора три плитки в ряд, и «150 000 000 ₽» обрезалось в «150 000 ...» -
+// размер раунда там был нечитаем вовсе. Полное значение остается в title.
+export function formatMoneyCompact(n: number | null | undefined, currency = 'RUB'): string {
+  if (n == null) return '—';
+  const sym = currency === 'RUB' ? '₽' : currency === 'USD' ? '$' : currency === 'EUR' ? '€' : currency;
+  const abs = Math.abs(n);
+  const short = (value: number, unit: string) => {
+    const rounded = Math.round(value * 10) / 10;
+    const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
+    return `${text} ${unit}`;
+  };
+  if (abs >= 1_000_000_000) return `${short(n / 1_000_000_000, 'млрд')} ${sym}`;
+  if (abs >= 1_000_000) return `${short(n / 1_000_000, 'млн')} ${sym}`;
+  if (abs >= 100_000) return `${short(n / 1_000, 'тыс')} ${sym}`;
+  return `${n.toLocaleString('ru-RU')} ${sym}`;
+}
+
 export function formatPercent(n: number | null | undefined): string {
   if (n == null) return '—';
   return `${n}%`;

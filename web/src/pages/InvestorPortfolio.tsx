@@ -7,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { OpportunityCoverArt } from '../components/ui/OpportunityCoverArt';
 import { api, type Project } from '../lib/api';
-import { formatMoney, formatPercent } from '../lib/format';
+import { formatMoney, formatMoneyCompact, formatPercent } from '../lib/format';
 import { buildOpportunityView } from '../lib/opportunities';
 
 // Sprint 25 — INVESTOR placeholder. Sprint 62.P10 — /opportunities оживлён:
@@ -195,9 +195,11 @@ function OpportunityCard({ project: p }: { project: Project }) {
           <p className="text-xs text-secondary leading-snug line-clamp-3">{view.shortThesis}</p>
 
           <div className="grid grid-cols-3 gap-2 mt-4">
-            <Term label="Раунд" value={formatMoney(p.raiseAmount, p.currency)} />
+            <Term label="Раунд" value={formatMoneyCompact(p.raiseAmount, p.currency)}
+              title={formatMoney(p.raiseAmount, p.currency)} />
             <Term label="Доля" value={formatPercent(p.equityOffered)} />
-            <Term label="Мин. чек" value={formatMoney(p.minCheck, p.currency)} />
+            <Term label="Мин. чек" value={formatMoneyCompact(p.minCheck, p.currency)}
+              title={formatMoney(p.minCheck, p.currency)} />
           </div>
 
           <div className="flex items-center gap-1.5 mt-3 text-[11px] text-zapusk-600 font-medium">
@@ -217,9 +219,9 @@ function OpportunityCard({ project: p }: { project: Project }) {
   );
 }
 
-function Term({ label, value }: { label: string; value: string }) {
+function Term({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="rounded-lg border border-hairline bg-canvas/60 px-2.5 py-2">
+    <div className="rounded-lg border border-hairline bg-canvas/60 px-2.5 py-2" title={title}>
       <div className="text-[10px] uppercase tracking-[0.06em] text-muted font-semibold">{label}</div>
       <div className="text-sm font-semibold text-primary mt-0.5 truncate font-num">{value}</div>
     </div>
