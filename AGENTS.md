@@ -200,6 +200,23 @@ Error taxonomy — the three states are distinguished by **status code**, not by
 | 502 | `source_auth` | bridge rejected our token — fix config, not the Mac |
 | 400 | `bad_action` / `bad_kind` + `detail` | source refused the decision, reason passed through |
 
+### Founder home (Sprint 70) — push from the Mac, SUPER_ADMIN read
+
+```
+POST   /api/home/push   header X-Home-Push-Key, body { v: 1, generated_at, telegram, tasks, reporting,
+                        services, revenue, products, depts } → { ok: true }
+GET    /api/home        → { ...last pushed body, received_at, age_sec }
+```
+
+Owner decision 07.10.2026: the Mac sends the summary itself. `~/telegram-agent/founder_home.py --push`
+(launchd `com.zapusk.founderhome`, every 5 min) builds it read-only and POSTs it; no tunnel is
+involved. The push route is mounted **before** `authedAndActive`; its key is
+`HMAC-SHA256(DECIDE_BRIDGE_TOKEN, "founder-home-push-v1")` hex, so no new secret is needed. The body
+is stored as a snapshot (`bridge-snapshots/founder-home.json`) and returned with its age; the screen
+flags it as stale after 15 min. Every section carries its own `ok`; a failed section renders
+"no data", never zero. Errors: push 401 `unauthorized`, 400 `validation_failed`, 413 `too_large`,
+503 `push_not_configured`; read 503 `not_received` (nothing pushed yet).
+
 Diagnostics:
 - `npm run env:doctor` — safe env summary + suspicious model detection (e.g. `gpt-5.5`).
 - `npm run db:doctor` — read-only DB structure check.

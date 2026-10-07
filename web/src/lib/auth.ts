@@ -102,7 +102,9 @@ export function defaultRouteForRole(role: UserRole): string {
   // Sprint 63.P1 - владелец заходит на сайт ради очереди решений, и лишний клик по
   // дороге это ровно то трение, из-за которого экран в telegram-agent открывали
   // девять раз за всю историю. ADMIN остается на своей админ-панели.
-  if (role === 'SUPER_ADMIN') return '/decide';
+  // Sprint 70: вход теперь на главную (владелец 07.10.2026: «заходил и все видел на
+  // одном экране»), решения в один клик из нее и из меню.
+  if (role === 'SUPER_ADMIN') return '/home';
   if (role === 'ADMIN') return '/admin';
   if (role === 'MANAGER') return '/manager';
   if (role === 'INVESTOR') return '/opportunities';

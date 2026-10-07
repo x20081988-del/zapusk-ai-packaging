@@ -29,6 +29,7 @@ VIEWS = {'desktop': (1440, 900), 'mobile': (390, 844)}
 
 SCREENS = [
     # (role, path, slug)
+    ('SUPER_ADMIN', '/home', 'home'),
     ('SUPER_ADMIN', '/decide', 'decide'),
     ('SUPER_ADMIN', '/crm', 'crm'),
     ('SUPER_ADMIN', '/crm/depts', 'crm-depts'),

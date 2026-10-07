@@ -32,6 +32,7 @@ import { realtimeRoutes } from './routes/realtime.js';
 import { decideRoutes } from './routes/decide.js';
 import { reportsRoutes } from './routes/reports.js';
 import { crmwebRoutes } from './routes/crmweb.js';
+import { homePushRoutes, homeRoutes } from './routes/founderHome.js';
 
 const app = express();
 
@@ -108,6 +109,9 @@ app.get('/health', (_req, res) => {
 // project ownership и роли пользователя.
 
 app.use('/api/auth', authRoutes);
+// Sprint 70 - главная основателя: мак сам кладет сводку по ключу из DECIDE_BRIDGE_TOKEN,
+// поэтому прием стоит до authedAndActive. Чтение ниже, за гейтом SUPER_ADMIN.
+app.use('/api/home', homePushRoutes);
 
 // Sprint 22 — invite-only architecture. Любой /api endpoint кроме /api/auth/*
 // требует аутентификации И активного workspace. /api/auth/* зарегистрирован
@@ -153,6 +157,7 @@ app.use('/api/reports', reportsRoutes);
 // Sprint 63.P13 - CRM целиком: /pm, канбан карточек, воронки сделок (crm_web
 // через мост /crmweb/*). SUPER_ADMIN only.
 app.use('/api/crmweb', crmwebRoutes);
+app.use('/api/home', homeRoutes);
 
 // 404 fallback for /api/* — keeps the SPA fallback below from masking API misses.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'route_not_found' }));

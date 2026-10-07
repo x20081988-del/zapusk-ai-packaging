@@ -31,8 +31,12 @@ function fileFor(key: string): string {
   return path.join(env.UPLOADS_DIR, SNAPSHOT_DIR, `${safe}.json`);
 }
 
-/** Сохранить свежее значение. Сбой записи не должен ломать живой ответ - лог и дальше. */
-export async function saveSnapshot(key: string, value: unknown): Promise<void> {
+/**
+ * Сохранить свежее значение. Сбой записи не должен ломать живой ответ - лог и дальше.
+ * Sprint 70: возвращает, сохранилось ли: прием сводки с мака (/api/home/push) обязан
+ * ответить ошибкой, иначе мак отметит успех, а экран покажет старую версию.
+ */
+export async function saveSnapshot(key: string, value: unknown): Promise<boolean> {
   const snap: Snapshot = { value, fetched_at: new Date().toISOString() };
   const target = fileFor(key);
   const tmp = `${target}.tmp`;
@@ -40,8 +44,10 @@ export async function saveSnapshot(key: string, value: unknown): Promise<void> {
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(tmp, JSON.stringify(snap), 'utf8');
     await fs.rename(tmp, target);
+    return true;
   } catch (e) {
     console.warn(`[snapshot] save ${key} failed: ${e instanceof Error ? e.message : e}`);
+    return false;
   }
 }
 

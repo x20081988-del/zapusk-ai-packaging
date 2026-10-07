@@ -54,6 +54,8 @@ const NAV: Partial<Record<UserRole, NavSection[]>> = {
     // все остальное - управление платформой, туда он ходит по случаю, поэтому
     // с 06.10.2026 секция свернута по умолчанию и раскрывается по клику.
     { label: 'Мой день', items: [
+      // Sprint 70 - главная основателя: все фокус-цифры одним экраном.
+      { to: '/home',             icon: LayoutDashboard,   label: 'Главная' },
       { to: '/decide',           icon: ListChecks,        label: 'Решения' },
       // Sprint 63.P12 - доска founder_crm из telegram-agent, рядом с решениями:
       // очередь отвечает «что решить», CRM - «что двигать дальше».

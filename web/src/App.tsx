@@ -30,6 +30,7 @@ import DemoAILeads from './pages/DemoAILeads';
 import DemoConversationAnalysis from './pages/DemoConversationAnalysis';
 import ProjectsList from './pages/ProjectsList';
 import { Decisions } from './pages/Decisions';
+import { FounderHome } from './pages/FounderHome';
 import { CrmPm } from './pages/CrmPm';
 import { CrmBoard } from './pages/CrmBoard';
 import { CrmPipeline } from './pages/CrmPipeline';
@@ -54,6 +55,8 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
 
+      {/* Sprint 70 - главная основателя: фокус-цифры одним экраном, сводку шлет мак. */}
+      <Route path="/home" element={<RequireRole roles={['SUPER_ADMIN']}><FounderHome /></RequireRole>} />
       {/* Sprint 63.P1 - очередь решений владельца. Только SUPER_ADMIN: это его
           личная очередь, в карточках лежат PII контактов. */}
       <Route path="/decide" element={<RequireRole roles={['SUPER_ADMIN']}><Decisions /></RequireRole>} />
