@@ -495,7 +495,7 @@ function DealRow({ d }: { d: DealItem }) {
         <div className="flex items-start gap-2 mt-1.5 min-w-0">
           <DueChip state={d.due_state} label={d.due_label} className="mt-0.5" />
           <p className="text-xs text-secondary leading-snug min-w-0 line-clamp-2" title={d.step}>
-            {d.owner_turn ? 'Ход твой: ' : 'Ждем: '}{d.step}
+            {d.owner_turn ? (/^ход/i.test(d.step) ? '' : 'Ход твой: ') : (/^жд/i.test(d.step) ? '' : 'Ждем: ')}{d.step}
           </p>
         </div>
       )}
