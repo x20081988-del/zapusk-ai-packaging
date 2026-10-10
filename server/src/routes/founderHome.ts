@@ -18,6 +18,9 @@ const SNAP_KEY = 'founder-home';
 const PUSH_SALT = 'founder-home-push-v1';
 const MAX_BYTES = 512 * 1024;
 const SECTIONS = ['telegram', 'tasks', 'reporting', 'services', 'revenue', 'products', 'depts'];
+// Sprint 71 - секция signals (лента шлюза бота) необязательна: мак со старым
+// founder_home.py ее не шлет, экран тогда просто не рисует блок.
+const OPTIONAL_SECTIONS = ['signals'];
 
 function pushKey(): string | null {
   if (!env.DECIDE_BRIDGE_TOKEN) return null;
@@ -45,7 +48,8 @@ homePushRoutes.post('/push', async (req, res) => {
 
   const body: unknown = req.body;
   if (!isObject(body) || body.v !== 1 || typeof body.generated_at !== 'string'
-      || !SECTIONS.every((k) => isObject(body[k]))) {
+      || !SECTIONS.every((k) => isObject(body[k]))
+      || !OPTIONAL_SECTIONS.every((k) => body[k] === undefined || isObject(body[k]))) {
     return res.status(400).json({ error: 'validation_failed' });
   }
   if (Buffer.byteLength(JSON.stringify(body)) > MAX_BYTES) {

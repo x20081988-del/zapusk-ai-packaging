@@ -148,6 +148,37 @@ export interface DeptItem {
   today: number;
 }
 
+export interface SignalItem {
+  ts: string;
+  source: string;
+  head: string;
+  body: string;
+  /** Сообщение ушло владельцу и в Telegram (класс now шлюза). */
+  to_bot: boolean;
+  /** Еще не закрыто плановым проходом шлюза (10:20 / 17:30). */
+  pending: boolean;
+  /** Сколько раз тот же заголовок пришел повторно. */
+  dups: number;
+}
+
+export interface SignalGroup {
+  name: string;
+  count: number;
+  items: SignalItem[];
+}
+
+/** Sprint 71 - лента шлюза bot_outbox (решение владельца 10.10.2026: важное в бот,
+ *  все остальное читается в CRM). Секция необязательна: старый мак ее не шлет. */
+export interface SignalsSection extends Section {
+  total?: number;
+  to_bot?: number;
+  crm?: number;
+  pending?: number;
+  hours?: number;
+  pointer_slot?: string;
+  sections?: SignalGroup[];
+}
+
 export interface HomePayload {
   v: number;
   generated_at: string;
@@ -160,6 +191,7 @@ export interface HomePayload {
   revenue: RevenueSection;
   products: Section & { items?: ProductItem[] };
   depts: Section & { items?: DeptItem[] };
+  signals?: SignalsSection;
 }
 
 export type HomeFailure = 'not_received' | 'unknown';

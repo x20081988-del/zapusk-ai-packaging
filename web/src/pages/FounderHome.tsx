@@ -12,6 +12,7 @@ import {
   clockLabel, fetchHome, HomeError, rub,
   type DealItem, type DeptItem, type HomePayload, type ProductItem, type ReportItem,
   type ReportingSection, type RevenueSection, type ServiceItem, type ServicesSection,
+  type SignalGroup, type SignalItem, type SignalsSection,
   type TasksSection, type TelegramSection, type TgItem,
 } from '../lib/home';
 
@@ -125,6 +126,8 @@ function Home({ data, onRetry }: { data: HomePayload; onRetry: () => void }) {
         <RevenueCard s={data.revenue} />
         <ProductsCard s={data.products} />
       </div>
+
+      <SignalsCard s={data.signals} />
 
       <DeptsStrip s={data.depts} />
     </div>
@@ -289,6 +292,73 @@ function TelegramCard({ s }: { s: TelegramSection }) {
         </>
       )}
     </HomeCard>
+  );
+}
+
+// --- Сигналы агентов ----------------------------------------------------------------
+//
+// Sprint 71 (владелец 10.10.2026: «утопаю в сообщениях бота; важное в бот, все
+// остальное в CRM»). Плановые сигналы джоб (сроки из встреч, ожидания, календарь,
+// люди и решения) в Telegram больше не идут: шлюз bot_outbox складывает их в
+// ленту, мак присылает ее вместе со сводкой. Пометка «в бот» у строки значит,
+// что это сообщение ушло владельцу и в Telegram (деньги, почта, Jivo, сроки).
+
+function SignalsCard({ s }: { s?: SignalsSection }) {
+  if (!s) return null;
+  const groups = s.sections ?? [];
+  const days = Math.max(1, Math.round((s.hours ?? 72) / 24));
+  return (
+    <div className="mt-4">
+      <HomeCard id="signals" title="Сигналы агентов"
+        meta={s.ok ? `${s.crm ?? 0} в CRM, ${s.to_bot ?? 0} в бот` : undefined}
+        footer={s.ok && (
+          <>
+            За {days} {days === 1 ? 'день' : days < 5 ? 'дня' : 'дней'}, свежие сверху. С 10.10.2026 в Telegram идут
+            только деньги, сроки отчетности, почта, Jivo, входящие от людей и SOS; все плановое от агентов читается
+            здесь. «В бот» значит, что строка ушла и в Telegram.
+            {(s.pending ?? 0) > 0 && <> Ждут планового закрытия шлюза: {s.pending}.</>}
+          </>
+        )}>
+        {!s.ok ? <NoData error={s.error} /> : groups.length === 0 ? (
+          <Empty>Сигналов за {days} {days === 1 ? 'день' : days < 5 ? 'дня' : 'дней'} нет.</Empty>
+        ) : (
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {groups.map((g) => <SignalGroupBlock key={g.name} g={g} />)}
+          </div>
+        )}
+      </HomeCard>
+    </div>
+  );
+}
+
+function SignalGroupBlock({ g }: { g: SignalGroup }) {
+  const { shown, toggle } = useMore<SignalItem>(g.items, 4);
+  return (
+    <div className="min-w-0">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted mb-2">
+        {g.name} <span className="font-normal">{g.count}</span>
+      </h3>
+      <ul className="space-y-2">
+        {shown.map((it, i) => (
+          <li key={`${it.ts}-${i}`} className="min-w-0">
+            <div className="flex items-baseline gap-2 min-w-0">
+              <span className="text-[11px] text-muted whitespace-nowrap">{clockLabel(it.ts)}</span>
+              <span className="text-sm text-primary leading-snug min-w-0">{it.head}</span>
+            </div>
+            <div className="flex items-baseline gap-2 min-w-0">
+              {it.body && <p className="text-xs text-muted leading-snug line-clamp-2 min-w-0">{it.body}</p>}
+            </div>
+            {(it.to_bot || it.dups > 0) && (
+              <div className="flex gap-2 text-[11px]">
+                {it.to_bot && <span className="text-zapusk-400 whitespace-nowrap">в бот</span>}
+                {it.dups > 0 && <span className="text-muted whitespace-nowrap">повторов {it.dups}</span>}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {toggle}
+    </div>
   );
 }
 
